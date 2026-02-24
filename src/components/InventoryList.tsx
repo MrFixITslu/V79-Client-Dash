@@ -7,12 +7,13 @@ interface InventoryListProps {
   onEdit: (item: InventoryItem) => void;
   onDelete: (id: string) => void;
   onAdd: () => void;
+  isAdmin: boolean;
 }
 
 type SortField = 'name' | 'sku' | 'category' | 'quantity' | 'price';
 type SortOrder = 'asc' | 'desc';
 
-export function InventoryList({ items, onEdit, onDelete, onAdd }: InventoryListProps) {
+export function InventoryList({ items, onEdit, onDelete, onAdd, isAdmin }: InventoryListProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [sortField, setSortField] = useState<SortField>('name');
   const [sortOrder, setSortOrder] = useState<SortOrder>('asc');
@@ -54,13 +55,15 @@ export function InventoryList({ items, onEdit, onDelete, onAdd }: InventoryListP
           <h2 className="text-3xl font-bold text-gray-900 tracking-tight">Inventory</h2>
           <p className="text-gray-500 mt-1">Manage your products, pricing, and stock levels.</p>
         </div>
-        <button
-          onClick={onAdd}
-          className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 rounded-xl font-medium flex items-center gap-2 transition-colors shadow-sm"
-        >
-          <Plus className="w-5 h-5" />
-          Add Item
-        </button>
+        {isAdmin && (
+          <button
+            onClick={onAdd}
+            className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 rounded-xl font-medium flex items-center gap-2 transition-colors shadow-sm"
+          >
+            <Plus className="w-5 h-5" />
+            Add Item
+          </button>
+        )}
       </div>
 
       {lowStockItems.length > 0 && (
@@ -111,9 +114,11 @@ export function InventoryList({ items, onEdit, onDelete, onAdd }: InventoryListP
                 <th className="p-4 font-semibold text-xs text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors text-right" onClick={() => handleSort('price')}>
                   Price <SortIcon />
                 </th>
-                <th className="p-4 font-semibold text-xs text-gray-500 uppercase tracking-wider text-center">
-                  Actions
-                </th>
+                {isAdmin && (
+                  <th className="p-4 font-semibold text-xs text-gray-500 uppercase tracking-wider text-center">
+                    Actions
+                  </th>
+                )}
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -155,24 +160,26 @@ export function InventoryList({ items, onEdit, onDelete, onAdd }: InventoryListP
                   <td className="p-4 text-right">
                     <div className="font-mono text-gray-900">${item.price.toFixed(2)}</div>
                   </td>
-                  <td className="p-4">
-                    <div className="flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button 
-                        onClick={() => onEdit(item)}
-                        className="p-1.5 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
-                        title="Edit"
-                      >
-                        <Edit2 className="w-4 h-4" />
-                      </button>
-                      <button 
-                        onClick={() => onDelete(item.id)}
-                        className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                        title="Delete"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </td>
+                  {isAdmin && (
+                    <td className="p-4">
+                      <div className="flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button 
+                          onClick={() => onEdit(item)}
+                          className="p-1.5 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
+                          title="Edit"
+                        >
+                          <Edit2 className="w-4 h-4" />
+                        </button>
+                        <button 
+                          onClick={() => onDelete(item.id)}
+                          className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                          title="Delete"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </td>
+                  )}
                 </tr>
               ))}
               {filteredAndSortedItems.length === 0 && (

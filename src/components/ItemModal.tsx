@@ -1,6 +1,6 @@
-import { useState, useEffect, FormEvent, KeyboardEvent } from 'react';
+import { useState, useEffect, FormEvent, KeyboardEvent, useRef, ChangeEvent } from 'react';
 import { InventoryItem } from '../types';
-import { X, ScanLine, Tag } from 'lucide-react';
+import { X, ScanLine, Tag, Upload, ImageIcon } from 'lucide-react';
 import { BarcodeScanner } from './BarcodeScanner';
 
 interface ItemModalProps {
@@ -21,10 +21,12 @@ export function ItemModal({ isOpen, onClose, onSave, initialData }: ItemModalPro
     tags: [] as string[],
     barcode: '',
     manufacturer: '',
+    imageUrl: '',
   });
   
   const [tagInput, setTagInput] = useState('');
   const [isScanning, setIsScanning] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (initialData) {
@@ -38,6 +40,7 @@ export function ItemModal({ isOpen, onClose, onSave, initialData }: ItemModalPro
         tags: initialData.tags || [],
         barcode: initialData.barcode || '',
         manufacturer: initialData.manufacturer || '',
+        imageUrl: initialData.imageUrl || '',
       });
     } else {
       setFormData({
@@ -50,6 +53,7 @@ export function ItemModal({ isOpen, onClose, onSave, initialData }: ItemModalPro
         tags: [],
         barcode: '',
         manufacturer: '',
+        imageUrl: '',
       });
     }
   }, [initialData, isOpen]);
@@ -99,6 +103,17 @@ export function ItemModal({ isOpen, onClose, onSave, initialData }: ItemModalPro
       category: prev.category || mockProductData.category,
       sku: prev.sku || `SKU-${decodedText.slice(-6)}`
     }));
+  };
+
+  const handleImageUpload = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setFormData(prev => ({ ...prev, imageUrl: reader.result as string }));
+      };
+      reader.readAsDataURL(file);
+    }
   };
 
   return (
@@ -173,6 +188,57 @@ export function ItemModal({ isOpen, onClose, onSave, initialData }: ItemModalPro
                     onChange={(e) => setFormData({ ...formData, barcode: e.target.value })}
                     className="w-full px-4 py-2 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all font-mono text-sm"
                     placeholder="e.g. 012345678905"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Product Image</label>
+                <div className="space-y-3">
+                  {formData.imageUrl && (
+                    <div className="relative w-full h-40 rounded-xl overflow-hidden bg-gray-100 border border-gray-200">
+                      <img 
+                        src={formData.imageUrl} 
+                        alt="Preview" 
+                        className="w-full h-full object-contain"
+                        referrerPolicy="no-referrer"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setFormData({ ...formData, imageUrl: '' })}
+                        className="absolute top-2 right-2 p-1.5 bg-white/80 backdrop-blur-sm text-gray-600 hover:text-red-600 rounded-lg shadow-sm transition-colors"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  )}
+                  
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="flex items-center justify-center gap-2 px-4 py-2 bg-white border border-gray-200 text-gray-700 rounded-xl text-sm font-medium hover:bg-gray-50 transition-all shadow-sm"
+                    >
+                      <Upload className="w-4 h-4" />
+                      Upload File
+                    </button>
+                    <div className="relative">
+                      <ImageIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                      <input
+                        type="url"
+                        value={formData.imageUrl.startsWith('data:') ? '' : formData.imageUrl}
+                        onChange={(e) => setFormData({ ...formData, imageUrl: e.target.value })}
+                        className="w-full pl-9 pr-4 py-2 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all text-sm"
+                        placeholder="Or paste URL..."
+                      />
+                    </div>
+                  </div>
+                  <input 
+                    type="file" 
+                    ref={fileInputRef} 
+                    onChange={handleImageUpload} 
+                    accept="image/*" 
+                    className="hidden" 
                   />
                 </div>
               </div>

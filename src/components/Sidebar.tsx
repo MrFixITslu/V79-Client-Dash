@@ -1,13 +1,16 @@
-import { LayoutDashboard, Package, Settings, LogOut, ShoppingCart, BarChart3, Download } from 'lucide-react';
+import { LayoutDashboard, Package, Settings, LogOut, ShoppingCart, BarChart3, Download, Users } from 'lucide-react';
 import { ViewState } from '../types';
 import { useInstallPWA } from '../hooks/useInstallPWA';
 
 interface SidebarProps {
   currentView: ViewState;
   onViewChange: (view: ViewState) => void;
+  onLogout: () => void;
+  isAdmin: boolean;
+  permissions: ViewState[];
 }
 
-export function Sidebar({ currentView, onViewChange }: SidebarProps) {
+export function Sidebar({ currentView, onViewChange, onLogout, isAdmin, permissions }: SidebarProps) {
   const { isInstallable, install } = useInstallPWA();
 
   return (
@@ -20,53 +23,75 @@ export function Sidebar({ currentView, onViewChange }: SidebarProps) {
       </div>
       
       <nav className="flex-1 px-4 space-y-2 mt-8">
-        <button
-          onClick={() => onViewChange('dashboard')}
-          className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${
-            currentView === 'dashboard' 
-              ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/20' 
-              : 'text-gray-400 hover:bg-gray-800 hover:text-white'
-          }`}
-        >
-          <LayoutDashboard className="w-5 h-5" />
-          <span className="font-medium">Dashboard</span>
-        </button>
+        {permissions.includes('dashboard') && (
+          <button
+            onClick={() => onViewChange('dashboard')}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${
+              currentView === 'dashboard' 
+                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/20' 
+                : 'text-gray-400 hover:bg-gray-800 hover:text-white'
+            }`}
+          >
+            <LayoutDashboard className="w-5 h-5" />
+            <span className="font-medium">Dashboard</span>
+          </button>
+        )}
         
-        <button
-          onClick={() => onViewChange('inventory')}
-          className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${
-            currentView === 'inventory' 
-              ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/20' 
-              : 'text-gray-400 hover:bg-gray-800 hover:text-white'
-          }`}
-        >
-          <Package className="w-5 h-5" />
-          <span className="font-medium">Inventory</span>
-        </button>
+        {permissions.includes('inventory') && (
+          <button
+            onClick={() => onViewChange('inventory')}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${
+              currentView === 'inventory' 
+                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/20' 
+                : 'text-gray-400 hover:bg-gray-800 hover:text-white'
+            }`}
+          >
+            <Package className="w-5 h-5" />
+            <span className="font-medium">Inventory</span>
+          </button>
+        )}
 
-        <button
-          onClick={() => onViewChange('pos')}
-          className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${
-            currentView === 'pos' 
-              ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/20' 
-              : 'text-gray-400 hover:bg-gray-800 hover:text-white'
-          }`}
-        >
-          <ShoppingCart className="w-5 h-5" />
-          <span className="font-medium">Point of Sale</span>
-        </button>
+        {permissions.includes('pos') && (
+          <button
+            onClick={() => onViewChange('pos')}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${
+              currentView === 'pos' 
+                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/20' 
+                : 'text-gray-400 hover:bg-gray-800 hover:text-white'
+            }`}
+          >
+            <ShoppingCart className="w-5 h-5" />
+            <span className="font-medium">Point of Sale</span>
+          </button>
+        )}
 
-        <button
-          onClick={() => onViewChange('reports')}
-          className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${
-            currentView === 'reports' 
-              ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/20' 
-              : 'text-gray-400 hover:bg-gray-800 hover:text-white'
-          }`}
-        >
-          <BarChart3 className="w-5 h-5" />
-          <span className="font-medium">Reports</span>
-        </button>
+        {permissions.includes('reports') && (
+          <button
+            onClick={() => onViewChange('reports')}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${
+              currentView === 'reports' 
+                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/20' 
+                : 'text-gray-400 hover:bg-gray-800 hover:text-white'
+            }`}
+          >
+            <BarChart3 className="w-5 h-5" />
+            <span className="font-medium">Reports</span>
+          </button>
+        )}
+
+        {isAdmin && permissions.includes('users') && (
+          <button
+            onClick={() => onViewChange('users')}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${
+              currentView === 'users' 
+                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/20' 
+                : 'text-gray-400 hover:bg-gray-800 hover:text-white'
+            }`}
+          >
+            <Users className="w-5 h-5" />
+            <span className="font-medium">User Management</span>
+          </button>
+        )}
       </nav>
 
       <div className="p-4 border-t border-gray-800">
@@ -79,18 +104,23 @@ export function Sidebar({ currentView, onViewChange }: SidebarProps) {
             <span className="font-medium">Install App</span>
           </button>
         )}
+        {permissions.includes('settings') && (
+          <button 
+            onClick={() => onViewChange('settings')}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${
+              currentView === 'settings' 
+                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/20' 
+                : 'text-gray-400 hover:bg-gray-800 hover:text-white'
+            }`}
+          >
+            <Settings className="w-5 h-5" />
+            <span className="font-medium">Settings</span>
+          </button>
+        )}
         <button 
-          onClick={() => onViewChange('settings')}
-          className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${
-            currentView === 'settings' 
-              ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/20' 
-              : 'text-gray-400 hover:bg-gray-800 hover:text-white'
-          }`}
+          onClick={onLogout}
+          className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-gray-400 hover:bg-gray-800 hover:text-white transition-all mt-2"
         >
-          <Settings className="w-5 h-5" />
-          <span className="font-medium">Settings</span>
-        </button>
-        <button className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-gray-400 hover:bg-gray-800 hover:text-white transition-all mt-2">
           <LogOut className="w-5 h-5" />
           <span className="font-medium">Logout</span>
         </button>

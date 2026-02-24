@@ -10,6 +10,16 @@ export interface InventoryItem {
   tags: string[];
   barcode?: string;
   manufacturer?: string;
+  imageUrl?: string;
 }
 
-export type ViewState = 'dashboard' | 'inventory' | 'pos' | 'reports' | 'settings';
+export interface User {
+  id: string;
+  username: string;
+  password?: string; // Optional because we don't want to send it to the client session
+  role: 'admin' | 'viewer';
+  lastLogin?: string;
+  permissions?: ViewState[];
+}
+
+export type ViewState = 'dashboard' | 'inventory' | 'pos' | 'reports' | 'settings' | 'users' | 'login';

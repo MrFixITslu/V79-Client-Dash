@@ -109,6 +109,16 @@ export function POS({ items, onCheckout }: POSProps) {
                   onClick={() => addToCart(item)}
                   className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm hover:border-indigo-300 hover:shadow-md transition-all text-left flex flex-col"
                 >
+                  {item.imageUrl && (
+                    <div className="w-full h-32 mb-3 rounded-lg overflow-hidden bg-gray-100">
+                      <img 
+                        src={item.imageUrl} 
+                        alt={item.name} 
+                        className="w-full h-full object-cover"
+                        referrerPolicy="no-referrer"
+                      />
+                    </div>
+                  )}
                   <div className="flex justify-between items-start mb-2">
                     <h3 className="font-bold text-gray-900 line-clamp-2">{item.name}</h3>
                     <span className="font-mono font-medium text-indigo-600">${item.price.toFixed(2)}</span>
@@ -140,6 +150,16 @@ export function POS({ items, onCheckout }: POSProps) {
         <div className="flex-1 overflow-y-auto p-6 space-y-4">
           {cart.map(({ item, quantity }) => (
             <div key={item.id} className="flex gap-4 items-start pb-4 border-b border-gray-100 last:border-0">
+              {item.imageUrl && (
+                <div className="w-12 h-12 rounded-lg overflow-hidden bg-gray-100 shrink-0">
+                  <img 
+                    src={item.imageUrl} 
+                    alt={item.name} 
+                    className="w-full h-full object-cover"
+                    referrerPolicy="no-referrer"
+                  />
+                </div>
+              )}
               <div className="flex-1">
                 <h4 className="font-medium text-gray-900 line-clamp-2">{item.name}</h4>
                 <div className="text-sm text-gray-500 font-mono mt-1">${item.price.toFixed(2)} each</div>

@@ -1,14 +1,15 @@
 import { useState, useEffect, FormEvent, useRef, ChangeEvent } from 'react';
-import { Save, Link as LinkIcon, Server, CheckCircle2, AlertCircle, ShoppingCart, Upload, FileText } from 'lucide-react';
+import { Save, Link as LinkIcon, Server, CheckCircle2, AlertCircle, ShoppingCart, Upload, FileText, ShieldCheck } from 'lucide-react';
 import { InventoryItem } from '../types';
 
 interface SettingsProps {
   items: InventoryItem[];
   onSimulateCheckout: (sku: string, quantity: number) => void;
   onImportData: (items: InventoryItem[]) => void;
+  isAdmin: boolean;
 }
 
-export function Settings({ items, onSimulateCheckout, onImportData }: SettingsProps) {
+export function Settings({ items, onSimulateCheckout, onImportData, isAdmin }: SettingsProps) {
   const [posConnected, setPosConnected] = useState(false);
   const [apiKey, setApiKey] = useState('');
   const [webhookUrl, setWebhookUrl] = useState('');
@@ -141,6 +142,43 @@ export function Settings({ items, onSimulateCheckout, onImportData }: SettingsPr
       )}
 
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden mb-8">
+        <div className="p-6 border-b border-gray-100 bg-gray-50/50 flex items-center gap-3">
+          <div className="p-2 bg-indigo-100 text-indigo-600 rounded-lg">
+            <ShieldCheck className="w-5 h-5" />
+          </div>
+          <div>
+            <h3 className="text-lg font-bold text-gray-900">Security & Access</h3>
+            <p className="text-sm text-gray-500">Your current session and access level details.</p>
+          </div>
+        </div>
+        <div className="p-6 space-y-4">
+          <div className="flex justify-between items-center py-2 border-b border-gray-50">
+            <span className="text-sm text-gray-600">Access Level</span>
+            <span className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider ${isAdmin ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100 text-gray-600'}`}>
+              {isAdmin ? 'Administrator' : 'Viewer'}
+            </span>
+          </div>
+          <div className="flex justify-between items-center py-2 border-b border-gray-50">
+            <span className="text-sm text-gray-600">Session Status</span>
+            <span className="flex items-center gap-2 text-emerald-600 text-sm font-medium">
+              <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+              Active & Encrypted
+            </span>
+          </div>
+          {!isAdmin && (
+            <div className="bg-amber-50 border border-amber-100 rounded-xl p-4 flex items-start gap-3">
+              <AlertCircle className="w-5 h-5 text-amber-600 shrink-0" />
+              <p className="text-xs text-amber-700">
+                You are currently in <strong>Read-Only</strong> mode. Administrative actions like importing data, managing POS integrations, and editing inventory are restricted.
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {isAdmin && (
+        <>
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden mb-8">
         <div className="p-6 border-b border-gray-100 bg-gray-50/50 flex items-center gap-3">
           <div className="p-2 bg-blue-100 text-blue-600 rounded-lg">
             <Upload className="w-5 h-5" />
@@ -291,6 +329,8 @@ export function Settings({ items, onSimulateCheckout, onImportData }: SettingsPr
           </div>
         </div>
       )}
-    </div>
+    </>
+  )}
+</div>
   );
 }
