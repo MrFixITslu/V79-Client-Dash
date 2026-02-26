@@ -1,11 +1,14 @@
 import { InventoryItem } from '../types';
-import { Package, AlertTriangle, DollarSign, TrendingUp, PieChart } from 'lucide-react';
+import { Package, AlertTriangle, DollarSign, TrendingUp, PieChart, BrainCircuit, Sparkles, RefreshCw } from 'lucide-react';
 
 interface DashboardProps {
   items: InventoryItem[];
+  forecast?: any;
+  onGenerateForecast?: () => void;
+  isForecasting?: boolean;
 }
 
-export function Dashboard({ items }: DashboardProps) {
+export function Dashboard({ items, forecast, onGenerateForecast, isForecasting }: DashboardProps) {
   const totalItems = items.length;
   const totalValue = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
   const lowStockItems = items.filter(item => item.quantity > 0 && item.quantity <= item.reorderThreshold);
@@ -81,6 +84,70 @@ export function Dashboard({ items }: DashboardProps) {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+        <div className="lg:col-span-2 bg-gradient-to-br from-indigo-600 to-violet-700 rounded-2xl shadow-xl p-6 text-white relative overflow-hidden">
+          <div className="relative z-10">
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-white/20 rounded-lg backdrop-blur-sm">
+                  <BrainCircuit className="w-6 h-6 text-white" />
+                </div>
+                <div>
+                  <h3 className="text-xl font-bold">AI Inventory Forecast</h3>
+                  <p className="text-indigo-100 text-sm">Powered by Gemini AI Analysis</p>
+                </div>
+              </div>
+              <button 
+                onClick={onGenerateForecast}
+                disabled={isForecasting}
+                className="px-4 py-2 bg-white text-indigo-600 rounded-xl font-bold text-sm hover:bg-indigo-50 transition-all flex items-center gap-2 disabled:opacity-50"
+              >
+                {isForecasting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                {forecast ? 'Refresh Analysis' : 'Generate Forecast'}
+              </button>
+            </div>
+
+            {forecast ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                <div className="space-y-4">
+                  <div className="bg-white/10 rounded-xl p-4 backdrop-blur-sm border border-white/10">
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-indigo-200 mb-2">Summary</h4>
+                    <p className="text-sm leading-relaxed">{forecast.summary}</p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <div className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider ${
+                      forecast.riskLevel === 'High' ? 'bg-red-500/30 text-red-200' : 
+                      forecast.riskLevel === 'Medium' ? 'bg-amber-500/30 text-amber-200' : 
+                      'bg-emerald-500/30 text-emerald-200'
+                    }`}>
+                      Risk Level: {forecast.riskLevel}
+                    </div>
+                  </div>
+                </div>
+                <div className="space-y-3">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-indigo-200">Recommendations</h4>
+                  {forecast.recommendations?.map((rec: any, i: number) => (
+                    <div key={i} className="bg-white/10 rounded-xl p-3 backdrop-blur-sm border border-white/10 flex items-start gap-3">
+                      <div className="w-2 h-2 rounded-full bg-indigo-300 mt-1.5 shrink-0" />
+                      <div>
+                        <p className="text-xs font-bold text-white mb-0.5">{rec.itemName}</p>
+                        <p className="text-[11px] text-indigo-100 leading-tight">{rec.action}: {rec.reason}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="py-12 text-center">
+                <p className="text-indigo-100 opacity-60">No forecast generated yet. Click the button above to analyze your inventory trends.</p>
+              </div>
+            )}
+          </div>
+          
+          {/* Decorative background elements */}
+          <div className="absolute top-[-20%] right-[-10%] w-64 h-64 bg-white/5 rounded-full blur-3xl pointer-events-none" />
+          <div className="absolute bottom-[-20%] left-[-10%] w-64 h-64 bg-indigo-900/40 rounded-full blur-3xl pointer-events-none" />
+        </div>
+
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
           <div className="flex items-center gap-2 mb-4">
             <PieChart className="w-5 h-5 text-indigo-500" />
