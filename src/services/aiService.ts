@@ -1,9 +1,21 @@
 import { GoogleGenAI, Type } from "@google/genai";
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
+let aiInstance: GoogleGenAI | null = null;
+
+function getAI() {
+  if (!aiInstance) {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      throw new Error("GEMINI_API_KEY is not set. Please ensure it is configured in your environment.");
+    }
+    aiInstance = new GoogleGenAI({ apiKey });
+  }
+  return aiInstance;
+}
 
 export async function getInventoryForecast(items: any[]) {
   try {
+    const ai = getAI();
     const prompt = `Analyze this inventory data and provide a forecast for the next 30 days. 
     Identify items at risk of stockout, suggest reorder quantities, and note any trends.
     Return the analysis in a structured JSON format.
@@ -40,6 +52,6 @@ export async function getInventoryForecast(items: any[]) {
     return JSON.parse(response.text || '{}');
   } catch (error) {
     console.error("Forecasting error:", error);
-    return { summary: "Unable to generate forecast at this time.", recommendations: [], riskLevel: "Unknown" };
+    return { summary: "Unable to generate forecast at this time. Please check your API key configuration.", recommendations: [], riskLevel: "Unknown" };
   }
 }
