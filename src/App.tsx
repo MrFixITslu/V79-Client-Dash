@@ -223,6 +223,52 @@ function ProductCard({ product, result }: { product: Integration["product"]; res
   );
 }
 
+function SecurityPanel() {
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    setMessage("");
+    if (newPassword !== confirmPassword) return setMessage("The new passwords do not match.");
+    setBusy(true);
+    try {
+      const response = await fetch("/api/auth/password", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ currentPassword, newPassword }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || "Could not change the password.");
+      setCurrentPassword(""); setNewPassword(""); setConfirmPassword("");
+      setMessage("Password updated. Other Hub sessions were signed out.");
+    } catch (err: any) {
+      setMessage(err.message || "Could not change the password.");
+    } finally { setBusy(false); }
+  }
+
+  return (
+    <form onSubmit={submit} className="mt-8 rounded-2xl border border-slate-200 bg-white p-5">
+      <div className="flex items-center gap-3">
+        <div className="rounded-xl bg-slate-950 p-2.5 text-cyan-300"><ShieldCheck size={20}/></div>
+        <div><h3 className="font-semibold text-slate-950">Hub security</h3><p className="text-xs text-slate-400">Change the organisation owner password without touching the database.</p></div>
+      </div>
+      <div className="mt-5 grid gap-4 lg:grid-cols-3">
+        <label className="text-sm font-medium text-slate-700">Current password<input type="password" autoComplete="current-password" value={currentPassword} onChange={e=>setCurrentPassword(e.target.value)} required className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 outline-none ring-cyan-300 focus:ring-2"/></label>
+        <label className="text-sm font-medium text-slate-700">New password<input type="password" autoComplete="new-password" minLength={16} value={newPassword} onChange={e=>setNewPassword(e.target.value)} required className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 outline-none ring-cyan-300 focus:ring-2"/></label>
+        <label className="text-sm font-medium text-slate-700">Confirm new password<input type="password" autoComplete="new-password" minLength={16} value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} required className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 outline-none ring-cyan-300 focus:ring-2"/></label>
+      </div>
+      <div className="mt-4 flex flex-wrap items-center gap-3">
+        <button disabled={busy} className="rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50">{busy ? "Updating…" : "Update password"}</button>
+        {message && <span role="status" className="text-sm text-slate-500">{message}</span>}
+      </div>
+    </form>
+  );
+}
+
 function Connections({ integrations, onChanged }: { integrations: Integration[]; onChanged: () => Promise<void> }) {
   const [values, setValues] = useState<Record<string, string>>({});
   const [message, setMessage] = useState("");
@@ -305,6 +351,7 @@ function Connections({ integrations, onChanged }: { integrations: Integration[];
           );
         })}
       </div>
+      <SecurityPanel />
     </section>
   );
 }
