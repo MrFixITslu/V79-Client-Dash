@@ -5,7 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer as createViteServer } from "vite";
-import { signPlatformRequest } from "./server/platform-contract.mjs";
+import { signPlatformRequest, verifyPlatformRequest } from "./server/platform-contract.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -22,7 +22,10 @@ fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
 const app = express();
 app.disable("x-powered-by");
 if (process.env.TRUST_PROXY === "1") app.set("trust proxy", 1);
-app.use(express.json({ limit: "256kb" }));
+app.use(express.json({
+  limit: "256kb",
+  verify: (req: any, _res, buf) => { req.rawBody = Buffer.from(buf); },
+}));
 app.use((req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
@@ -160,7 +163,7 @@ function canonicalOrigin(req: express.Request) {
   return `${req.protocol}://${req.get("host")}`;
 }
 app.use((req, res, next) => {
-  if (["GET","HEAD","OPTIONS"].includes(req.method) || !req.path.startsWith("/api/")) return next();
+  if (["GET","HEAD","OPTIONS"].includes(req.method) || !req.path.startsWith("/api/") || req.path === "/api/platform/events") return next();
   const origin = req.headers.origin;
   if (!origin) return res.status(403).json({ error: "Origin header required." });
   try {
@@ -243,6 +246,95 @@ async function fetchSummary(product: Product, externalSubjectId: string) {
   }
 }
 
+
+const EVENT_SOURCE_PRODUCTS: Record<string, Product | null> = {
+  website: null,
+  tiquet: "tiquet",
+  ffpro: "ffpro",
+  academy: "academy",
+};
+
+function eventSecretFor(source: string) {
+  const names: Record<string, string> = {
+    website: "V79_WEBSITE_EVENT_SECRET",
+    tiquet: "V79_TIQUET_EVENT_SECRET",
+    ffpro: "V79_FFPRO_EVENT_SECRET",
+    academy: "V79_ACADEMY_EVENT_SECRET",
+  };
+  return clean(process.env[names[source] || ""]);
+}
+
+function validateIncomingEvent(body: any) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return "Invalid event.";
+  if (typeof body.id !== "string" || !/^[A-Za-z0-9._:-]{8,160}$/.test(body.id)) return "Invalid event id.";
+  if (typeof body.type !== "string" || !/^[a-z0-9][a-z0-9._-]{2,100}$/.test(body.type)) return "Invalid event type.";
+  if (body.version !== 1) return "Unsupported event version.";
+  if (typeof body.occurredAt !== "string" || !Number.isFinite(Date.parse(body.occurredAt))) return "Invalid event timestamp.";
+  if (typeof body.organizationRef !== "string" || body.organizationRef.length < 1 || body.organizationRef.length > 254) return "Invalid organisation reference.";
+  if (body.subjectId != null && (typeof body.subjectId !== "string" || body.subjectId.length > 254)) return "Invalid subject id.";
+  if (body.correlationId != null && (typeof body.correlationId !== "string" || body.correlationId.length > 160)) return "Invalid correlation id.";
+  if (body.payload != null && (typeof body.payload !== "object" || Array.isArray(body.payload))) return "Event payload must be an object.";
+  if (Buffer.byteLength(JSON.stringify(body.payload || {}), "utf8") > 24 * 1024) return "Event payload is too large.";
+  return "";
+}
+
+function resolveEventOrganization(source: string, organizationRef: string) {
+  if (source === "website") {
+    return db.prepare("SELECT id,name,slug FROM organizations WHERE slug=?").get(organizationRef) as any;
+  }
+  const product = EVENT_SOURCE_PRODUCTS[source];
+  if (!product) return null;
+  return db.prepare(`
+    SELECT o.id,o.name,o.slug
+    FROM integrations i JOIN organizations o ON o.id=i.organization_id
+    WHERE i.product=? AND i.external_subject_id=? AND i.enabled=1
+    LIMIT 1
+  `).get(product, organizationRef) as any;
+}
+
+app.post("/api/platform/events", (req: any, res) => {
+  const source = clean(req.get("x-v79-service-id")).toLowerCase();
+  if (!(source in EVENT_SOURCE_PRODUCTS)) return res.status(401).json({ error: "Unknown V79 event source." });
+
+  const secret = eventSecretFor(source);
+  if (secret.length < 32) return res.status(503).json({ error: `Event ingestion is not configured for ${source}.` });
+
+  const timestamp = clean(req.get("x-v79-timestamp"));
+  const signature = clean(req.get("x-v79-signature"));
+  const bodyText = req.rawBody ? Buffer.from(req.rawBody).toString("utf8") : JSON.stringify(req.body || {});
+  const verified = verifyPlatformRequest({
+    method: req.method,
+    pathname: "/api/platform/events",
+    timestamp,
+    body: bodyText,
+    secret,
+    signature,
+  });
+  if (!verified) return res.status(401).json({ error: "Invalid or expired V79 event signature." });
+
+  const validationError = validateIncomingEvent(req.body);
+  if (validationError) return res.status(400).json({ error: validationError });
+
+  const event = req.body;
+  const organization = resolveEventOrganization(source, event.organizationRef);
+  if (!organization) return res.status(409).json({ error: "No Hub organisation is linked to this source reference.", code: "ORGANIZATION_NOT_LINKED" });
+
+  const existing = db.prepare("SELECT id FROM events WHERE id=?").get(event.id);
+  if (existing) return res.status(200).json({ accepted: true, duplicate: true, eventId: event.id });
+
+  const storedPayload = JSON.stringify({
+    version: event.version,
+    organizationRef: event.organizationRef,
+    subjectId: event.subjectId || null,
+    correlationId: event.correlationId || null,
+    payload: event.payload || {},
+  });
+  db.prepare("INSERT INTO events(id,organization_id,type,source,occurred_at,payload_json,created_at) VALUES(?,?,?,?,?,?,?)")
+    .run(event.id, organization.id, event.type, source, new Date(event.occurredAt).toISOString(), storedPayload, new Date().toISOString());
+
+  res.status(202).json({ accepted: true, duplicate: false, eventId: event.id });
+});
+
 app.get("/api/health", (_req,res)=>{
   try { db.prepare("SELECT 1").get(); res.json({status:"ok"}); }
   catch { res.status(503).json({status:"storage_unavailable"}); }
@@ -324,7 +416,12 @@ app.get("/api/platform/dashboard", requireAuth, async (req,res)=>{
     products[product].name=productConfig[product].name;
     products[product].openUrl=productConfig[product].openUrl || "";
   }));
-  const events=db.prepare("SELECT id,type,source,occurred_at AS occurredAt FROM events WHERE organization_id=? ORDER BY occurred_at DESC LIMIT 10").all(m.organizationId);
+  const events=(db.prepare("SELECT id,type,source,occurred_at AS occurredAt,payload_json AS payloadJson FROM events WHERE organization_id=? ORDER BY occurred_at DESC LIMIT 20").all(m.organizationId) as any[])
+    .map(event => {
+      let details:any={};
+      try { details=JSON.parse(event.payloadJson || "{}"); } catch {}
+      return { id:event.id,type:event.type,source:event.source,occurredAt:event.occurredAt,details };
+    });
   res.json({organization:{id:m.organizationId,name:m.organizationName,slug:m.slug},products,events});
 });
 
