@@ -30,7 +30,7 @@ type ProductResult = {
 type DashboardPayload = {
   organization: { id: string; name: string; slug: string };
   products: Record<Integration["product"], ProductResult>;
-  events: Array<{ id: string; type: string; source: string; occurredAt: string }>;
+  events: Array<{ id: string; type: string; source: string; occurredAt: string; details?: { subjectId?: string | null; correlationId?: string | null; payload?: Record<string, unknown> } }>;
 };
 
 const productMeta = {
@@ -356,6 +356,72 @@ function Connections({ integrations, onChanged }: { integrations: Integration[];
   );
 }
 
+function eventTitle(type: string) {
+  const labels: Record<string,string> = {
+    "lead.created": "New website lead",
+    "customer.created": "Customer added",
+    "job.created": "New job created",
+    "job.status_changed": "Job status changed",
+    "job.paid": "Job marked paid",
+    "course.enrolled": "Course enrolment",
+    "certificate.issued": "Certificate issued",
+    "finance.snapshot.updated": "Financial snapshot updated",
+  };
+  return labels[type] || type.split(/[._-]/).map(word => word ? word[0].toUpperCase()+word.slice(1) : "").join(" ");
+}
+
+function eventDescription(event: DashboardPayload["events"][number]) {
+  const p:any = event.details?.payload || {};
+  switch(event.type) {
+    case "lead.created": return p.interest ? `Interest: ${p.interest}` : "A new prospect entered the V79 pipeline.";
+    case "customer.created": return p.company ? `${p.company} became a customer.` : "A customer record was created.";
+    case "job.created": return p.title ? `Job: ${p.title}` : "A service job was created.";
+    case "job.status_changed": return p.status ? `Moved to ${p.status}.` : "The job moved to a new stage.";
+    case "job.paid": return p.amount != null ? `Payment recorded for ${formatNumber(p.amount)} ${p.currency || ""}`.trim() : "A job was marked paid.";
+    case "course.enrolled": return p.courseTitle ? `Enrolled in ${p.courseTitle}.` : "A learner enrolled in a course.";
+    case "certificate.issued": return p.courseTitle ? `Completed ${p.courseTitle}.` : "A learner earned a certificate.";
+    case "finance.snapshot.updated": return "FFPRO financial indicators were refreshed.";
+    default: return "Activity recorded across the V79 ecosystem.";
+  }
+}
+
+function BusinessTimeline({ events }: { events: DashboardPayload["events"] }) {
+  return (
+    <section className="mt-8 rounded-3xl border border-slate-200 bg-white p-6">
+      <div className="flex items-center gap-3">
+        <div className="rounded-xl bg-slate-950 p-2.5 text-cyan-300"><Activity size={20}/></div>
+        <div>
+          <h2 className="font-semibold text-slate-950">Business timeline</h2>
+          <p className="text-sm text-slate-500">Important activity from across your connected V79 products.</p>
+        </div>
+      </div>
+      <div className="mt-6">
+        {events.length === 0 ? (
+          <div className="rounded-2xl bg-slate-50 px-5 py-8 text-center text-sm text-slate-500">
+            Connected product events will appear here as Phase 2 publishers come online.
+          </div>
+        ) : (
+          <ol className="space-y-1">
+            {events.map(event => (
+              <li key={event.id} className="grid grid-cols-[auto_1fr] gap-4 rounded-2xl px-2 py-4 hover:bg-slate-50">
+                <div className="mt-1 h-2.5 w-2.5 rounded-full bg-cyan-500 ring-4 ring-cyan-50" />
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <span className="font-medium text-slate-900">{eventTitle(event.type)}</span>
+                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">{event.source}</span>
+                    <time className="text-xs text-slate-400">{new Date(event.occurredAt).toLocaleString()}</time>
+                  </div>
+                  <p className="mt-1 text-sm text-slate-500">{eventDescription(event)}</p>
+                </div>
+              </li>
+            ))}
+          </ol>
+        )}
+      </div>
+    </section>
+  );
+}
+
 export default function App() {
   const [session, setSession] = useState<Session | null | undefined>(undefined);
   const [dashboard, setDashboard] = useState<DashboardPayload | null>(null);
@@ -453,6 +519,8 @@ export default function App() {
                 {(["tiquet","ffpro","academy"] as const).map(product => <div key={product}><ProductCard product={product} result={dashboard?.products?.[product]} /></div>)}
               </div>
             </section>
+
+            <BusinessTimeline events={dashboard?.events || []} />
 
             <section className="mt-8 grid gap-5 lg:grid-cols-[1.2fr_.8fr]">
               <div className="rounded-3xl border border-slate-200 bg-white p-6">
