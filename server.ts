@@ -269,6 +269,21 @@ app.get("/api/auth/me", requireAuth, (req,res)=>{
   const user=(req as any).hubUser, m=(req as any).hubMembership;
   res.json({user,organization:{id:m.organizationId,name:m.organizationName,slug:m.slug,role:m.role}});
 });
+app.put("/api/auth/password", requireAuth, (req,res)=>{
+  const currentPassword=String(req.body?.currentPassword || "");
+  const newPassword=String(req.body?.newPassword || "");
+  if(newPassword.length<16 || newPassword.length>256) return res.status(400).json({error:"Use a new password of 16–256 characters."});
+  const user=(req as any).hubUser;
+  const record=db.prepare("SELECT password_salt,password_hash FROM users WHERE id=?").get(user.id) as any;
+  if(!record || !constantEqualHex(passwordDigest(currentPassword,record.password_salt),record.password_hash)) {
+    return res.status(401).json({error:"Current password is incorrect."});
+  }
+  const salt=crypto.randomBytes(16).toString("hex");
+  db.prepare("UPDATE users SET password_salt=?,password_hash=? WHERE id=?").run(salt,passwordDigest(newPassword,salt),user.id);
+  const token=cookieValue(req,SESSION_COOKIE);
+  db.prepare("DELETE FROM sessions WHERE user_id=? AND token_hash<>?").run(user.id,hashToken(token));
+  res.json({success:true});
+});
 app.get("/api/integrations", requireAuth, (req,res)=>{
   const m=(req as any).hubMembership;
   const rows=db.prepare("SELECT product,external_subject_id AS externalSubjectId,enabled,updated_at AS updatedAt FROM integrations WHERE organization_id=?").all(m.organizationId) as any[];
