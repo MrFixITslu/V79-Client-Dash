@@ -1,0 +1,40 @@
+services:
+  v79-hub:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: v79-hub
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - NODE_ENV=production
+      - PORT=3040
+      - APP_URL=${APP_URL:-https://hub.v79sl.com}
+      - TRUST_PROXY=${TRUST_PROXY:-1}
+      - V79_HUB_ADMIN_EMAIL=${V79_HUB_ADMIN_EMAIL}
+      - V79_HUB_ADMIN_PASSWORD=${V79_HUB_ADMIN_PASSWORD}
+      - V79_HUB_ADMIN_NAME=${V79_HUB_ADMIN_NAME:-}
+      - V79_HUB_ORGANIZATION_NAME=${V79_HUB_ORGANIZATION_NAME:-V79 Digital}
+      - V79_PLATFORM_SHARED_SECRET=${V79_PLATFORM_SHARED_SECRET}
+      - FFPRO_BASE_URL=${FFPRO_BASE_URL:-http://fire-finance-app:3010}
+      - TIQUET_BASE_URL=${TIQUET_BASE_URL:-http://v79-tiquet-manager:3050}
+      - ACADEMY_BASE_URL=${ACADEMY_BASE_URL:-http://v79_course_builder:3030}
+      - FFPRO_PUBLIC_URL=${FFPRO_PUBLIC_URL:-https://ffpro.v79sl.com}
+      - TIQUET_PUBLIC_URL=${TIQUET_PUBLIC_URL:-https://tiquet.v79sl.com}
+      - ACADEMY_PUBLIC_URL=${ACADEMY_PUBLIC_URL:-https://academy.v79sl.com}
+    expose:
+      - "3040"
+    volumes:
+      - ./data:/app/data
+    networks:
+      - proxy_network
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3040/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+networks:
+  proxy_network:
+    external: true

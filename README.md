@@ -1,20 +1,63 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# V79 Hub
 
-# Run and deploy your AI Studio app
+V79 Hub is the control plane for the V79 Digital ecosystem. It gives one organisation a secure starting point for V79 Tiquet, FFPRO and V79 Academy while keeping each product as the system of record for its own data.
 
-This contains everything you need to run your app locally.
+## Phase 1 scope
 
-View your app in AI Studio: https://ai.studio/apps/b14b6567-91d4-4a75-a485-9f960a77a3c0
+Phase 1 is intentionally read-only across product boundaries.
 
-## Run Locally
+- **V79 Hub** owns organisation membership and product-account mappings.
+- **V79 Tiquet** owns clients, jobs, service operations and its workspace.
+- **FFPRO** owns financial transactions, budgets, goals and forecasts.
+- **V79 Academy** owns learners, courses, assessments and certificates.
+- Product summaries are requested server-to-server with an HMAC-SHA256 signature and a five-minute replay window.
+- The Hub never receives raw FFPRO transaction descriptions, Tiquet ticket content or Academy assessment answers.
 
-**Prerequisites:**  Node.js
+The next platform phases can add single sign-on, universal organisation IDs, a durable event outbox and controlled cross-product actions after these contracts are proven.
 
+## First deployment
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+1. Copy `.env.example` to `.env`.
+2. Generate the platform secret once:
+   ```bash
+   openssl rand -hex 32
+   ```
+3. Put that exact `V79_PLATFORM_SHARED_SECRET` value in the Hub, FFPRO, Tiquet and Academy environments.
+4. Set `V79_HUB_ADMIN_EMAIL` and a unique `V79_HUB_ADMIN_PASSWORD` of at least 16 characters.
+5. Confirm the shared Docker network exists:
+   ```bash
+   docker network inspect proxy_network >/dev/null 2>&1 || docker network create proxy_network
+   ```
+6. Start the Hub:
+   ```bash
+   docker compose up -d --build
+   ```
+7. In Nginx Proxy Manager, proxy `hub.v79sl.com` to `v79-hub:3040`, enable Web Exploit protection and SSL.
+8. Sign in, open **Connections**, and enter the matching product identifiers:
+   - Tiquet: workspace/account ID
+   - FFPRO: user UUID
+   - Academy: learner UUID or learner email
+
+The mappings are stored only in the Hub database at `data/v79-hub.db`.
+
+## Product service URLs
+
+When all applications share `proxy_network`, the recommended internal URLs are:
+
+- FFPRO: `http://fire-finance-app:3010`
+- Tiquet: `http://v79-tiquet-manager:3050`
+- Academy: `http://v79_course_builder:3030`
+
+These URLs never need to be exposed publicly for Hub-to-product traffic.
+
+## Validation
+
+```bash
+npm ci
+npm run lint
+npm test
+npm run build
+docker build -t v79-hub:test .
+```
+
+The Hub database and SQLite WAL files are ignored by Git and must be included in server backups.
