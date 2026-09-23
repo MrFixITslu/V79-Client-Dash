@@ -450,7 +450,7 @@ export default function App() {
                 <button onClick={() => setView("connections")} className="hidden items-center gap-2 text-sm font-semibold text-slate-600 hover:text-slate-950 sm:flex"><Settings2 size={16} /> Manage connections</button>
               </div>
               <div className="grid gap-5 lg:grid-cols-3">
-                {(["tiquet","ffpro","academy"] as const).map(product => <ProductCard key={product} product={product} result={dashboard?.products?.[product]} />)}
+                {(["tiquet","ffpro","academy"] as const).map(product => <div key={product}><ProductCard product={product} result={dashboard?.products?.[product]} /></div>)}
               </div>
             </section>
 
