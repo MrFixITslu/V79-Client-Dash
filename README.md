@@ -26,7 +26,7 @@ The Hub validates identity, membership, subscription and app launch before it re
    ```bash
    openssl rand -hex 32
    ```
-3. Put that exact `V79_PLATFORM_SHARED_SECRET` value in the Hub, FFPRO, Tiquet and Academy environments.
+3. Put that exact `V79_PLATFORM_SHARED_SECRET` value in the Hub, FFPRO, Tiquet, Marketing and Academy environments.
 4. Set `V79_HUB_ADMIN_EMAIL` and a unique `V79_HUB_ADMIN_PASSWORD` of at least 16 characters.
 5. Confirm the shared Docker network exists:
    ```bash
@@ -39,7 +39,13 @@ The Hub validates identity, membership, subscription and app launch before it re
 7. In Nginx Proxy Manager, proxy `hub.v79sl.com` to `v79-hub:3040`, enable Web Exploit protection and SSL.
 8. Sign in and check **Connections**. Tiquet, FFPRO and Marketing use the Hub organisation ID. Academy is independently accessible and the Hub requests only the signed-in member's own verified email for a learner summary. No administrator-entered learner identifier is accepted.
 
+Set the Hub's `ACADEMY_PUBLIC_URL=https://v79academy.v79sl.com/academy` to open the public learner catalogue. Keep `ACADEMY_BASE_URL=http://v79_course_builder:3030` as the internal signed API address. In the Academy app itself, set `ACADEMY_PUBLIC_URL=https://v79academy.v79sl.com` (without `/academy`) so course and media links resolve correctly.
+
 Existing Academy mappings remain in the database for migration purposes but are ignored when requesting learner summaries or showing the Connections screen. Historic Academy organisation events are excluded from the shared timeline until a verified learner-to-organisation consent flow exists. The Hub database is stored at `data/v79-hub.db`.
+
+The initial owner uses the email in `V79_HUB_ADMIN_EMAIL` and the password supplied on **first boot**. Changing `V79_HUB_ADMIN_PASSWORD` after the database exists does not change that password. If the owner cannot sign in and email recovery is unavailable, back up `data` and run `docker compose exec v79-hub node scripts/recover-owner.mjs` from the server terminal. The command prompts for a new 16–256 character password without echoing it, updates only the configured existing owner, and revokes that owner's sessions and pending login links. It preserves MFA; an enrolled owner still needs a valid MFA code or recovery code. Never send the password as a shell argument or turn off authentication for testing.
+
+After the four product containers are reachable on `proxy_network`, run `docker compose exec -T v79-hub node scripts/check-integrations.mjs` for a read-only health and signed-summary check. HTTP 404 means a correctly authenticated request reached a product with no owner record yet. After first launching FFPRO, Tiquet and Marketing through Hub, rerun with `--require-records`; those three should then return HTTP 200. Academy may remain 404 until the owner registers independently with the same verified email. This probe does not replace browser, payment, email, event, data persistence or access-revocation testing.
 
 ## Automatic deployment after a merge
 

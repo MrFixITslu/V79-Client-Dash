@@ -46,7 +46,7 @@ services:
       - MARKETING_BASE_URL=${MARKETING_BASE_URL:-http://v79marketing-app:3070}
       - FFPRO_PUBLIC_URL=${FFPRO_PUBLIC_URL:-https://ffpro.v79sl.com}
       - TIQUET_PUBLIC_URL=${TIQUET_PUBLIC_URL:-https://tiquet.v79sl.com}
-      - ACADEMY_PUBLIC_URL=${ACADEMY_PUBLIC_URL:-https://academy.v79sl.com}
+      - ACADEMY_PUBLIC_URL=${ACADEMY_PUBLIC_URL:-https://v79academy.v79sl.com/academy}
       - MARKETING_PUBLIC_URL=${MARKETING_PUBLIC_URL:-https://marketing.v79sl.com}
     expose:
       - "3040"
