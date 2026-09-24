@@ -24,7 +24,7 @@ type Integration = {
 type ProductResult = {
   name: string;
   openUrl: string;
-  status: "connected" | "unlinked" | "offline" | "error" | "not_configured";
+  status: "connected" | "ready" | "unlinked" | "offline" | "error" | "not_configured";
   summary?: any;
   error?: string;
   entitled?: boolean;
@@ -85,6 +85,7 @@ function formatNumber(value: unknown) {
 function statusLabel(status?: string) {
   switch (status) {
     case "connected": return "Connected";
+    case "ready": return "Ready to activate";
     case "unlinked": return "Not linked";
     case "offline": return "Offline";
     case "not_configured": return "Needs setup";
@@ -267,6 +268,7 @@ function ProductCard({ product, result }: { product: Integration["product"]; res
         </div>
         <span className={`rounded-full px-3 py-1 text-xs font-semibold ${
           result?.status === "connected" ? "bg-emerald-50 text-emerald-700" :
+          result?.status === "ready" ? "bg-cyan-50 text-cyan-700" :
           result?.status === "unlinked" ? "bg-slate-100 text-slate-600" :
           "bg-amber-50 text-amber-700"
         }`}>{statusLabel(result?.status)}</span>
