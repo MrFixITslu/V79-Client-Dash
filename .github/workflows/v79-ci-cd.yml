@@ -110,6 +110,11 @@ jobs:
         with:
           name: release-${{ github.sha }}
           path: ${{ runner.temp }}/release
+      - name: Join deployment tailnet
+        uses: tailscale/github-action@v4
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+          ping: ${{ secrets.DEPLOY_HOST }}
       - name: Configure pinned SSH access
         shell: bash
         env:
