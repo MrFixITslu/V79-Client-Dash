@@ -73,7 +73,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 CREATE TABLE IF NOT EXISTS integrations (
   organization_id TEXT NOT NULL,
-  product TEXT NOT NULL CHECK(product IN ('ffpro','tiquet','academy')),
+  product TEXT NOT NULL CHECK(product IN ('ffpro','tiquet','academy','marketing')),
   external_subject_id TEXT NOT NULL,
   enabled INTEGER NOT NULL DEFAULT 1,
   updated_at TEXT NOT NULL,
@@ -90,7 +90,53 @@ CREATE TABLE IF NOT EXISTS events (
   created_at TEXT NOT NULL,
   FOREIGN KEY(organization_id) REFERENCES organizations(id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS subscriptions (
+  organization_id TEXT PRIMARY KEY,
+  plan TEXT NOT NULL CHECK(plan IN ('start','business','advantage')),
+  status TEXT NOT NULL CHECK(status IN ('trialing','active','past_due','cancelled','suspended')),
+  trial_ends_at TEXT,
+  current_period_end TEXT,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(organization_id) REFERENCES organizations(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS app_launch_tickets (
+  token_hash TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  organization_id TEXT NOT NULL,
+  product TEXT NOT NULL CHECK(product IN ('marketing')),
+  expires_at INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY(organization_id) REFERENCES organizations(id) ON DELETE CASCADE
+);
 `);
+
+function migrateIntegrationsForMarketing() {
+  const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='integrations'").get() as any;
+  const sql = String(row?.sql || "");
+  if (!sql || sql.includes("'marketing'")) return;
+  db.pragma("foreign_keys = OFF");
+  try {
+    db.exec(`
+      ALTER TABLE integrations RENAME TO integrations_legacy;
+      CREATE TABLE integrations (
+        organization_id TEXT NOT NULL,
+        product TEXT NOT NULL CHECK(product IN ('ffpro','tiquet','academy','marketing')),
+        external_subject_id TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY(organization_id, product),
+        FOREIGN KEY(organization_id) REFERENCES organizations(id) ON DELETE CASCADE
+      );
+      INSERT INTO integrations(organization_id,product,external_subject_id,enabled,updated_at)
+        SELECT organization_id,product,external_subject_id,enabled,updated_at FROM integrations_legacy;
+      DROP TABLE integrations_legacy;
+    `);
+  } finally {
+    db.pragma("foreign_keys = ON");
+  }
+}
+migrateIntegrationsForMarketing();
 
 function clean(value: unknown) {
   return typeof value === "string" ? value.trim().replace(/^['"]|['"]$/g, "") : "";
@@ -163,7 +209,7 @@ function canonicalOrigin(req: express.Request) {
   return `${req.protocol}://${req.get("host")}`;
 }
 app.use((req, res, next) => {
-  if (["GET","HEAD","OPTIONS"].includes(req.method) || !req.path.startsWith("/api/") || req.path === "/api/platform/events") return next();
+  if (["GET","HEAD","OPTIONS"].includes(req.method) || !req.path.startsWith("/api/") || ["/api/platform/events","/api/platform/session/consume"].includes(req.path)) return next();
   const origin = req.headers.origin;
   if (!origin) return res.status(403).json({ error: "Origin header required." });
   try {
@@ -190,6 +236,7 @@ setInterval(() => {
   const now=Date.now();
   db.prepare("DELETE FROM sessions WHERE expires_at <= ?").run(now);
   for (const [key,value] of loginAttempts) if(value.resetAt<now) loginAttempts.delete(key);
+  db.prepare("DELETE FROM app_launch_tickets WHERE expires_at <= ?").run(now);
 }, 60_000).unref();
 
 function bootstrapOwner() {
@@ -208,16 +255,67 @@ function bootstrapOwner() {
     while(db.prepare("SELECT 1 FROM organizations WHERE slug=?").get(slug)) slug=`${slugify(orgName)}-${++suffix}`;
     db.prepare("INSERT INTO organizations(id,name,slug,created_at) VALUES(?,?,?,?)").run(orgId,orgName,slug,now);
     db.prepare("INSERT INTO memberships(user_id,organization_id,role,created_at) VALUES(?,?,?,?)").run(userId,orgId,"owner",now);
+    db.prepare("INSERT INTO subscriptions(organization_id,plan,status,trial_ends_at,current_period_end,updated_at) VALUES(?,?,?,?,?,?)")
+      .run(orgId,"advantage","active",null,null,now);
+    db.prepare("INSERT INTO integrations(organization_id,product,external_subject_id,enabled,updated_at) VALUES(?,?,?,?,?)")
+      .run(orgId,"marketing",orgId,1,now);
   });
   tx();
   console.warn("[V79 Hub] Initial owner and organisation created. Rotate the bootstrap password after first deployment.");
 }
 bootstrapOwner();
 
+function ensureBootstrapAccess() {
+  const email = clean(process.env.V79_HUB_ADMIN_EMAIL).toLowerCase();
+  if (!email) return;
+  const row = db.prepare(`
+    SELECT o.id AS organizationId
+    FROM users u
+    JOIN memberships m ON m.user_id=u.id
+    JOIN organizations o ON o.id=m.organization_id
+    WHERE u.email=? ORDER BY CASE m.role WHEN 'owner' THEN 0 ELSE 1 END LIMIT 1
+  `).get(email) as any;
+  if (!row) return;
+  const now = new Date().toISOString();
+  db.prepare(`
+    INSERT INTO subscriptions(organization_id,plan,status,trial_ends_at,current_period_end,updated_at)
+    VALUES(?, 'advantage','active',NULL,NULL,?)
+    ON CONFLICT(organization_id) DO NOTHING
+  `).run(row.organizationId,now);
+  db.prepare(`
+    INSERT INTO integrations(organization_id,product,external_subject_id,enabled,updated_at)
+    VALUES(?, 'marketing', ?, 1, ?)
+    ON CONFLICT(organization_id,product) DO UPDATE SET external_subject_id=excluded.external_subject_id,enabled=1,updated_at=excluded.updated_at
+  `).run(row.organizationId,row.organizationId,now);
+}
+ensureBootstrapAccess();
+
+function subscriptionFor(organizationId: string) {
+  return db.prepare("SELECT plan,status,trial_ends_at AS trialEndsAt,current_period_end AS currentPeriodEnd,updated_at AS updatedAt FROM subscriptions WHERE organization_id=?").get(organizationId) as any;
+}
+
+function productEntitled(organizationId: string, product: string) {
+  if (product === "academy") return true;
+  const subscription = subscriptionFor(organizationId);
+  if (!subscription || !["active","trialing"].includes(subscription.status)) return false;
+  const plans: Record<string,string[]> = {
+    start: ["ffpro","tiquet"],
+    business: ["ffpro","tiquet","marketing"],
+    advantage: ["ffpro","tiquet","marketing"],
+  };
+  return Boolean(plans[subscription.plan]?.includes(product));
+}
+
 const productConfig = {
   ffpro: { name:"FFPRO", url:clean(process.env.FFPRO_BASE_URL), openUrl:clean(process.env.FFPRO_PUBLIC_URL) || clean(process.env.FFPRO_BASE_URL) },
   tiquet: { name:"V79 Tiquet", url:clean(process.env.TIQUET_BASE_URL), openUrl:clean(process.env.TIQUET_PUBLIC_URL) || clean(process.env.TIQUET_BASE_URL) },
   academy: { name:"V79 Academy", url:clean(process.env.ACADEMY_BASE_URL), openUrl:clean(process.env.ACADEMY_PUBLIC_URL) || clean(process.env.ACADEMY_BASE_URL) },
+  marketing: {
+    name:"V79 Marketing",
+    url:clean(process.env.MARKETING_BASE_URL),
+    openUrl:"/api/apps/marketing/launch",
+    publicUrl:clean(process.env.MARKETING_PUBLIC_URL) || "https://marketing.v79sl.com",
+  },
 } as const;
 type Product = keyof typeof productConfig;
 
@@ -252,6 +350,7 @@ const EVENT_SOURCE_PRODUCTS: Record<string, Product | null> = {
   tiquet: "tiquet",
   ffpro: "ffpro",
   academy: "academy",
+  marketing: "marketing",
 };
 
 function eventSecretFor(source: string) {
@@ -260,6 +359,7 @@ function eventSecretFor(source: string) {
     tiquet: "V79_TIQUET_EVENT_SECRET",
     ffpro: "V79_FFPRO_EVENT_SECRET",
     academy: "V79_ACADEMY_EVENT_SECRET",
+    marketing: "V79_MARKETING_EVENT_SECRET",
   };
   return clean(process.env[names[source] || ""]);
 }
@@ -359,7 +459,11 @@ app.post("/api/auth/logout", (req,res)=>{
 });
 app.get("/api/auth/me", requireAuth, (req,res)=>{
   const user=(req as any).hubUser, m=(req as any).hubMembership;
-  res.json({user,organization:{id:m.organizationId,name:m.organizationName,slug:m.slug,role:m.role}});
+  res.json({
+    user,
+    organization:{id:m.organizationId,name:m.organizationName,slug:m.slug,role:m.role},
+    subscription: subscriptionFor(m.organizationId) || null,
+  });
 });
 app.put("/api/auth/password", requireAuth, (req,res)=>{
   const currentPassword=String(req.body?.currentPassword || "");
@@ -386,6 +490,8 @@ app.get("/api/integrations", requireAuth, (req,res)=>{
     linked:Boolean(byProduct[product]?.enabled),
     externalSubjectId:byProduct[product]?.externalSubjectId || "",
     openUrl:productConfig[product].openUrl || "",
+    entitled:productEntitled(m.organizationId,product),
+    managedByHub:product === "marketing",
     updatedAt:byProduct[product]?.updatedAt || null,
   })));
 });
@@ -415,6 +521,7 @@ app.get("/api/platform/dashboard", requireAuth, async (req,res)=>{
     products[product]=subject ? await fetchSummary(product,subject) : {status:"unlinked"};
     products[product].name=productConfig[product].name;
     products[product].openUrl=productConfig[product].openUrl || "";
+    products[product].entitled=productEntitled(m.organizationId,product);
   }));
   const events=(db.prepare("SELECT id,type,source,occurred_at AS occurredAt,payload_json AS payloadJson FROM events WHERE organization_id=? ORDER BY occurred_at DESC LIMIT 20").all(m.organizationId) as any[])
     .map(event => {
@@ -422,7 +529,12 @@ app.get("/api/platform/dashboard", requireAuth, async (req,res)=>{
       try { details=JSON.parse(event.payloadJson || "{}"); } catch {}
       return { id:event.id,type:event.type,source:event.source,occurredAt:event.occurredAt,details };
     });
-  res.json({organization:{id:m.organizationId,name:m.organizationName,slug:m.slug},products,events});
+  res.json({
+    organization:{id:m.organizationId,name:m.organizationName,slug:m.slug},
+    subscription:subscriptionFor(m.organizationId) || null,
+    products,
+    events
+  });
 });
 
 if(!production){
