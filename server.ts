@@ -506,11 +506,12 @@ function wipayConfig() {
   const extraHosts=clean(process.env.WIPAY_ALLOWED_HOSTS).split(",").map(v=>v.trim().toLowerCase()).filter(Boolean);
   let url:URL|null=null;
   try { if(paymentUrl) url=new URL(paymentUrl); } catch {}
+  const keyValid=environment==="sandbox" ? apiKey.length>=3 : apiKey.length>=8;
   const configured=provider==="wipay"
     && Boolean(url)
     && url!.protocol==="https:"
     && accountNumber.length>0
-    && apiKey.length>=3
+    && keyValid
     && /^[A-Z]{2}$/.test(countryCode)
     && currency==="XCD"
     && ["sandbox","live"].includes(environment);
@@ -851,7 +852,7 @@ app.get("/api/billing/wipay/return", (req,res)=>{
   const expected=order ? Number(order.amount_minor||0)/100 : NaN;
   const valid=cfg.configured
     && order
-    && order.status!=="failed"
+    && ["checkout_ready","paid"].includes(order.status)
     && order.provider_transaction_id
     && transactionId===order.provider_transaction_id
     && currency===order.currency
