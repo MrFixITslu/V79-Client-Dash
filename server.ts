@@ -166,7 +166,7 @@ const PLAN_CATALOG = {
 } as const;
 type PlanName = keyof typeof PLAN_CATALOG;
 const TRIAL_DAYS = Math.min(30, Math.max(0, Number(process.env.V79_TRIAL_DAYS || 14)));
-const SELF_SERVICE_SIGNUP = process.env.V79_SELF_SERVICE_SIGNUP !== "0";
+const SELF_SERVICE_SIGNUP = process.env.V79_SELF_SERVICE_SIGNUP === "1";
 
 function validPlan(value: unknown): value is PlanName {
   return typeof value === "string" && value in PLAN_CATALOG;
