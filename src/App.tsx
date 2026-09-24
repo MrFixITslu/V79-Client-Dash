@@ -286,7 +286,7 @@ function ProductCard({ product, result }: { product: Integration["product"]; res
       <div className="mt-6 flex items-center justify-between border-t border-slate-100 pt-5">
         <span className="text-xs text-slate-400">{summary?.generatedAt ? `Updated ${new Date(summary.generatedAt).toLocaleString()}` : "Connect to show live indicators"}</span>
         {result?.openUrl && result?.entitled !== false ? (
-          <a href={result.openUrl} target={product === "marketing" ? "_self" : "_blank"} rel="noreferrer" className="inline-flex items-center gap-1 text-sm font-semibold text-slate-800 hover:text-cyan-700">
+          <a href={result.openUrl} target={["ffpro","tiquet","marketing"].includes(product) ? "_self" : "_blank"} rel="noreferrer" className="inline-flex items-center gap-1 text-sm font-semibold text-slate-800 hover:text-cyan-700">
             Open <ArrowUpRight size={15} />
           </a>
         ) : result?.entitled === false ? <span className="text-xs font-semibold text-amber-700">Plan upgrade required</span> : null}
@@ -568,6 +568,7 @@ export default function App() {
   const [refreshing, setRefreshing] = useState(false);
   const [notice, setNotice] = useState("");
   const returnTarget = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("return") : null;
+  const managedReturnTarget = returnTarget && ["ffpro","tiquet","marketing"].includes(returnTarget) ? returnTarget as Integration["product"] : null;
 
   const loadAll = useCallback(async () => {
     setRefreshing(true);
@@ -595,14 +596,15 @@ export default function App() {
   useEffect(() => { if (session) loadAll(); }, [session, loadAll]);
 
   useEffect(() => {
-    if (!session || returnTarget !== "marketing" || !dashboard) return;
+    if (!session || !managedReturnTarget || !dashboard) return;
     window.history.replaceState(null, "", "/");
-    if (dashboard.products?.marketing?.entitled === false) {
-      setNotice("V79 Marketing is included with V79 Business and V79 Advantage. Your current plan remains unchanged.");
+    const product = dashboard.products?.[managedReturnTarget];
+    if (product?.entitled === false) {
+      setNotice(`${productMeta[managedReturnTarget].label} is not included in your current V79 subscription.`);
       return;
     }
-    window.location.assign("/api/apps/marketing/launch");
-  }, [session, returnTarget, dashboard]);
+    window.location.assign(`/api/apps/${managedReturnTarget}/launch`);
+  }, [session, managedReturnTarget, dashboard]);
 
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
