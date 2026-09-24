@@ -420,7 +420,9 @@ function memberProducts(userId: string, organizationId: string) {
 }
 
 function memberCanAccessProduct(userId: string, organizationId: string, role: string, product: string) {
-  if (product === "academy") return true;
+  // Academy learner accounts remain independent of Hub. A linked learner summary
+  // is business administration data, so only the Hub owner/admin can see it.
+  if (product === "academy") return ["owner","admin"].includes(role);
   if (!productEntitled(organizationId, product)) return false;
   if (role === "owner") return true;
   if (product === "ffpro") return false;
@@ -1003,17 +1005,22 @@ app.get("/api/integrations", requireAuth, (req,res)=>{
   ensureManagedIntegrations(m.organizationId);
   const rows=db.prepare("SELECT product,external_subject_id AS externalSubjectId,enabled,updated_at AS updatedAt FROM integrations WHERE organization_id=?").all(m.organizationId) as any[];
   const byProduct=Object.fromEntries(rows.map(row=>[row.product,row]));
-  res.json((Object.keys(productConfig) as Product[]).map(product=>({
-    product,
-    name:productConfig[product].name,
-    linked:Boolean(byProduct[product]?.enabled),
-    externalSubjectId:byProduct[product]?.externalSubjectId || "",
-    openUrl:productConfig[product].openUrl || "",
-    entitled:productEntitled(m.organizationId,product),
-    accessible:memberCanAccessProduct((req as any).hubUser.id,m.organizationId,m.role,product),
-    managedByHub:["ffpro","tiquet","marketing"].includes(product),
-    updatedAt:byProduct[product]?.updatedAt || null,
-  })));
+  const integrationUser=(req as any).hubUser;
+  const isAdministrator=["owner","admin"].includes(m.role);
+  res.json((Object.keys(productConfig) as Product[]).map(product=>{
+    const accessible=memberCanAccessProduct(integrationUser.id,m.organizationId,m.role,product);
+    return {
+      product,
+      name:productConfig[product].name,
+      linked:Boolean(byProduct[product]?.enabled),
+      externalSubjectId:isAdministrator ? (byProduct[product]?.externalSubjectId || "") : "",
+      openUrl:accessible ? (productConfig[product].openUrl || "") : "",
+      entitled:productEntitled(m.organizationId,product),
+      accessible,
+      managedByHub:["ffpro","tiquet","marketing"].includes(product),
+      updatedAt:isAdministrator ? (byProduct[product]?.updatedAt || null) : null,
+    };
+  }));
 });
 app.put("/api/integrations/:product", requireAuth, requireAdmin, (req,res)=>{
   const product=req.params.product as Product;
