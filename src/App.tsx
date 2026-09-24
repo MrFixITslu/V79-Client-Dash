@@ -1121,6 +1121,7 @@ export default function App() {
   const resetToken = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("reset") : null;
   const verifyToken = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("verify") : null;
   const billingResult = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("billing") : null;
+  const launchError = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("error") : null;
   const managedReturnTarget = returnTarget && ["ffpro","tiquet","marketing"].includes(returnTarget) ? returnTarget as Integration["product"] : null;
 
   const loadAll = useCallback(async () => {
@@ -1155,7 +1156,14 @@ export default function App() {
 
   useEffect(() => {
     if (!session || !managedReturnTarget || !dashboard) return;
-    window.history.replaceState(null, "", "/");
+    const url=new URL(window.location.href);
+    url.searchParams.delete("return");
+    url.searchParams.delete("error");
+    window.history.replaceState(null, "", url.pathname + url.search + url.hash);
+    if (launchError) {
+      setNotice(`${productMeta[managedReturnTarget].label} could not complete sign-in. Check the app's Hub integration and server logs before trying again.`);
+      return;
+    }
     const product = dashboard.products?.[managedReturnTarget];
     if (product?.entitled === false) {
       setNotice(`${productMeta[managedReturnTarget].label} is not included in your current V79 subscription.`);
@@ -1166,7 +1174,7 @@ export default function App() {
       return;
     }
     window.location.assign(`/api/apps/${managedReturnTarget}/launch`);
-  }, [session, managedReturnTarget, dashboard]);
+  }, [session, managedReturnTarget, dashboard, launchError]);
 
   useEffect(() => {
     if(!billingResult) return;
