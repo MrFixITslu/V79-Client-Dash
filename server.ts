@@ -493,7 +493,20 @@ function ensureBootstrapAccess() {
 ensureBootstrapAccess();
 
 function subscriptionFor(organizationId: string) {
-  return db.prepare("SELECT plan,status,trial_ends_at AS trialEndsAt,current_period_end AS currentPeriodEnd,updated_at AS updatedAt FROM subscriptions WHERE organization_id=?").get(organizationId) as any;
+  let row=db.prepare("SELECT plan,status,trial_ends_at AS trialEndsAt,current_period_end AS currentPeriodEnd,updated_at AS updatedAt FROM subscriptions WHERE organization_id=?").get(organizationId) as any;
+  if(!row) return row;
+  const now=Date.now();
+  const trialEnd=row.trialEndsAt ? new Date(row.trialEndsAt).getTime() : NaN;
+  const periodEnd=row.currentPeriodEnd ? new Date(row.currentPeriodEnd).getTime() : NaN;
+  let nextStatus="";
+  if(row.status==="trialing" && Number.isFinite(trialEnd) && trialEnd<=now) nextStatus="suspended";
+  if(row.status==="active" && Number.isFinite(periodEnd) && periodEnd<=now) nextStatus="past_due";
+  if(nextStatus && nextStatus!==row.status) {
+    const updatedAt=new Date().toISOString();
+    db.prepare("UPDATE subscriptions SET status=?,updated_at=? WHERE organization_id=?").run(nextStatus,updatedAt,organizationId);
+    row={...row,status:nextStatus,updatedAt};
+  }
+  return row;
 }
 
 function subscriptionUsable(organizationId: string) {
