@@ -141,6 +141,37 @@ migrateIntegrationsForMarketing();
 function clean(value: unknown) {
   return typeof value === "string" ? value.trim().replace(/^['"]|['"]$/g, "") : "";
 }
+const PLAN_CATALOG = {
+  start: {
+    name:"V79 Start",
+    monthlyXcd:149,
+    annualXcd:1639,
+    includedUsers:2,
+    products:["ffpro","tiquet"],
+  },
+  business: {
+    name:"V79 Business",
+    monthlyXcd:299,
+    annualXcd:3289,
+    includedUsers:5,
+    products:["ffpro","tiquet","marketing"],
+  },
+  advantage: {
+    name:"V79 Advantage",
+    monthlyXcd:499,
+    annualXcd:5489,
+    includedUsers:10,
+    products:["ffpro","tiquet","marketing"],
+  },
+} as const;
+type PlanName = keyof typeof PLAN_CATALOG;
+const TRIAL_DAYS = Math.min(30, Math.max(0, Number(process.env.V79_TRIAL_DAYS || 14)));
+const SELF_SERVICE_SIGNUP = process.env.V79_SELF_SERVICE_SIGNUP !== "0";
+
+function validPlan(value: unknown): value is PlanName {
+  return typeof value === "string" && value in PLAN_CATALOG;
+}
+
 function slugify(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60) || "business";
 }
@@ -306,12 +337,8 @@ function productEntitled(organizationId: string, product: string) {
     const periodEnd = new Date(subscription.currentPeriodEnd).getTime();
     if (Number.isFinite(periodEnd) && periodEnd <= Date.now()) return false;
   }
-  const plans: Record<string,string[]> = {
-    start: ["ffpro","tiquet"],
-    business: ["ffpro","tiquet","marketing"],
-    advantage: ["ffpro","tiquet","marketing"],
-  };
-  return Boolean(plans[subscription.plan]?.includes(product));
+  const plan = PLAN_CATALOG[subscription.plan as PlanName];
+  return Boolean(plan?.products.includes(product as any));
 }
 
 function ensureManagedIntegrations(organizationId: string) {
@@ -457,6 +484,62 @@ app.get("/api/health", (_req,res)=>{
   try { db.prepare("SELECT 1").get(); res.json({status:"ok"}); }
   catch { res.status(503).json({status:"storage_unavailable"}); }
 });
+app.get("/api/plans", (_req,res)=>{
+  res.json({
+    currency:"XCD",
+    trialDays:TRIAL_DAYS,
+    selfServiceSignup:SELF_SERVICE_SIGNUP,
+    plans:Object.entries(PLAN_CATALOG).map(([id,plan])=>({id,...plan})),
+  });
+});
+
+app.post("/api/auth/register", loginLimited, (req,res)=>{
+  if(!SELF_SERVICE_SIGNUP) return res.status(403).json({error:"Online registration is not currently open. Contact V79 Digital."});
+  const email=clean(req.body?.email).toLowerCase();
+  const password=String(req.body?.password || "");
+  const name=clean(req.body?.name);
+  const organizationName=clean(req.body?.organizationName);
+  const plan=clean(req.body?.plan).toLowerCase();
+
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({error:"Enter a valid email address."});
+  if(password.length<16 || password.length>256) return res.status(400).json({error:"Use a password of 16–256 characters."});
+  if(name.length<2 || name.length>120) return res.status(400).json({error:"Enter your name."});
+  if(organizationName.length<2 || organizationName.length>160) return res.status(400).json({error:"Enter your business or organisation name."});
+  if(!validPlan(plan)) return res.status(400).json({error:"Choose a valid V79 plan."});
+  if(db.prepare("SELECT 1 FROM users WHERE email=?").get(email)) return res.status(409).json({error:"An account with this email already exists."});
+
+  const userId=crypto.randomUUID();
+  const orgId=`v79org_${crypto.randomUUID()}`;
+  const salt=crypto.randomBytes(16).toString("hex");
+  const now=new Date().toISOString();
+  const trialEndsAt=TRIAL_DAYS>0 ? new Date(Date.now()+TRIAL_DAYS*24*60*60_000).toISOString() : now;
+  let slug=slugify(organizationName), suffix=1;
+  while(db.prepare("SELECT 1 FROM organizations WHERE slug=?").get(slug)) slug=`${slugify(organizationName)}-${++suffix}`;
+
+  const tx=db.transaction(()=>{
+    db.prepare("INSERT INTO users(id,email,name,password_salt,password_hash,created_at) VALUES(?,?,?,?,?,?)")
+      .run(userId,email,name,salt,passwordDigest(password,salt),now);
+    db.prepare("INSERT INTO organizations(id,name,slug,created_at) VALUES(?,?,?,?)")
+      .run(orgId,organizationName,slug,now);
+    db.prepare("INSERT INTO memberships(user_id,organization_id,role,created_at) VALUES(?,?,?,?)")
+      .run(userId,orgId,"owner",now);
+    db.prepare("INSERT INTO subscriptions(organization_id,plan,status,trial_ends_at,current_period_end,updated_at) VALUES(?,?,?,?,?,?)")
+      .run(orgId,plan,"trialing",trialEndsAt,null,now);
+  });
+  tx();
+  ensureManagedIntegrations(orgId);
+
+  const token=crypto.randomBytes(32).toString("base64url");
+  db.prepare("INSERT INTO sessions(token_hash,user_id,expires_at,created_at) VALUES(?,?,?,?)")
+    .run(hashToken(token),userId,Date.now()+SESSION_TTL_MS,now);
+  setSessionCookie(res,token);
+  res.status(201).json({
+    user:{id:userId,email,name},
+    organization:{id:orgId,name:organizationName,slug,role:"owner"},
+    subscription:subscriptionFor(orgId),
+  });
+});
+
 app.post("/api/auth/login", loginLimited, (req,res)=>{
   const email=clean(req.body?.email).toLowerCase(), password=String(req.body?.password || "");
   if(!email || !password) return res.status(400).json({error:"Email and password are required."});
