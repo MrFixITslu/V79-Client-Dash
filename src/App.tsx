@@ -322,6 +322,45 @@ function Login({ onLogin }: { onLogin: (session: Session) => void }) {
   );
 }
 
+function VerifyEmail({ token, onVerified }: { token:string; onVerified:(session:Session)=>void }) {
+  const [busy,setBusy]=useState(false);
+  const [error,setError]=useState("");
+
+  async function verify() {
+    setBusy(true);setError("");
+    try {
+      const response=await fetch("/api/auth/verify-email",{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({token}),
+      });
+      const body=await response.json().catch(()=>({}));
+      if(!response.ok) throw new Error(body.error||"Email verification failed.");
+      const url=new URL(window.location.href);
+      url.searchParams.delete("verify");
+      window.history.replaceState(null,"",url.pathname+url.search+url.hash);
+      onVerified(body);
+    } catch(err:any) {
+      setError(err.message||"Email verification failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <main className="min-h-screen bg-slate-950 text-white">
+    <div className="mx-auto flex min-h-screen max-w-xl items-center px-6 py-12">
+      <section className="w-full rounded-3xl border border-white/10 bg-white/[0.06] p-7 shadow-2xl">
+        <div className="text-sm font-semibold uppercase tracking-[.18em] text-cyan-300">V79 Hub security</div>
+        <h1 className="mt-2 text-3xl font-semibold">Confirm your email</h1>
+        <p className="mt-3 text-sm leading-6 text-slate-400">Press the button below to verify this address and start the V79 trial. Opening this page alone does not activate the workspace.</p>
+        {error && <div role="alert" className="mt-5 rounded-xl border border-rose-400/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-100">{error}</div>}
+        <button onClick={verify} disabled={busy} className="mt-6 w-full rounded-xl bg-cyan-300 px-4 py-3 font-semibold text-slate-950 disabled:opacity-50">{busy?"Verifying…":"Confirm email & activate workspace"}</button>
+        <button onClick={()=>window.location.assign("/")} className="mt-3 w-full text-center text-xs text-slate-400 hover:text-slate-300">Back to sign in</button>
+      </section>
+    </div>
+  </main>;
+}
+
 function ResetPassword({ token }: { token:string }) {
   const [password,setPassword]=useState("");
   const [confirm,setConfirm]=useState("");
@@ -967,7 +1006,7 @@ export default function App() {
   const returnTarget = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("return") : null;
   const inviteToken = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("invite") : null;
   const resetToken = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("reset") : null;
-  const verificationResult = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("verification") : null;
+  const verifyToken = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("verify") : null;
   const billingResult = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("billing") : null;
   const managedReturnTarget = returnTarget && ["ffpro","tiquet","marketing"].includes(returnTarget) ? returnTarget as Integration["product"] : null;
 
@@ -1012,17 +1051,6 @@ export default function App() {
   }, [session, managedReturnTarget, dashboard]);
 
   useEffect(() => {
-    if(!verificationResult) return;
-    setNotice(verificationResult==="success"
-      ? "Email verified. Your V79 workspace and trial are now active."
-      : "That email verification link is invalid or has expired. Request a new one from the sign-in screen.");
-    const url=new URL(window.location.href);
-    url.searchParams.delete("verification");
-    window.history.replaceState(null,"",url.pathname+url.search+url.hash);
-    if(session) loadAll();
-  },[verificationResult,session,loadAll]);
-
-  useEffect(() => {
     if(!billingResult) return;
     const messages:Record<string,string>={
       success:"Payment verified. Your V79 subscription has been activated or renewed.",
@@ -1041,6 +1069,7 @@ export default function App() {
     setSession(null); setDashboard(null); setIntegrations([]);
   }
 
+  if (verifyToken) return <VerifyEmail token={verifyToken} onVerified={setSession} />;
   if (resetToken) return <ResetPassword token={resetToken} />;
   if (inviteToken) return <InviteAccept token={inviteToken} onAccepted={setSession} />;
 
