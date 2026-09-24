@@ -382,6 +382,9 @@ async function fetchSummary(product: Product, externalSubjectId: string) {
       signal:AbortSignal.timeout(5000),
     });
     const body=await response.json().catch(()=>({}));
+    if(product==="marketing" && response.status===404) {
+      return {status:"ready",error:"Open V79 Marketing to initialise this organisation's workspace."};
+    }
     if(!response.ok) return {status:"error",error:body?.error || `Service returned HTTP ${response.status}`};
     return {status:"connected",summary:body};
   }catch(error:any){
