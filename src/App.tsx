@@ -568,7 +568,7 @@ function TeamAccess({ session }: { session:Session }) {
     </form>
 
     <div className="mt-6 space-y-3">
-      {team.members.map(member=><MemberAccessRow key={member.id} member={member} team={team} currentUserId={session.user.id} owner={session.organization.role==="owner"} busy={busy===member.id} onSave={saveMember} onRemove={removeMember}/>)}
+      {team.members.map(member=><div key={member.id}><MemberAccessRow member={member} team={team} currentUserId={session.user.id} owner={session.organization.role==="owner"} busy={busy===member.id} onSave={saveMember} onRemove={removeMember}/></div>)}
     </div>
     {team.invitations.length>0&&<div className="mt-8"><h3 className="font-semibold">Pending invitations</h3><div className="mt-3 space-y-2">{team.invitations.map(inv=><div key={inv.id} className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-dashed border-slate-300 bg-white p-4"><div><div className="font-medium">{inv.email}</div><div className="text-xs text-slate-400">{inv.role} · {inv.products.join(", ")||"Hub only"} · expires {new Date(inv.expiresAt).toLocaleDateString()}</div></div><button disabled={busy===inv.id} onClick={()=>revoke(inv.id)} className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600">Revoke</button></div>)}</div></div>}
   </section>;
