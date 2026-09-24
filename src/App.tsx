@@ -495,7 +495,7 @@ function ProductCard({ product, result, role, onNavigate }: { product: Integrati
       <div className="mt-6 flex items-center justify-between border-t border-slate-100 pt-5">
         <span className="text-xs text-slate-500">{result?.status === "degraded" ? "Last verified snapshot" : summary?.generatedAt ? `Updated ${new Date(summary.generatedAt).toLocaleString()}` : ""}</span>
         {result?.openUrl && result?.entitled !== false && result?.accessible !== false ? (
-          <a href={result.openUrl} target={["ffpro","tiquet","marketing"].includes(product) ? "_self" : "_blank"} rel="noreferrer" className="inline-flex items-center gap-1 text-sm font-semibold text-slate-800 hover:text-cyan-700">
+          <a href={result.openUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-sm font-semibold text-slate-800 hover:text-cyan-700">
             Open <ArrowUpRight size={15} />
           </a>
         ) : result?.entitled === false ? role === "owner" ? <button type="button" onClick={() => onNavigate("billing")} className="text-sm font-semibold text-amber-700">View plan</button> : <span className="text-xs text-amber-700">Ask the owner about plans</span>
@@ -697,7 +697,7 @@ function Connections({ integrations }: { integrations: Integration[] }) {
                   <div><div className="font-semibold text-slate-950">{meta.label}</div><div className="text-xs text-slate-500">{item.product === "academy" ? "Personal learning by verified email" : item.entitled === false ? "Not included in this plan" : item.linked ? "Managed by V79 Hub" : "Waiting for subscription"}</div></div>
                 </div>
                 <p className="text-sm text-slate-600">{meta.description}</p>
-                <div>{item.openUrl && item.accessible !== false && <a href={item.openUrl} className="inline-flex items-center gap-1 text-sm font-semibold text-cyan-800">Open app <ArrowUpRight size={15}/></a>}</div>
+                <div>{item.openUrl && item.accessible !== false && <a href={item.openUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-sm font-semibold text-cyan-800">Open app <ArrowUpRight size={15}/></a>}</div>
               </div>
             </div>
           );
@@ -1041,7 +1041,7 @@ function ActionCentre({ dashboard }: { dashboard: DashboardPayload | null }) {
                 <div className="min-w-0 flex-1">
                   <div className="font-medium text-slate-900">{action.title}</div>
                   <p className="mt-1 text-sm leading-5 text-slate-500">{action.detail}</p>
-                  {openUrl && dashboard?.products?.[action.product]?.entitled !== false && <a href={openUrl} className="mt-3 inline-flex items-center gap-1 text-xs font-semibold text-cyan-800">Open {productMeta[action.product].label}<ArrowUpRight size={13}/></a>}
+                  {openUrl && dashboard?.products?.[action.product]?.entitled !== false && <a href={openUrl} target="_blank" rel="noopener noreferrer" className="mt-3 inline-flex items-center gap-1 text-xs font-semibold text-cyan-800">Open {productMeta[action.product].label}<ArrowUpRight size={13}/></a>}
                 </div>
               </div>
             </div>
@@ -1121,6 +1121,7 @@ export default function App() {
   const resetToken = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("reset") : null;
   const verifyToken = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("verify") : null;
   const billingResult = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("billing") : null;
+  const launchError = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("error") : null;
   const managedReturnTarget = returnTarget && ["ffpro","tiquet","marketing"].includes(returnTarget) ? returnTarget as Integration["product"] : null;
 
   const loadAll = useCallback(async () => {
@@ -1155,7 +1156,14 @@ export default function App() {
 
   useEffect(() => {
     if (!session || !managedReturnTarget || !dashboard) return;
-    window.history.replaceState(null, "", "/");
+    const url=new URL(window.location.href);
+    url.searchParams.delete("return");
+    url.searchParams.delete("error");
+    window.history.replaceState(null, "", url.pathname + url.search + url.hash);
+    if (launchError) {
+      setNotice(`${productMeta[managedReturnTarget].label} could not complete sign-in. Check the app's Hub integration and server logs before trying again.`);
+      return;
+    }
     const product = dashboard.products?.[managedReturnTarget];
     if (product?.entitled === false) {
       setNotice(`${productMeta[managedReturnTarget].label} is not included in your current V79 subscription.`);
@@ -1166,7 +1174,7 @@ export default function App() {
       return;
     }
     window.location.assign(`/api/apps/${managedReturnTarget}/launch`);
-  }, [session, managedReturnTarget, dashboard]);
+  }, [session, managedReturnTarget, dashboard, launchError]);
 
   useEffect(() => {
     if(!billingResult) return;
