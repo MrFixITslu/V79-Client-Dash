@@ -143,3 +143,40 @@ V79_MAIL_FROM=V79 Digital <no-reply@v79sl.com>
 The `V79_MAIL_FROM` domain must be verified with the email provider before public signup is enabled. Keep `V79_SELF_SERVICE_SIGNUP=0` until a real verification email has been received successfully from the production Hub domain.
 
 Trial and paid-period lifecycle is also persisted: an expired trial moves to `suspended`; an expired paid period moves to `past_due`. Payment can reactivate the subscription through the verified billing flow.
+
+
+## Security and resilience hardening
+
+V79 Hub is the identity and access control plane for the paid business applications, so production deployments should configure the hardening controls below before inviting customer teams.
+
+### Multi-factor authentication
+
+Hub supports TOTP authenticator applications and eight one-time recovery codes per enrolment.
+
+1. Generate a stable encryption key:
+   ```bash
+   openssl rand -hex 32
+   ```
+2. Set that value as `V79_HUB_MFA_KEY`.
+3. Keep the value in protected backups. Do not rotate or regenerate it casually: existing encrypted MFA secrets depend on it.
+4. Users can enable MFA from **Security** after confirming their current password.
+
+Recovery codes are only displayed at enablement time. Hub stores hashes of those codes, not the plaintext codes.
+
+### Security audit trail
+
+Owners and administrators can review recent authentication, MFA, invitation, role, product-access and app-launch events from **Security**. Configure a separate stable `V79_AUDIT_HASH_KEY` (32+ characters recommended) so source IP addresses are represented by consistent privacy-preserving fingerprints rather than stored as raw addresses.
+
+### Durable transactional email
+
+Verification, recovery and team-invitation messages are written to a SQLite outbox before delivery. Temporary provider failures are retried with bounded exponential backoff instead of losing the message after one failed HTTP request. `/api/health` reports pending and terminally failed outbox counts without making an external email outage fail Hub liveness.
+
+### Product outage fallback
+
+Successful signed product summaries are cached locally. If FFPRO, Tiquet, Marketing or Academy times out, is rate-limited, or returns a temporary server error, Hub can show the last verified summary as **Live data delayed** instead of turning the whole command centre blank. The fallback is bounded by `V79_SUMMARY_CACHE_MAX_AGE_MINUTES` (default 1440 minutes / 24 hours). Authentication or authorization errors are never hidden by the cache.
+
+### Durable abuse controls
+
+Authentication throttles are stored in the Hub database rather than process memory, so restarting the container does not reset an active rate-limit window.
+
+Back up the complete `data` directory and deployment secrets together. The SQLite database now also contains the email outbox, audit records, MFA recovery-code hashes, rate-limit state and product-summary cache.
