@@ -61,3 +61,33 @@ docker build -t v79-hub:test .
 ```
 
 The Hub database and SQLite WAL files are ignored by Git and must be included in server backups.
+
+
+## V79 Marketing and subscription entitlements
+
+V79 Hub is the paid access control plane for the business applications. Academy remains independently accessible to public learners.
+
+Current entitlement model:
+- **Start**: FFPRO + V79 Tiquet
+- **Business**: FFPRO + V79 Tiquet + V79 Marketing
+- **Advantage**: FFPRO + V79 Tiquet + V79 Marketing
+
+Marketing uses a Hub-managed organisation mapping; customers do not manually attach or detach it. Hub issues a two-minute, single-use launch ticket after checking authentication and entitlement. Marketing consumes that ticket over a separately signed service-to-service contract.
+
+The Hub dashboard also includes an Action Centre that derives practical next actions from connected product summaries without copying specialist product databases into Hub.
+
+Billing-provider integration is deliberately separate from entitlement enforcement. Subscription records must only be moved to active/trialing by trusted platform administration or a verified payment workflow.
+
+
+## Customer trials and plan catalogue
+
+Hub now carries the commercial entitlement catalogue:
+
+- **V79 Start** — EC$149/month, 2 included users, FFPRO + V79 Tiquet.
+- **V79 Business** — EC$299/month, 5 included users, FFPRO + V79 Tiquet + V79 Marketing.
+- **V79 Advantage** — EC$499/month, 10 included users, FFPRO + V79 Tiquet + V79 Marketing.
+- Annual catalogue prices are EC$1,639 / EC$3,289 / EC$5,489 respectively.
+
+A trial record is real access-control state, not a simulated payment. Trial entitlements expire at `trial_ends_at`. Active subscriptions can also be bounded by `current_period_end`.
+
+Public self-service registration is **disabled by default**. Set `V79_SELF_SERVICE_SIGNUP=1` only when you intentionally want to accept public trials. `V79_TRIAL_DAYS` defaults to 14. Until email verification and a payment workflow are connected, keeping self-service disabled is the safer production setting.

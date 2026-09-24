@@ -1,7 +1,7 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Activity, ArrowUpRight, BookOpenCheck, Building2, CircleDollarSign,
-  GraduationCap, Headphones, Link2, LogOut, RefreshCw, Settings2,
+  Activity, AlertTriangle, ArrowUpRight, BookOpenCheck, Building2, CheckCircle2, CircleDollarSign,
+  GraduationCap, Headphones, Lightbulb, Link2, LogOut, Megaphone, RefreshCw, Settings2,
   ShieldCheck, Sparkles, TicketCheck, Unplug, Users
 } from "lucide-react";
 
@@ -11,24 +11,35 @@ type Session = {
 };
 
 type Integration = {
-  product: "ffpro" | "tiquet" | "academy";
+  product: "ffpro" | "tiquet" | "academy" | "marketing";
   name: string;
   linked: boolean;
   externalSubjectId: string;
   openUrl: string;
   updatedAt: string | null;
+  entitled?: boolean;
+  managedByHub?: boolean;
 };
 
 type ProductResult = {
   name: string;
   openUrl: string;
-  status: "connected" | "unlinked" | "offline" | "error" | "not_configured";
+  status: "connected" | "ready" | "unlinked" | "offline" | "error" | "not_configured";
   summary?: any;
   error?: string;
+  entitled?: boolean;
+};
+
+type Subscription = {
+  plan: "start" | "business" | "advantage";
+  status: "trialing" | "active" | "past_due" | "cancelled" | "suspended";
+  trialEndsAt?: string | null;
+  currentPeriodEnd?: string | null;
 };
 
 type DashboardPayload = {
   organization: { id: string; name: string; slug: string };
+  subscription?: Subscription | null;
   products: Record<Integration["product"], ProductResult>;
   events: Array<{ id: string; type: string; source: string; occurredAt: string; details?: { subjectId?: string | null; correlationId?: string | null; payload?: Record<string, unknown> } }>;
 };
@@ -51,9 +62,16 @@ const productMeta = {
   academy: {
     label: "V79 Academy",
     eyebrow: "Learning & capability",
-    description: "Courses, progress, memberships and certificates.",
+    description: "Public training stays independent; businesses can link learner progress to their Hub.",
     icon: GraduationCap,
     subjectHelp: "Academy learner ID or email",
+  },
+  marketing: {
+    label: "V79 Marketing",
+    eyebrow: "Growth engine",
+    description: "Campaigns, customer pipeline, content, brand intelligence and marketing analytics.",
+    icon: Megaphone,
+    subjectHelp: "Managed automatically by V79 Hub",
   },
 } as const;
 
@@ -67,6 +85,7 @@ function formatNumber(value: unknown) {
 function statusLabel(status?: string) {
   switch (status) {
     case "connected": return "Connected";
+    case "ready": return "Ready to activate";
     case "unlinked": return "Not linked";
     case "offline": return "Offline";
     case "not_configured": return "Needs setup";
@@ -76,33 +95,50 @@ function statusLabel(status?: string) {
 }
 
 function Login({ onLogin }: { onLogin: (session: Session) => void }) {
+  const [mode, setMode] = useState<"login"|"register">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [name, setName] = useState("");
+  const [organizationName, setOrganizationName] = useState("");
+  const [plan, setPlan] = useState<"start"|"business"|"advantage">("business");
+  const [planData, setPlanData] = useState<any>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/plans").then(r=>r.json()).then(setPlanData).catch(()=>{});
+  }, []);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
     setBusy(true); setError("");
     try {
-      const response = await fetch("/api/auth/login", {
+      const response = await fetch(mode === "login" ? "/api/auth/login" : "/api/auth/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify(mode === "login"
+          ? { email, password }
+          : { email, password, name, organizationName, plan }),
       });
       const body = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(body.error || "Sign in failed.");
+      if (!response.ok) throw new Error(body.error || (mode === "login" ? "Sign in failed." : "Account creation failed."));
       onLogin(body);
     } catch (err: any) {
-      setError(err.message || "Sign in failed.");
+      setError(err.message || "Request failed.");
     } finally {
       setBusy(false);
     }
   }
 
+  const plans = planData?.plans || [
+    {id:"start",name:"V79 Start",monthlyXcd:149,includedUsers:2,products:["ffpro","tiquet"]},
+    {id:"business",name:"V79 Business",monthlyXcd:299,includedUsers:5,products:["ffpro","tiquet","marketing"]},
+    {id:"advantage",name:"V79 Advantage",monthlyXcd:499,includedUsers:10,products:["ffpro","tiquet","marketing"]},
+  ];
+
   return (
     <main className="min-h-screen bg-slate-950 text-white">
-      <div className="mx-auto grid min-h-screen max-w-7xl items-center gap-12 px-6 py-12 lg:grid-cols-[1.15fr_.85fr] lg:px-10">
+      <div className="mx-auto grid min-h-screen max-w-7xl items-center gap-12 px-6 py-12 lg:grid-cols-[1.05fr_.95fr] lg:px-10">
         <section className="max-w-2xl">
           <div className="mb-8 inline-flex items-center gap-2 rounded-full border border-cyan-300/20 bg-cyan-300/10 px-4 py-2 text-sm text-cyan-100">
             <Sparkles size={16} /> V79 Digital ecosystem
@@ -111,51 +147,81 @@ function Login({ onLogin }: { onLogin: (session: Session) => void }) {
             One business.<br /><span className="text-cyan-300">One V79 experience.</span>
           </h1>
           <p className="mt-6 max-w-xl text-lg leading-8 text-slate-300">
-            V79 Hub brings support, operations, finance and learning into one clear business view—without merging or exposing the underlying application data.
+            V79 Hub connects finance, service operations, marketing and business learning into one control centre while each specialist app protects its own data.
           </p>
           <div className="mt-10 grid gap-4 sm:grid-cols-3">
             {[
-              [ShieldCheck, "Secure", "Signed service connections"],
+              [ShieldCheck, "Secure", "Hub-managed access and entitlements"],
               [Building2, "Unified", "One organisation identity"],
-              [Activity, "Useful", "Business signals, not noise"],
-            ].map(([Icon, title, text]: any) => (
+              [Activity, "Actionable", "Cross-app signals and next actions"],
+            ].map(([Icon, title, detail]: any) => (
               <div key={title} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
                 <Icon className="mb-4 text-cyan-300" size={22} />
                 <div className="font-medium">{title}</div>
-                <div className="mt-1 text-sm text-slate-400">{text}</div>
+                <div className="mt-1 text-sm leading-5 text-slate-400">{detail}</div>
               </div>
             ))}
           </div>
         </section>
 
-        <form onSubmit={submit} className="rounded-3xl border border-white/10 bg-white/[0.06] p-7 shadow-2xl shadow-cyan-950/20 backdrop-blur sm:p-9">
-          <div className="mb-8">
-            <div className="text-sm font-medium uppercase tracking-[0.18em] text-cyan-300">V79 Hub</div>
-            <h2 className="mt-2 text-3xl font-semibold">Welcome back</h2>
-            <p className="mt-2 text-sm text-slate-400">Sign in with your Hub owner account.</p>
+        <section className="rounded-3xl border border-white/10 bg-white/[0.06] p-7 shadow-2xl shadow-cyan-950/20 backdrop-blur sm:p-9">
+          <div className="flex rounded-xl bg-slate-900/70 p-1">
+            <button type="button" onClick={()=>{setMode("login");setError("");}} className={"flex-1 rounded-lg px-3 py-2 text-sm font-semibold " + (mode==="login" ? "bg-white text-slate-950" : "text-slate-400")}>Sign in</button>
+            <button type="button" disabled={planData?.selfServiceSignup===false} onClick={()=>{setMode("register");setError("");}} className={"flex-1 rounded-lg px-3 py-2 text-sm font-semibold disabled:opacity-40 " + (mode==="register" ? "bg-white text-slate-950" : "text-slate-400")}>Create account</button>
           </div>
-          <label className="block text-sm font-medium text-slate-200">
-            Email
-            <input
-              autoComplete="email" type="email" required value={email}
-              onChange={e => setEmail(e.target.value)}
-              className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900/80 px-4 py-3 outline-none ring-cyan-300 transition focus:ring-2"
-            />
-          </label>
-          <label className="mt-5 block text-sm font-medium text-slate-200">
-            Password
-            <input
-              autoComplete="current-password" type="password" required value={password}
-              onChange={e => setPassword(e.target.value)}
-              className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900/80 px-4 py-3 outline-none ring-cyan-300 transition focus:ring-2"
-            />
-          </label>
-          {error && <div role="alert" className="mt-5 rounded-xl border border-rose-400/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-100">{error}</div>}
-          <button disabled={busy} className="mt-7 w-full rounded-xl bg-cyan-300 px-4 py-3 font-semibold text-slate-950 transition hover:bg-cyan-200 disabled:opacity-60">
-            {busy ? "Signing in…" : "Sign in to V79 Hub"}
-          </button>
+
+          <div className="mt-7">
+            <div className="text-sm font-medium uppercase tracking-[0.18em] text-cyan-300">V79 Hub</div>
+            <h2 className="mt-2 text-3xl font-semibold">{mode==="login" ? "Welcome back" : "Start your V79 workspace"}</h2>
+            <p className="mt-2 text-sm leading-6 text-slate-400">
+              {mode==="login"
+                ? "Sign in with your V79 Hub credentials."
+                : "Try the selected plan for " + (planData?.trialDays ?? 14) + " days. Paid access is required when the trial ends."}
+            </p>
+          </div>
+
+          <form onSubmit={submit} className="mt-7">
+            {mode==="register" && (
+              <>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <label className="block text-sm font-medium text-slate-200">Your name
+                    <input autoComplete="name" required minLength={2} value={name} onChange={e=>setName(e.target.value)} className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900/80 px-4 py-3 outline-none ring-cyan-300 focus:ring-2"/>
+                  </label>
+                  <label className="block text-sm font-medium text-slate-200">Business name
+                    <input autoComplete="organization" required minLength={2} value={organizationName} onChange={e=>setOrganizationName(e.target.value)} className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900/80 px-4 py-3 outline-none ring-cyan-300 focus:ring-2"/>
+                  </label>
+                </div>
+
+                <div className="mt-5 grid gap-2">
+                  {plans.map((item:any)=>(
+                    <button key={item.id} type="button" onClick={()=>setPlan(item.id)} className={"rounded-2xl border p-4 text-left transition " + (plan===item.id ? "border-cyan-300 bg-cyan-300/10" : "border-white/10 bg-slate-900/40 hover:border-white/20")}>
+                      <div className="flex items-center justify-between gap-4">
+                        <div><div className="font-semibold">{item.name}</div><div className="mt-1 text-xs text-slate-400">{item.includedUsers} included users · {item.products.includes("marketing") ? "Marketing included" : "Finance + operations"}</div></div>
+                        <div className="text-right"><div className="text-xl font-semibold">EC${item.monthlyXcd}</div><div className="text-[10px] text-slate-500">per month after trial</div></div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+
+            <label className={(mode==="register" ? "mt-5 " : "") + "block text-sm font-medium text-slate-200"}>
+              Email
+              <input autoComplete="email" type="email" required value={email} onChange={e => setEmail(e.target.value)} className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900/80 px-4 py-3 outline-none ring-cyan-300 transition focus:ring-2"/>
+            </label>
+            <label className="mt-5 block text-sm font-medium text-slate-200">
+              Password
+              <input autoComplete={mode==="login"?"current-password":"new-password"} type="password" required minLength={mode==="register"?16:1} value={password} onChange={e => setPassword(e.target.value)} className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900/80 px-4 py-3 outline-none ring-cyan-300 transition focus:ring-2"/>
+              {mode==="register" && <span className="mt-1 block text-[11px] text-slate-500">Use at least 16 characters.</span>}
+            </label>
+            {error && <div role="alert" className="mt-5 rounded-xl border border-rose-400/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-100">{error}</div>}
+            <button disabled={busy} className="mt-7 w-full rounded-xl bg-cyan-300 px-4 py-3 font-semibold text-slate-950 transition hover:bg-cyan-200 disabled:opacity-60">
+              {busy ? (mode==="login"?"Signing in…":"Creating workspace…") : (mode==="login"?"Sign in to V79 Hub":"Start " + (planData?.trialDays ?? 14) + "-day trial")}
+            </button>
+            {mode==="register" && <p className="mt-4 text-center text-[11px] leading-5 text-slate-500">No payment is recorded by this form. Access expires at the end of the trial unless V79 billing activates the subscription.</p>}
+          </form>
           <p className="mt-6 text-center text-xs text-slate-500">From Idea to Advantage</p>
-        </form>
+        </section>
       </div>
     </main>
   );
@@ -178,6 +244,11 @@ function ProductCard({ product, result }: { product: Integration["product"]; res
       ["Month expenses", formatNumber(metrics.currentMonthExpenses)],
       ["Month net", formatNumber(metrics.currentMonthNet)],
     ];
+    if (product === "marketing") return [
+      ["Customers", formatNumber(metrics.customers)],
+      ["Campaigns", formatNumber(metrics.activeCampaigns)],
+      ["Scheduled", formatNumber(metrics.scheduledPosts)],
+    ];
     return [
       ["Enrolled", formatNumber(metrics.enrolledCourses)],
       ["Progress", metrics.overallProgressPercent == null ? "—" : `${metrics.overallProgressPercent}%`],
@@ -197,6 +268,7 @@ function ProductCard({ product, result }: { product: Integration["product"]; res
         </div>
         <span className={`rounded-full px-3 py-1 text-xs font-semibold ${
           result?.status === "connected" ? "bg-emerald-50 text-emerald-700" :
+          result?.status === "ready" ? "bg-cyan-50 text-cyan-700" :
           result?.status === "unlinked" ? "bg-slate-100 text-slate-600" :
           "bg-amber-50 text-amber-700"
         }`}>{statusLabel(result?.status)}</span>
@@ -213,11 +285,11 @@ function ProductCard({ product, result }: { product: Integration["product"]; res
       {result?.error && <p className="mt-4 text-xs text-amber-700">{result.error}</p>}
       <div className="mt-6 flex items-center justify-between border-t border-slate-100 pt-5">
         <span className="text-xs text-slate-400">{summary?.generatedAt ? `Updated ${new Date(summary.generatedAt).toLocaleString()}` : "Connect to show live indicators"}</span>
-        {result?.openUrl ? (
-          <a href={result.openUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-sm font-semibold text-slate-800 hover:text-cyan-700">
+        {result?.openUrl && result?.entitled !== false ? (
+          <a href={result.openUrl} target={product === "marketing" ? "_self" : "_blank"} rel="noreferrer" className="inline-flex items-center gap-1 text-sm font-semibold text-slate-800 hover:text-cyan-700">
             Open <ArrowUpRight size={15} />
           </a>
-        ) : null}
+        ) : result?.entitled === false ? <span className="text-xs font-semibold text-amber-700">Plan upgrade required</span> : null}
       </div>
     </article>
   );
@@ -333,14 +405,15 @@ function Connections({ integrations, onChanged }: { integrations: Integration[];
                     value={values[item.product] || ""}
                     onChange={e => setValues(old => ({ ...old, [item.product]: e.target.value }))}
                     placeholder={meta.subjectHelp}
-                    className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 outline-none ring-cyan-300 focus:ring-2"
+                    disabled={item.managedByHub}
+                    className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 outline-none ring-cyan-300 focus:ring-2 disabled:cursor-not-allowed disabled:text-slate-400"
                   />
                 </label>
                 <div className="flex gap-2">
-                  <button disabled={busy === item.product} onClick={() => save(item.product)} className="rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50">
+                  {!item.managedByHub && <button disabled={busy === item.product} onClick={() => save(item.product)} className="rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50">
                     {busy === item.product ? "Saving…" : "Save"}
-                  </button>
-                  {item.linked && (
+                  </button>}
+                  {item.linked && !item.managedByHub && (
                     <button disabled={busy === item.product} aria-label={`Disconnect ${meta.label}`} onClick={() => disconnect(item.product)} className="rounded-xl border border-slate-200 px-3 py-2.5 text-slate-500 hover:bg-slate-50">
                       <Unplug size={18} />
                     </button>
@@ -366,6 +439,9 @@ function eventTitle(type: string) {
     "course.enrolled": "Course enrolment",
     "certificate.issued": "Certificate issued",
     "finance.snapshot.updated": "Financial snapshot updated",
+    "marketing.post_scheduled": "Marketing post scheduled",
+    "marketing.lead_created": "Marketing lead captured",
+    "marketing.customer_status_changed": "Marketing customer stage changed",
   };
   return labels[type] || type.split(/[._-]/).map(word => word ? word[0].toUpperCase()+word.slice(1) : "").join(" ");
 }
@@ -381,8 +457,70 @@ function eventDescription(event: DashboardPayload["events"][number]) {
     case "course.enrolled": return p.courseTitle ? `Enrolled in ${p.courseTitle}.` : "A learner enrolled in a course.";
     case "certificate.issued": return p.courseTitle ? `Completed ${p.courseTitle}.` : "A learner earned a certificate.";
     case "finance.snapshot.updated": return "FFPRO financial indicators were refreshed.";
+    case "marketing.post_scheduled": return p.scheduledFor ? `Content scheduled for ${new Date(p.scheduledFor).toLocaleString()}.` : "Marketing content was scheduled.";
+    case "marketing.lead_created": return p.channel ? `New enquiry captured through ${p.channel}.` : "A new marketing enquiry was captured.";
+    case "marketing.customer_status_changed": return p.to ? `Customer moved to ${p.to}.` : "A marketing customer stage changed.";
     default: return "Activity recorded across the V79 ecosystem.";
   }
+}
+
+function ActionCentre({ dashboard }: { dashboard: DashboardPayload | null }) {
+  const actions = useMemo(() => {
+    if (!dashboard) return [] as Array<{ title:string; detail:string; product:Integration["product"]; priority:"attention"|"good"|"info" }>;
+    const result: Array<{ title:string; detail:string; product:Integration["product"]; priority:"attention"|"good"|"info" }> = [];
+    const ff:any = dashboard.products?.ffpro?.summary?.metrics || {};
+    const tq:any = dashboard.products?.tiquet?.summary?.metrics || {};
+    const mk:any = dashboard.products?.marketing?.summary?.metrics || {};
+    const ac:any = dashboard.products?.academy?.summary?.metrics || {};
+
+    if (dashboard.products?.ffpro?.status === "connected" && Number.isFinite(Number(ff.currentMonthNet))) {
+      if (Number(ff.currentMonthNet) < 0) result.push({title:"Review this month's cash position",detail:"FFPRO shows expenses above income for the current month. Review the drivers before committing new spend.",product:"ffpro",priority:"attention"});
+      else result.push({title:"Cash position is positive",detail:"Current-month FFPRO net is positive. Check the forecast before deciding how much is available to reinvest.",product:"ffpro",priority:"good"});
+    }
+    if (dashboard.products?.tiquet?.status === "connected") {
+      const openJobs = Object.entries(tq.jobsByStatus || {}).filter(([status]) => !["paid","completed","closed"].includes(String(status).toLowerCase())).reduce((sum,[,value])=>sum+Number(value||0),0);
+      if (openJobs > 0) result.push({title:`${openJobs} service job${openJobs===1?"":"s"} need progression`,detail:"Use Tiquet to check stalled work, customer follow-ups and the next operational action.",product:"tiquet",priority:"info"});
+    }
+    if (dashboard.products?.marketing?.status === "connected") {
+      if (Number(mk.activeCampaigns || 0) === 0) result.push({title:"No active marketing campaign",detail:"Create a focused campaign in V79 Marketing so growth activity is deliberate rather than occasional.",product:"marketing",priority:"attention"});
+      else if (Number(mk.scheduledPosts || 0) === 0) result.push({title:"Campaign active, but nothing is scheduled",detail:"Your campaign exists but there is no scheduled content. Build the next publishing queue.",product:"marketing",priority:"attention"});
+      else result.push({title:"Marketing activity is planned",detail:`${formatNumber(mk.activeCampaigns)} active campaign(s) and ${formatNumber(mk.scheduledPosts)} scheduled post(s) are visible.`,product:"marketing",priority:"good"});
+    }
+    if (dashboard.products?.academy?.status === "connected" && Number(ac.enrolledCourses || 0) > 0 && Number(ac.certificates || 0) === 0) {
+      result.push({title:"Training is in progress",detail:"Academy enrolment is active but no certificate is recorded yet. Continue the learning plan.",product:"academy",priority:"info"});
+    }
+    return result.slice(0,6);
+  }, [dashboard]);
+
+  if (!actions.length) return null;
+  return (
+    <section className="mt-8 rounded-3xl border border-slate-200 bg-white p-6">
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <div className="rounded-xl bg-cyan-50 p-2.5 text-cyan-700"><Lightbulb size={20}/></div>
+          <div><h2 className="font-semibold text-slate-950">Action centre</h2><p className="text-sm text-slate-500">Cross-app signals translated into practical next actions.</p></div>
+        </div>
+      </div>
+      <div className="mt-5 grid gap-3 md:grid-cols-2">
+        {actions.map((action,index) => {
+          const Icon = action.priority === "attention" ? AlertTriangle : action.priority === "good" ? CheckCircle2 : Activity;
+          const openUrl = dashboard?.products?.[action.product]?.openUrl;
+          return (
+            <div key={index} className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
+              <div className="flex items-start gap-3">
+                <Icon size={18} className={action.priority === "attention" ? "mt-0.5 text-amber-600" : action.priority === "good" ? "mt-0.5 text-emerald-600" : "mt-0.5 text-cyan-700"}/>
+                <div className="min-w-0 flex-1">
+                  <div className="font-medium text-slate-900">{action.title}</div>
+                  <p className="mt-1 text-sm leading-5 text-slate-500">{action.detail}</p>
+                  {openUrl && dashboard?.products?.[action.product]?.entitled !== false && <a href={openUrl} className="mt-3 inline-flex items-center gap-1 text-xs font-semibold text-cyan-800">Open {productMeta[action.product].label}<ArrowUpRight size={13}/></a>}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
 }
 
 function BusinessTimeline({ events }: { events: DashboardPayload["events"] }) {
@@ -428,6 +566,8 @@ export default function App() {
   const [integrations, setIntegrations] = useState<Integration[]>([]);
   const [view, setView] = useState<"overview" | "connections">("overview");
   const [refreshing, setRefreshing] = useState(false);
+  const [notice, setNotice] = useState("");
+  const returnTarget = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("return") : null;
 
   const loadAll = useCallback(async () => {
     setRefreshing(true);
@@ -453,6 +593,16 @@ export default function App() {
   }, []);
 
   useEffect(() => { if (session) loadAll(); }, [session, loadAll]);
+
+  useEffect(() => {
+    if (!session || returnTarget !== "marketing" || !dashboard) return;
+    window.history.replaceState(null, "", "/");
+    if (dashboard.products?.marketing?.entitled === false) {
+      setNotice("V79 Marketing is included with V79 Business and V79 Advantage. Your current plan remains unchanged.");
+      return;
+    }
+    window.location.assign("/api/apps/marketing/launch");
+  }, [session, returnTarget, dashboard]);
 
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
@@ -486,6 +636,12 @@ export default function App() {
       </header>
 
       <main className="mx-auto max-w-7xl px-5 py-8 lg:px-8 lg:py-10">
+        {notice && (
+          <div role="status" className="mb-6 flex items-start justify-between gap-4 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-900">
+            <span>{notice}</span>
+            <button onClick={() => setNotice("")} className="font-semibold text-amber-800">Dismiss</button>
+          </div>
+        )}
         <div className="mb-6 flex gap-2 sm:hidden">
           <button onClick={() => setView("overview")} className={`flex-1 rounded-xl px-4 py-2 text-sm font-medium ${view === "overview" ? "bg-slate-950 text-white" : "bg-white"}`}>Overview</button>
           <button onClick={() => setView("connections")} className={`flex-1 rounded-xl px-4 py-2 text-sm font-medium ${view === "connections" ? "bg-slate-950 text-white" : "bg-white"}`}>Connections</button>
@@ -504,8 +660,8 @@ export default function App() {
                   </p>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
-                  <div className="rounded-2xl border border-white/10 bg-white/[0.05] px-5 py-4"><div className="text-2xl font-semibold">{connected}/3</div><div className="text-xs text-slate-400">Apps connected</div></div>
-                  <div className="rounded-2xl border border-white/10 bg-white/[0.05] px-5 py-4"><div className="text-2xl font-semibold capitalize">{session.organization.role}</div><div className="text-xs text-slate-400">Your access</div></div>
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.05] px-5 py-4"><div className="text-2xl font-semibold">{connected}/4</div><div className="text-xs text-slate-400">Apps connected</div></div>
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.05] px-5 py-4"><div className="text-2xl font-semibold capitalize">{dashboard?.subscription?.plan || "—"}</div><div className="text-xs text-slate-400">{dashboard?.subscription?.status === "trialing" && dashboard.subscription.trialEndsAt ? `Trial to ${new Date(dashboard.subscription.trialEndsAt).toLocaleDateString()}` : dashboard?.subscription?.status ? `${dashboard.subscription.status} plan` : "Subscription"}</div></div>
                 </div>
               </div>
             </section>
@@ -515,11 +671,12 @@ export default function App() {
                 <div><p className="text-xs font-semibold uppercase tracking-[0.16em] text-cyan-700">Your ecosystem</p><h2 className="mt-1 text-2xl font-semibold tracking-tight">Run the business from one starting point</h2></div>
                 <button onClick={() => setView("connections")} className="hidden items-center gap-2 text-sm font-semibold text-slate-600 hover:text-slate-950 sm:flex"><Settings2 size={16} /> Manage connections</button>
               </div>
-              <div className="grid gap-5 lg:grid-cols-3">
-                {(["tiquet","ffpro","academy"] as const).map(product => <div key={product}><ProductCard product={product} result={dashboard?.products?.[product]} /></div>)}
+              <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
+                {(["tiquet","ffpro","marketing","academy"] as const).map(product => <div key={product}><ProductCard product={product} result={dashboard?.products?.[product]} /></div>)}
               </div>
             </section>
 
+            <ActionCentre dashboard={dashboard} />
             <BusinessTimeline events={dashboard?.events || []} />
 
             <section className="mt-8 grid gap-5 lg:grid-cols-[1.2fr_.8fr]">
@@ -531,7 +688,7 @@ export default function App() {
               </div>
               <div className="rounded-3xl border border-slate-200 bg-white p-6">
                 <div className="flex items-center gap-3"><BookOpenCheck className="text-cyan-700" size={21}/><h2 className="font-semibold">What comes next</h2></div>
-                <p className="mt-4 text-sm leading-6 text-slate-500">After these read-only contracts are proven, Phase 2 adds single sign-on, universal organisation IDs and event-driven handoffs such as lead → customer → service → learning.</p>
+                <p className="mt-4 text-sm leading-6 text-slate-500">V79 Marketing now uses Hub-managed access and the shared organisation identity. FFPRO and Tiquet will move to the same launch model as the platform identity layer is standardised.</p>
               </div>
             </section>
           </>
@@ -542,7 +699,7 @@ export default function App() {
 
       <footer className="mx-auto flex max-w-7xl flex-col gap-2 px-5 pb-8 pt-2 text-xs text-slate-400 sm:flex-row sm:items-center sm:justify-between lg:px-8">
         <span>V79 Digital · secure business technology platform</span>
-        <span className="inline-flex items-center gap-1"><ShieldCheck size={13}/> Phase 1 connections are read-only</span>
+        <span className="inline-flex items-center gap-1"><ShieldCheck size={13}/> Hub-managed identity, entitlements and signed product connections</span>
       </footer>
     </div>
   );
