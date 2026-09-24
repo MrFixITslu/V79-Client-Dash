@@ -196,7 +196,7 @@ function Login({ onLogin }: { onLogin: (session: Session) => void }) {
                     <button key={item.id} type="button" onClick={()=>setPlan(item.id)} className={"rounded-2xl border p-4 text-left transition " + (plan===item.id ? "border-cyan-300 bg-cyan-300/10" : "border-white/10 bg-slate-900/40 hover:border-white/20")}>
                       <div className="flex items-center justify-between gap-4">
                         <div><div className="font-semibold">{item.name}</div><div className="mt-1 text-xs text-slate-400">{item.includedUsers} included users · {item.products.includes("marketing") ? "Marketing included" : "Finance + operations"}</div></div>
-                        <div className="text-right"><div className="text-xl font-semibold">EC{item.monthlyXcd}</div><div className="text-[10px] text-slate-500">per month after trial</div></div>
+                        <div className="text-right"><div className="text-xl font-semibold">EC${item.monthlyXcd}</div><div className="text-[10px] text-slate-500">per month after trial</div></div>
                       </div>
                     </button>
                   ))}
@@ -564,6 +564,7 @@ export default function App() {
   const [integrations, setIntegrations] = useState<Integration[]>([]);
   const [view, setView] = useState<"overview" | "connections">("overview");
   const [refreshing, setRefreshing] = useState(false);
+  const [notice, setNotice] = useState("");
   const returnTarget = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("return") : null;
 
   const loadAll = useCallback(async () => {
@@ -592,10 +593,14 @@ export default function App() {
   useEffect(() => { if (session) loadAll(); }, [session, loadAll]);
 
   useEffect(() => {
-    if (session && returnTarget === "marketing") {
-      window.location.assign("/api/apps/marketing/launch");
+    if (!session || returnTarget !== "marketing" || !dashboard) return;
+    window.history.replaceState(null, "", "/");
+    if (dashboard.products?.marketing?.entitled === false) {
+      setNotice("V79 Marketing is included with V79 Business and V79 Advantage. Your current plan remains unchanged.");
+      return;
     }
-  }, [session, returnTarget]);
+    window.location.assign("/api/apps/marketing/launch");
+  }, [session, returnTarget, dashboard]);
 
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
@@ -629,6 +634,12 @@ export default function App() {
       </header>
 
       <main className="mx-auto max-w-7xl px-5 py-8 lg:px-8 lg:py-10">
+        {notice && (
+          <div role="status" className="mb-6 flex items-start justify-between gap-4 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-900">
+            <span>{notice}</span>
+            <button onClick={() => setNotice("")} className="font-semibold text-amber-800">Dismiss</button>
+          </div>
+        )}
         <div className="mb-6 flex gap-2 sm:hidden">
           <button onClick={() => setView("overview")} className={`flex-1 rounded-xl px-4 py-2 text-sm font-medium ${view === "overview" ? "bg-slate-950 text-white" : "bg-white"}`}>Overview</button>
           <button onClick={() => setView("connections")} className={`flex-1 rounded-xl px-4 py-2 text-sm font-medium ${view === "connections" ? "bg-slate-950 text-white" : "bg-white"}`}>Connections</button>
@@ -648,7 +659,7 @@ export default function App() {
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div className="rounded-2xl border border-white/10 bg-white/[0.05] px-5 py-4"><div className="text-2xl font-semibold">{connected}/4</div><div className="text-xs text-slate-400">Apps connected</div></div>
-                  <div className="rounded-2xl border border-white/10 bg-white/[0.05] px-5 py-4"><div className="text-2xl font-semibold capitalize">{dashboard?.subscription?.plan || "—"}</div><div className="text-xs text-slate-400">{dashboard?.subscription?.status ? `${dashboard.subscription.status} plan` : "Subscription"}</div></div>
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.05] px-5 py-4"><div className="text-2xl font-semibold capitalize">{dashboard?.subscription?.plan || "—"}</div><div className="text-xs text-slate-400">{dashboard?.subscription?.status === "trialing" && dashboard.subscription.trialEndsAt ? `Trial to ${new Date(dashboard.subscription.trialEndsAt).toLocaleDateString()}` : dashboard?.subscription?.status ? `${dashboard.subscription.status} plan` : "Subscription"}</div></div>
                 </div>
               </div>
             </section>
