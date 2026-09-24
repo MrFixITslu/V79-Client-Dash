@@ -1297,6 +1297,7 @@ app.post("/api/auth/register", loginLimited, async (req,res)=>{
       .run(orgId,plan,now);
   });
   tx();
+  recordAudit(req,"workspace.registered",{organizationId:orgId,actorUserId:userId,targetType:"organization",targetId:orgId,details:{plan}});
 
   const verificationToken=createAccountToken(userId,"verify_email",VERIFY_EMAIL_TTL_MS);
   const verifyUrl=new URL("/",canonicalOrigin(req));
@@ -1350,6 +1351,7 @@ app.post("/api/auth/verify-email", loginLimited, (req,res)=>{
   });
   tx();
   ensureManagedIntegrations(m.organizationId);
+  recordAudit(req,"identity.email_verified",{organizationId:m.organizationId,actorUserId:row.userId,targetType:"user",targetId:row.userId});
 
   const sessionToken=crypto.randomBytes(32).toString("base64url");
   db.prepare("DELETE FROM sessions WHERE user_id=?").run(row.userId);
@@ -1432,6 +1434,8 @@ app.post("/api/auth/reset-password", loginLimited, (req,res)=>{
     db.prepare("DELETE FROM sessions WHERE user_id=?").run(row.userId);
   });
   tx();
+  const resetMembership=membership(row.userId);
+  recordAudit(req,"security.password_reset",{organizationId:resetMembership?.organizationId,actorUserId:row.userId,targetType:"user",targetId:row.userId});
   res.json({success:true,message:"Password updated. Sign in with your new password."});
 });
 
@@ -1590,7 +1594,9 @@ app.post("/api/auth/mfa/disable", requireAuth, loginLimited, (req,res)=>{
 });
 
 app.post("/api/auth/logout", (req,res)=>{
+  const user=currentUser(req);
   const token=cookieValue(req,SESSION_COOKIE);
+  if(user) recordAudit(req,"auth.logout",{actorUserId:user.id});
   if(token) db.prepare("DELETE FROM sessions WHERE token_hash=?").run(hashToken(token));
   clearSessionCookie(res); res.json({success:true});
 });
@@ -1700,6 +1706,7 @@ app.post("/api/team/invitations/:token/accept", loginLimited, (req,res)=>{
     .run(hashToken(sessionToken),userId,Date.now()+SESSION_TTL_MS,now);
   setSessionCookie(res,sessionToken);
   const m=membership(userId);
+  recordAudit(req,"team.invitation_accepted",{organizationId:m?.organizationId,actorUserId:userId,targetType:"invitation",targetId:invite.id,details:{role:invite.role,products}});
   res.status(201).json({
     user:{id:userId,email:invite.email,name},
     organization:{id:m.organizationId,name:m.organizationName,slug:m.slug,role:m.role},
@@ -1765,7 +1772,7 @@ app.post("/api/team/invitations", requireAuth, requireAdmin, async (req,res)=>{
     .run(id,m.organizationId,email,role,JSON.stringify(products),hashToken(inviteToken),expiresAt,actor.id,now);
   const inviteUrl=new URL(canonicalOrigin(req));
   inviteUrl.searchParams.set("invite",inviteToken);
-  let emailDelivery:{sent:boolean;skipped:boolean;error?:string}={sent:false,skipped:true};
+  let emailDelivery:{sent:boolean;queued?:boolean;skipped:boolean;error?:string}={sent:false,queued:false,skipped:true};
   if(mailConfig().configured) {
     const delivery=await queueTransactionalEmail({
       to:email,
@@ -1780,6 +1787,7 @@ app.post("/api/team/invitations", requireAuth, requireAdmin, async (req,res)=>{
     });
     emailDelivery={sent:delivery.success,queued:Boolean((delivery as any).queued),skipped:Boolean(delivery.skipped),...(delivery.error?{error:delivery.error}:{})};
   }
+  recordAudit(req,"team.invitation_created",{organizationId:m.organizationId,actorUserId:actor.id,targetType:"invitation",targetId:id,details:{role,products,emailHash:privacyHash(email)}});
   res.status(201).json({id,email,role,products,expiresAt:new Date(expiresAt).toISOString(),inviteUrl:inviteUrl.toString(),emailDelivery,seats:seatUsage(m.organizationId)});
 });
 
@@ -1787,6 +1795,7 @@ app.delete("/api/team/invitations/:id", requireAuth, requireAdmin, (req,res)=>{
   const m=(req as any).hubMembership;
   const result=db.prepare("UPDATE team_invitations SET status='revoked' WHERE id=? AND organization_id=? AND status='pending'").run(clean(req.params.id),m.organizationId);
   if(!result.changes) return res.status(404).json({error:"Pending invitation not found."});
+  recordAudit(req,"team.invitation_revoked",{organizationId:m.organizationId,actorUserId:(req as any).hubUser?.id,targetType:"invitation",targetId:clean(req.params.id)});
   res.json({success:true,seats:seatUsage(m.organizationId)});
 });
 
@@ -1803,6 +1812,7 @@ app.patch("/api/team/members/:userId", requireAuth, requireAdmin, (req,res)=>{
   db.prepare("UPDATE memberships SET role=? WHERE user_id=? AND organization_id=?").run(role,userId,m.organizationId);
   const products=assignMemberProducts(userId,m.organizationId,req.body?.products);
   db.prepare("DELETE FROM sessions WHERE user_id=?").run(userId);
+  recordAudit(req,"team.member_access_changed",{organizationId:m.organizationId,actorUserId:actor.id,targetType:"user",targetId:userId,details:{role,products}});
   res.json({success:true,role,products});
 });
 
@@ -1820,6 +1830,7 @@ app.delete("/api/team/members/:userId", requireAuth, requireAdmin, (req,res)=>{
     db.prepare("DELETE FROM users WHERE id=? AND NOT EXISTS(SELECT 1 FROM memberships WHERE user_id=?)").run(userId,userId);
   });
   tx();
+  recordAudit(req,"team.member_removed",{organizationId:m.organizationId,actorUserId:actor.id,targetType:"user",targetId:userId,details:{previousRole:target.role}});
   res.json({success:true,seats:seatUsage(m.organizationId)});
 });
 
@@ -1873,6 +1884,7 @@ app.get("/api/apps/:product/launch", requireAuth, (req,res)=>{
   ensureManagedIntegrations(m.organizationId);
   const target=new URL("/api/platform/launch",publicUrl);
   target.searchParams.set("ticket",token);
+  recordAudit(req,"app.launch_requested",{organizationId:m.organizationId,actorUserId:user.id,targetType:"product",targetId:product});
   res.redirect(302,target.toString());
 });
 
@@ -1973,12 +1985,14 @@ app.put("/api/integrations/:product", requireAuth, requireAdmin, (req,res)=>{
   db.prepare(`INSERT INTO integrations(organization_id,product,external_subject_id,enabled,updated_at)
     VALUES(?,?,?,?,?) ON CONFLICT(organization_id,product) DO UPDATE SET external_subject_id=excluded.external_subject_id,enabled=1,updated_at=excluded.updated_at`)
     .run(m.organizationId,product,externalSubjectId,1,now);
+  recordAudit(req,"integration.connected",{organizationId:m.organizationId,actorUserId:(req as any).hubUser?.id,targetType:"product",targetId:product});
   res.json({success:true});
 });
 app.delete("/api/integrations/:product", requireAuth, requireAdmin, (req,res)=>{
   if(["ffpro","tiquet","marketing"].includes(req.params.product)) return res.status(409).json({error:"This V79 app connection is managed by the Hub subscription and identity."});
   const m=(req as any).hubMembership;
   db.prepare("DELETE FROM integrations WHERE organization_id=? AND product=?").run(m.organizationId,req.params.product);
+  recordAudit(req,"integration.disconnected",{organizationId:m.organizationId,actorUserId:(req as any).hubUser?.id,targetType:"product",targetId:req.params.product});
   res.json({success:true});
 });
 app.get("/api/platform/dashboard", requireAuth, async (req,res)=>{
