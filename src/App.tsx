@@ -94,33 +94,50 @@ function statusLabel(status?: string) {
 }
 
 function Login({ onLogin }: { onLogin: (session: Session) => void }) {
+  const [mode, setMode] = useState<"login"|"register">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [name, setName] = useState("");
+  const [organizationName, setOrganizationName] = useState("");
+  const [plan, setPlan] = useState<"start"|"business"|"advantage">("business");
+  const [planData, setPlanData] = useState<any>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/plans").then(r=>r.json()).then(setPlanData).catch(()=>{});
+  }, []);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
     setBusy(true); setError("");
     try {
-      const response = await fetch("/api/auth/login", {
+      const response = await fetch(mode === "login" ? "/api/auth/login" : "/api/auth/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify(mode === "login"
+          ? { email, password }
+          : { email, password, name, organizationName, plan }),
       });
       const body = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(body.error || "Sign in failed.");
+      if (!response.ok) throw new Error(body.error || (mode === "login" ? "Sign in failed." : "Account creation failed."));
       onLogin(body);
     } catch (err: any) {
-      setError(err.message || "Sign in failed.");
+      setError(err.message || "Request failed.");
     } finally {
       setBusy(false);
     }
   }
 
+  const plans = planData?.plans || [
+    {id:"start",name:"V79 Start",monthlyXcd:149,includedUsers:2,products:["ffpro","tiquet"]},
+    {id:"business",name:"V79 Business",monthlyXcd:299,includedUsers:5,products:["ffpro","tiquet","marketing"]},
+    {id:"advantage",name:"V79 Advantage",monthlyXcd:499,includedUsers:10,products:["ffpro","tiquet","marketing"]},
+  ];
+
   return (
     <main className="min-h-screen bg-slate-950 text-white">
-      <div className="mx-auto grid min-h-screen max-w-7xl items-center gap-12 px-6 py-12 lg:grid-cols-[1.15fr_.85fr] lg:px-10">
+      <div className="mx-auto grid min-h-screen max-w-7xl items-center gap-12 px-6 py-12 lg:grid-cols-[1.05fr_.95fr] lg:px-10">
         <section className="max-w-2xl">
           <div className="mb-8 inline-flex items-center gap-2 rounded-full border border-cyan-300/20 bg-cyan-300/10 px-4 py-2 text-sm text-cyan-100">
             <Sparkles size={16} /> V79 Digital ecosystem
@@ -129,51 +146,81 @@ function Login({ onLogin }: { onLogin: (session: Session) => void }) {
             One business.<br /><span className="text-cyan-300">One V79 experience.</span>
           </h1>
           <p className="mt-6 max-w-xl text-lg leading-8 text-slate-300">
-            V79 Hub brings support, operations, finance and learning into one clear business view—without merging or exposing the underlying application data.
+            V79 Hub connects finance, service operations, marketing and business learning into one control centre while each specialist app protects its own data.
           </p>
           <div className="mt-10 grid gap-4 sm:grid-cols-3">
             {[
-              [ShieldCheck, "Secure", "Signed service connections"],
+              [ShieldCheck, "Secure", "Hub-managed access and entitlements"],
               [Building2, "Unified", "One organisation identity"],
-              [Activity, "Useful", "Business signals, not noise"],
-            ].map(([Icon, title, text]: any) => (
+              [Activity, "Actionable", "Cross-app signals and next actions"],
+            ].map(([Icon, title, detail]: any) => (
               <div key={title} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
                 <Icon className="mb-4 text-cyan-300" size={22} />
                 <div className="font-medium">{title}</div>
-                <div className="mt-1 text-sm text-slate-400">{text}</div>
+                <div className="mt-1 text-sm leading-5 text-slate-400">{detail}</div>
               </div>
             ))}
           </div>
         </section>
 
-        <form onSubmit={submit} className="rounded-3xl border border-white/10 bg-white/[0.06] p-7 shadow-2xl shadow-cyan-950/20 backdrop-blur sm:p-9">
-          <div className="mb-8">
-            <div className="text-sm font-medium uppercase tracking-[0.18em] text-cyan-300">V79 Hub</div>
-            <h2 className="mt-2 text-3xl font-semibold">Welcome back</h2>
-            <p className="mt-2 text-sm text-slate-400">Sign in with your Hub owner account.</p>
+        <section className="rounded-3xl border border-white/10 bg-white/[0.06] p-7 shadow-2xl shadow-cyan-950/20 backdrop-blur sm:p-9">
+          <div className="flex rounded-xl bg-slate-900/70 p-1">
+            <button type="button" onClick={()=>{setMode("login");setError("");}} className={"flex-1 rounded-lg px-3 py-2 text-sm font-semibold " + (mode==="login" ? "bg-white text-slate-950" : "text-slate-400")}>Sign in</button>
+            <button type="button" disabled={planData?.selfServiceSignup===false} onClick={()=>{setMode("register");setError("");}} className={"flex-1 rounded-lg px-3 py-2 text-sm font-semibold disabled:opacity-40 " + (mode==="register" ? "bg-white text-slate-950" : "text-slate-400")}>Create account</button>
           </div>
-          <label className="block text-sm font-medium text-slate-200">
-            Email
-            <input
-              autoComplete="email" type="email" required value={email}
-              onChange={e => setEmail(e.target.value)}
-              className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900/80 px-4 py-3 outline-none ring-cyan-300 transition focus:ring-2"
-            />
-          </label>
-          <label className="mt-5 block text-sm font-medium text-slate-200">
-            Password
-            <input
-              autoComplete="current-password" type="password" required value={password}
-              onChange={e => setPassword(e.target.value)}
-              className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900/80 px-4 py-3 outline-none ring-cyan-300 transition focus:ring-2"
-            />
-          </label>
-          {error && <div role="alert" className="mt-5 rounded-xl border border-rose-400/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-100">{error}</div>}
-          <button disabled={busy} className="mt-7 w-full rounded-xl bg-cyan-300 px-4 py-3 font-semibold text-slate-950 transition hover:bg-cyan-200 disabled:opacity-60">
-            {busy ? "Signing in…" : "Sign in to V79 Hub"}
-          </button>
+
+          <div className="mt-7">
+            <div className="text-sm font-medium uppercase tracking-[0.18em] text-cyan-300">V79 Hub</div>
+            <h2 className="mt-2 text-3xl font-semibold">{mode==="login" ? "Welcome back" : "Start your V79 workspace"}</h2>
+            <p className="mt-2 text-sm leading-6 text-slate-400">
+              {mode==="login"
+                ? "Sign in with your V79 Hub credentials."
+                : "Try the selected plan for " + (planData?.trialDays ?? 14) + " days. Paid access is required when the trial ends."}
+            </p>
+          </div>
+
+          <form onSubmit={submit} className="mt-7">
+            {mode==="register" && (
+              <>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <label className="block text-sm font-medium text-slate-200">Your name
+                    <input autoComplete="name" required minLength={2} value={name} onChange={e=>setName(e.target.value)} className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900/80 px-4 py-3 outline-none ring-cyan-300 focus:ring-2"/>
+                  </label>
+                  <label className="block text-sm font-medium text-slate-200">Business name
+                    <input autoComplete="organization" required minLength={2} value={organizationName} onChange={e=>setOrganizationName(e.target.value)} className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900/80 px-4 py-3 outline-none ring-cyan-300 focus:ring-2"/>
+                  </label>
+                </div>
+
+                <div className="mt-5 grid gap-2">
+                  {plans.map((item:any)=>(
+                    <button key={item.id} type="button" onClick={()=>setPlan(item.id)} className={"rounded-2xl border p-4 text-left transition " + (plan===item.id ? "border-cyan-300 bg-cyan-300/10" : "border-white/10 bg-slate-900/40 hover:border-white/20")}>
+                      <div className="flex items-center justify-between gap-4">
+                        <div><div className="font-semibold">{item.name}</div><div className="mt-1 text-xs text-slate-400">{item.includedUsers} included users · {item.products.includes("marketing") ? "Marketing included" : "Finance + operations"}</div></div>
+                        <div className="text-right"><div className="text-xl font-semibold">EC{item.monthlyXcd}</div><div className="text-[10px] text-slate-500">per month after trial</div></div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+
+            <label className={(mode==="register" ? "mt-5 " : "") + "block text-sm font-medium text-slate-200"}>
+              Email
+              <input autoComplete="email" type="email" required value={email} onChange={e => setEmail(e.target.value)} className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900/80 px-4 py-3 outline-none ring-cyan-300 transition focus:ring-2"/>
+            </label>
+            <label className="mt-5 block text-sm font-medium text-slate-200">
+              Password
+              <input autoComplete={mode==="login"?"current-password":"new-password"} type="password" required minLength={mode==="register"?16:1} value={password} onChange={e => setPassword(e.target.value)} className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900/80 px-4 py-3 outline-none ring-cyan-300 transition focus:ring-2"/>
+              {mode==="register" && <span className="mt-1 block text-[11px] text-slate-500">Use at least 16 characters.</span>}
+            </label>
+            {error && <div role="alert" className="mt-5 rounded-xl border border-rose-400/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-100">{error}</div>}
+            <button disabled={busy} className="mt-7 w-full rounded-xl bg-cyan-300 px-4 py-3 font-semibold text-slate-950 transition hover:bg-cyan-200 disabled:opacity-60">
+              {busy ? (mode==="login"?"Signing in…":"Creating workspace…") : (mode==="login"?"Sign in to V79 Hub":"Start " + (planData?.trialDays ?? 14) + "-day trial")}
+            </button>
+            {mode==="register" && <p className="mt-4 text-center text-[11px] leading-5 text-slate-500">No payment is recorded by this form. Access expires at the end of the trial unless V79 billing activates the subscription.</p>}
+          </form>
           <p className="mt-6 text-center text-xs text-slate-500">From Idea to Advantage</p>
-        </form>
+        </section>
       </div>
     </main>
   );
