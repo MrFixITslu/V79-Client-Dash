@@ -103,7 +103,7 @@ CREATE TABLE IF NOT EXISTS app_launch_tickets (
   token_hash TEXT PRIMARY KEY,
   user_id TEXT NOT NULL,
   organization_id TEXT NOT NULL,
-  product TEXT NOT NULL CHECK(product IN ('marketing')),
+  product TEXT NOT NULL CHECK(product IN ('ffpro','tiquet','marketing')),
   expires_at INTEGER NOT NULL,
   created_at TEXT NOT NULL,
   FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
@@ -137,6 +137,36 @@ function migrateIntegrationsForMarketing() {
   }
 }
 migrateIntegrationsForMarketing();
+
+function migrateLaunchTicketsForHubApps() {
+  const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='app_launch_tickets'").get() as any;
+  const sql = String(row?.sql || "");
+  if (!sql || (sql.includes("'ffpro'") && sql.includes("'tiquet'"))) return;
+  db.pragma("foreign_keys = OFF");
+  try {
+    db.exec(`
+      ALTER TABLE app_launch_tickets RENAME TO app_launch_tickets_legacy;
+      CREATE TABLE app_launch_tickets (
+        token_hash TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        organization_id TEXT NOT NULL,
+        product TEXT NOT NULL CHECK(product IN ('ffpro','tiquet','marketing')),
+        expires_at INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY(organization_id) REFERENCES organizations(id) ON DELETE CASCADE
+      );
+      INSERT INTO app_launch_tickets(token_hash,user_id,organization_id,product,expires_at,created_at)
+        SELECT token_hash,user_id,organization_id,product,expires_at,created_at
+        FROM app_launch_tickets_legacy
+        WHERE product IN ('marketing');
+      DROP TABLE app_launch_tickets_legacy;
+    `);
+  } finally {
+    db.pragma("foreign_keys = ON");
+  }
+}
+migrateLaunchTicketsForHubApps();
 
 function clean(value: unknown) {
   return typeof value === "string" ? value.trim().replace(/^['"]|['"]$/g, "") : "";
@@ -342,19 +372,36 @@ function productEntitled(organizationId: string, product: string) {
 }
 
 function ensureManagedIntegrations(organizationId: string) {
-  if (!productEntitled(organizationId,"marketing")) return;
   const now=new Date().toISOString();
-  db.prepare(`
-    INSERT INTO integrations(organization_id,product,external_subject_id,enabled,updated_at)
-    VALUES(?, 'marketing', ?, 1, ?)
-    ON CONFLICT(organization_id,product) DO UPDATE SET external_subject_id=excluded.external_subject_id,enabled=1,updated_at=excluded.updated_at
-  `).run(organizationId,organizationId,now);
+  for (const product of ["ffpro","tiquet","marketing"] as const) {
+    if (!productEntitled(organizationId,product)) continue;
+    db.prepare(`
+      INSERT INTO integrations(organization_id,product,external_subject_id,enabled,updated_at)
+      VALUES(?, ?, ?, 1, ?)
+      ON CONFLICT(organization_id,product) DO NOTHING
+    `).run(organizationId,product,organizationId,now);
+  }
 }
 
 const productConfig = {
-  ffpro: { name:"FFPRO", url:clean(process.env.FFPRO_BASE_URL), openUrl:clean(process.env.FFPRO_PUBLIC_URL) || clean(process.env.FFPRO_BASE_URL) },
-  tiquet: { name:"V79 Tiquet", url:clean(process.env.TIQUET_BASE_URL), openUrl:clean(process.env.TIQUET_PUBLIC_URL) || clean(process.env.TIQUET_BASE_URL) },
-  academy: { name:"V79 Academy", url:clean(process.env.ACADEMY_BASE_URL), openUrl:clean(process.env.ACADEMY_PUBLIC_URL) || clean(process.env.ACADEMY_BASE_URL) },
+  ffpro: {
+    name:"FFPRO",
+    url:clean(process.env.FFPRO_BASE_URL),
+    openUrl:"/api/apps/ffpro/launch",
+    publicUrl:clean(process.env.FFPRO_PUBLIC_URL) || "https://ffpro.v79sl.com",
+  },
+  tiquet: {
+    name:"V79 Tiquet",
+    url:clean(process.env.TIQUET_BASE_URL),
+    openUrl:"/api/apps/tiquet/launch",
+    publicUrl:clean(process.env.TIQUET_PUBLIC_URL) || "https://tiquet.v79sl.com",
+  },
+  academy: {
+    name:"V79 Academy",
+    url:clean(process.env.ACADEMY_BASE_URL),
+    openUrl:clean(process.env.ACADEMY_PUBLIC_URL) || clean(process.env.ACADEMY_BASE_URL),
+    publicUrl:clean(process.env.ACADEMY_PUBLIC_URL) || clean(process.env.ACADEMY_BASE_URL),
+  },
   marketing: {
     name:"V79 Marketing",
     url:clean(process.env.MARKETING_BASE_URL),
@@ -382,8 +429,8 @@ async function fetchSummary(product: Product, externalSubjectId: string) {
       signal:AbortSignal.timeout(5000),
     });
     const body=await response.json().catch(()=>({}));
-    if(product==="marketing" && response.status===404) {
-      return {status:"ready",error:"Open V79 Marketing to initialise this organisation's workspace."};
+    if(["ffpro","tiquet","marketing"].includes(product) && response.status===404) {
+      return {status:"ready",error:`Open ${productConfig[product].name} to initialise this organisation's workspace.`};
     }
     if(!response.ok) return {status:"error",error:body?.error || `Service returned HTTP ${response.status}`};
     return {status:"connected",summary:body};
@@ -432,12 +479,22 @@ function resolveEventOrganization(source: string, organizationRef: string) {
   }
   const product = EVENT_SOURCE_PRODUCTS[source];
   if (!product) return null;
-  return db.prepare(`
+  const linked = db.prepare(`
     SELECT o.id,o.name,o.slug
     FROM integrations i JOIN organizations o ON o.id=i.organization_id
     WHERE i.product=? AND i.external_subject_id=? AND i.enabled=1
     LIMIT 1
   `).get(product, organizationRef) as any;
+  if (linked) return linked;
+
+  // Hub-managed apps use the stable Hub organisation id after first launch.
+  // The source is authenticated with its own event secret, so this fallback
+  // is safe only for products whose identity is controlled by Hub.
+  if (["ffpro","tiquet","marketing"].includes(product)) {
+    const organization = db.prepare("SELECT id,name,slug FROM organizations WHERE id=?").get(organizationRef) as any;
+    if (organization && productEntitled(organization.id, product)) return organization;
+  }
+  return null;
 }
 
 app.post("/api/platform/events", (req: any, res) => {
@@ -585,27 +642,48 @@ app.put("/api/auth/password", requireAuth, (req,res)=>{
   res.json({success:true});
 });
 
-app.get("/api/apps/marketing/launch", requireAuth, (req,res)=>{
+const launchProductForSource: Record<string,"ffpro"|"tiquet"|"marketing"> = {
+  "v79-ffpro":"ffpro",
+  "v79-tiquet":"tiquet",
+  "v79-marketing":"marketing",
+};
+function launchSecretFor(product: "ffpro"|"tiquet"|"marketing") {
+  const names = {
+    ffpro:"V79_FFPRO_LAUNCH_SECRET",
+    tiquet:"V79_TIQUET_LAUNCH_SECRET",
+    marketing:"V79_MARKETING_LAUNCH_SECRET",
+  } as const;
+  return clean(process.env[names[product]]);
+}
+
+app.get("/api/apps/:product/launch", requireAuth, (req,res)=>{
+  const product=clean(req.params.product) as Product;
+  if(!["ffpro","tiquet","marketing"].includes(product)) return res.status(404).json({error:"Unknown V79 business app."});
   const user=(req as any).hubUser, m=(req as any).hubMembership;
-  if (!productEntitled(m.organizationId,"marketing")) {
+  if (!productEntitled(m.organizationId,product)) {
     return res.status(403).json({
-      error:"Your current V79 subscription does not include V79 Marketing.",
+      error:`${productConfig[product].name} is not included in the current V79 subscription.`,
       code:"ENTITLEMENT_REQUIRED",
       subscription:subscriptionFor(m.organizationId) || null,
     });
   }
-  const publicUrl=(productConfig.marketing as any).publicUrl;
-  if(!publicUrl) return res.status(503).json({error:"V79 Marketing public URL is not configured."});
+  if (product==="ffpro" && m.role!=="owner") {
+    return res.status(403).json({
+      error:"FFPRO finance access is currently restricted to the organisation owner until granular finance permissions are enabled.",
+      code:"FINANCE_OWNER_REQUIRED",
+    });
+  }
+  const publicUrl=(productConfig[product] as any).publicUrl;
+  if(!publicUrl) return res.status(503).json({error:`${productConfig[product].name} public URL is not configured.`});
+  const secret=launchSecretFor(product as "ffpro"|"tiquet"|"marketing");
+  if(secret.length<32) return res.status(503).json({error:`${productConfig[product].name} launch integration is not configured.`});
+
   const token=crypto.randomBytes(32).toString("base64url");
   const now=new Date().toISOString();
-  db.prepare("DELETE FROM app_launch_tickets WHERE user_id=? AND product='marketing'").run(user.id);
+  db.prepare("DELETE FROM app_launch_tickets WHERE user_id=? AND product=?").run(user.id,product);
   db.prepare("INSERT INTO app_launch_tickets(token_hash,user_id,organization_id,product,expires_at,created_at) VALUES(?,?,?,?,?,?)")
-    .run(hashToken(token),user.id,m.organizationId,"marketing",Date.now()+2*60_000,now);
-  db.prepare(`
-    INSERT INTO integrations(organization_id,product,external_subject_id,enabled,updated_at)
-    VALUES(?, 'marketing', ?, 1, ?)
-    ON CONFLICT(organization_id,product) DO UPDATE SET external_subject_id=excluded.external_subject_id,enabled=1,updated_at=excluded.updated_at
-  `).run(m.organizationId,m.organizationId,now);
+    .run(hashToken(token),user.id,m.organizationId,product,Date.now()+2*60_000,now);
+  ensureManagedIntegrations(m.organizationId);
   const target=new URL("/api/platform/launch",publicUrl);
   target.searchParams.set("ticket",token);
   res.redirect(302,target.toString());
@@ -613,9 +691,11 @@ app.get("/api/apps/marketing/launch", requireAuth, (req,res)=>{
 
 app.post("/api/platform/session/consume", (req:any,res)=>{
   const source=clean(req.get("x-v79-service-id"));
-  if(source!=="v79-marketing") return res.status(401).json({error:"Unknown V79 launch consumer."});
-  const secret=clean(process.env.V79_MARKETING_LAUNCH_SECRET);
-  if(secret.length<32) return res.status(503).json({error:"Marketing launch integration is not configured."});
+  const product=launchProductForSource[source];
+  if(!product) return res.status(401).json({error:"Unknown V79 launch consumer."});
+  const secret=launchSecretFor(product);
+  if(secret.length<32) return res.status(503).json({error:`${productConfig[product].name} launch integration is not configured.`});
+
   const timestamp=clean(req.get("x-v79-timestamp"));
   const signature=clean(req.get("x-v79-signature"));
   const bodyText=req.rawBody ? Buffer.from(req.rawBody).toString("utf8") : JSON.stringify(req.body || {});
@@ -630,8 +710,8 @@ app.post("/api/platform/session/consume", (req:any,res)=>{
   if(!verified) return res.status(401).json({error:"Invalid or expired V79 launch signature."});
 
   const ticket=clean(req.body?.ticket);
-  const product=clean(req.body?.product);
-  if(product!=="marketing" || !/^[A-Za-z0-9_-]{32,180}$/.test(ticket)) return res.status(400).json({error:"Invalid launch request."});
+  const requestedProduct=clean(req.body?.product);
+  if(requestedProduct!==product || !/^[A-Za-z0-9_-]{32,180}$/.test(ticket)) return res.status(400).json({error:"Invalid launch request."});
   const tokenHash=hashToken(ticket);
   const row=db.prepare(`
     SELECT t.user_id AS userId,t.organization_id AS organizationId,t.expires_at AS expiresAt,
@@ -640,16 +720,22 @@ app.post("/api/platform/session/consume", (req:any,res)=>{
     JOIN users u ON u.id=t.user_id
     JOIN organizations o ON o.id=t.organization_id
     JOIN memberships m ON m.user_id=t.user_id AND m.organization_id=t.organization_id
-    WHERE t.token_hash=? AND t.product='marketing'
-  `).get(tokenHash) as any;
+    WHERE t.token_hash=? AND t.product=?
+  `).get(tokenHash,product) as any;
+
   if(!row || row.expiresAt<=Date.now()) {
     if(row) db.prepare("DELETE FROM app_launch_tickets WHERE token_hash=?").run(tokenHash);
     return res.status(401).json({error:"Launch ticket is invalid or expired."});
   }
-  if(!productEntitled(row.organizationId,"marketing")) {
+  if(!productEntitled(row.organizationId,product)) {
     db.prepare("DELETE FROM app_launch_tickets WHERE token_hash=?").run(tokenHash);
-    return res.status(403).json({error:"V79 Marketing is not included in this subscription."});
+    return res.status(403).json({error:`${productConfig[product].name} is not included in this subscription.`});
   }
+  if(product==="ffpro" && row.role!=="owner") {
+    db.prepare("DELETE FROM app_launch_tickets WHERE token_hash=?").run(tokenHash);
+    return res.status(403).json({error:"FFPRO finance access requires the organisation owner role."});
+  }
+
   db.prepare("DELETE FROM app_launch_tickets WHERE token_hash=?").run(tokenHash);
   const subscription=subscriptionFor(row.organizationId);
   res.json({
@@ -657,7 +743,7 @@ app.post("/api/platform/session/consume", (req:any,res)=>{
     organization:{id:row.organizationId,name:row.organizationName,slug:row.slug},
     role:row.role,
     plan:subscription?.plan || null,
-    entitlement:{product:"marketing",enabled:true},
+    entitlement:{product,enabled:true},
   });
 });
 
@@ -673,13 +759,13 @@ app.get("/api/integrations", requireAuth, (req,res)=>{
     externalSubjectId:byProduct[product]?.externalSubjectId || "",
     openUrl:productConfig[product].openUrl || "",
     entitled:productEntitled(m.organizationId,product),
-    managedByHub:product === "marketing",
+    managedByHub:["ffpro","tiquet","marketing"].includes(product),
     updatedAt:byProduct[product]?.updatedAt || null,
   })));
 });
 app.put("/api/integrations/:product", requireAuth, requireAdmin, (req,res)=>{
   const product=req.params.product as Product;
-  if(product==="marketing") return res.status(409).json({error:"V79 Marketing is linked automatically by Hub identity."});
+  if(["ffpro","tiquet","marketing"].includes(product)) return res.status(409).json({error:`${productConfig[product].name} is linked automatically by V79 Hub identity.`});
   if(!(product in productConfig)) return res.status(404).json({error:"Unknown V79 product."});
   const externalSubjectId=clean(req.body?.externalSubjectId);
   if(!/^[A-Za-z0-9._:@-]{1,180}$/.test(externalSubjectId)) return res.status(400).json({error:"Enter a valid product account identifier."});
@@ -690,7 +776,7 @@ app.put("/api/integrations/:product", requireAuth, requireAdmin, (req,res)=>{
   res.json({success:true});
 });
 app.delete("/api/integrations/:product", requireAuth, requireAdmin, (req,res)=>{
-  if(req.params.product==="marketing") return res.status(409).json({error:"V79 Marketing is managed by the Hub subscription."});
+  if(["ffpro","tiquet","marketing"].includes(req.params.product)) return res.status(409).json({error:"This V79 app connection is managed by the Hub subscription and identity."});
   const m=(req as any).hubMembership;
   db.prepare("DELETE FROM integrations WHERE organization_id=? AND product=?").run(m.organizationId,req.params.product);
   res.json({success:true});
