@@ -61,3 +61,19 @@ docker build -t v79-hub:test .
 ```
 
 The Hub database and SQLite WAL files are ignored by Git and must be included in server backups.
+
+
+## V79 Marketing and subscription entitlements
+
+V79 Hub is the paid access control plane for the business applications. Academy remains independently accessible to public learners.
+
+Current entitlement model:
+- **Start**: FFPRO + V79 Tiquet
+- **Business**: FFPRO + V79 Tiquet + V79 Marketing
+- **Advantage**: FFPRO + V79 Tiquet + V79 Marketing
+
+Marketing uses a Hub-managed organisation mapping; customers do not manually attach or detach it. Hub issues a two-minute, single-use launch ticket after checking authentication and entitlement. Marketing consumes that ticket over a separately signed service-to-service contract.
+
+The Hub dashboard also includes an Action Centre that derives practical next actions from connected product summaries without copying specialist product databases into Hub.
+
+Billing-provider integration is deliberately separate from entitlement enforcement. Subscription records must only be moved to active/trialing by trusted platform administration or a verified payment workflow.
