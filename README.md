@@ -90,7 +90,7 @@ Hub now carries the commercial entitlement catalogue:
 
 A trial record is real access-control state, not a simulated payment. Trial entitlements expire at `trial_ends_at`. Active subscriptions can also be bounded by `current_period_end`.
 
-Public self-service registration is **disabled by default**. Set `V79_SELF_SERVICE_SIGNUP=1` only when you intentionally want to accept public trials. `V79_TRIAL_DAYS` defaults to 14. Until email verification and a payment workflow are connected, keeping self-service disabled is the safer production setting.
+Public self-service registration is **disabled by default**. `V79_SELF_SERVICE_SIGNUP=1` is only effective when verified transactional email delivery is also configured. `V79_TRIAL_DAYS` defaults to 14. The trial clock starts when the owner explicitly verifies the email address, not when the registration form is submitted.
 
 
 ## Hosted billing and WiPay
@@ -112,3 +112,34 @@ Do not guess the Saint Lucia endpoint or country code from another WiPay territo
 The checkout contract deliberately requires WiPay to return a provider transaction ID before the customer leaves V79. The browser return must present that same transaction ID and a valid provider hash before Hub activates the subscription.
 
 Mid-period plan changes are not automatically prorated in this release. Renewals of the current plan are supported; controlled plan changes during an already-paid period should be handled by V79 support until a tested proration policy is added.
+
+
+## Verified accounts and recovery
+
+Phase 7 makes email ownership part of Hub identity instead of treating an email string as trusted account data.
+
+Existing Hub accounts are migrated as verified so deployment does not lock out current customers. New public self-service accounts are created in a pending state and cannot sign in or use product entitlements until the owner confirms the verification message. Opening the link alone does not verify the account: the customer must press the confirmation button, which protects trial activation from automated email-link scanners.
+
+Account tokens are random, stored only as SHA-256 hashes, short-lived and single-use:
+- email verification: 24 hours
+- password reset: 30 minutes
+
+A successful password reset invalidates all existing Hub sessions. Forgot-password and resend-verification responses are deliberately generic so the API does not disclose whether an email address has an account.
+
+Team invitations are still seven-day, single-use links. When transactional email is configured, Hub emails the invitation automatically; the owner can still copy the secure invitation link as a fallback.
+
+### Transactional email
+
+Account email is disabled by default. The first adapter uses the Resend HTTPS email API through Node's native `fetch`; Hub does not require an additional mail package.
+
+Configure:
+
+```env
+V79_MAIL_PROVIDER=resend
+RESEND_API_KEY=<verified provider API key>
+V79_MAIL_FROM=V79 Digital <no-reply@v79sl.com>
+```
+
+The `V79_MAIL_FROM` domain must be verified with the email provider before public signup is enabled. Keep `V79_SELF_SERVICE_SIGNUP=0` until a real verification email has been received successfully from the production Hub domain.
+
+Trial and paid-period lifecycle is also persisted: an expired trial moves to `suspended`; an expired paid period moves to `past_due`. Payment can reactivate the subscription through the verified billing flow.

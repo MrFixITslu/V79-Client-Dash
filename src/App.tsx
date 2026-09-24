@@ -57,6 +57,7 @@ type TeamPayload = {
   seats:{members:number;pendingInvites:number;used:number;limit:number};
   assignableProducts:string[];
   financeAccess:"owner_only";
+  emailDeliveryConfigured?:boolean;
   members:TeamMember[];
   invitations:TeamInvitation[];
 };
@@ -133,7 +134,7 @@ function statusLabel(status?: string) {
 }
 
 function Login({ onLogin }: { onLogin: (session: Session) => void }) {
-  const [mode, setMode] = useState<"login"|"register">("login");
+  const [mode, setMode] = useState<"login"|"register"|"forgot"|"verify">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
@@ -141,6 +142,7 @@ function Login({ onLogin }: { onLogin: (session: Session) => void }) {
   const [plan, setPlan] = useState<"start"|"business"|"advantage">("business");
   const [planData, setPlanData] = useState<any>(null);
   const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -149,30 +151,64 @@ function Login({ onLogin }: { onLogin: (session: Session) => void }) {
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    setBusy(true); setError("");
+    setBusy(true); setError(""); setMessage("");
     try {
-      const response = await fetch(mode === "login" ? "/api/auth/login" : "/api/auth/register", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(mode === "login"
-          ? { email, password }
-          : { email, password, name, organizationName, plan }),
+      const endpoint =
+        mode==="login" ? "/api/auth/login" :
+        mode==="register" ? "/api/auth/register" :
+        mode==="forgot" ? "/api/auth/forgot-password" :
+        "/api/auth/resend-verification";
+      const payload =
+        mode==="login" ? {email,password} :
+        mode==="register" ? {email,password,name,organizationName,plan} :
+        {email};
+      const response=await fetch(endpoint,{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify(payload),
       });
-      const body = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(body.error || (mode === "login" ? "Sign in failed." : "Account creation failed."));
-      onLogin(body);
-    } catch (err: any) {
+      const body=await response.json().catch(()=>({}));
+
+      if(mode==="login" && response.status===403 && body.code==="EMAIL_VERIFICATION_REQUIRED") {
+        setMode("verify");
+        setMessage("Verify your email before signing in. You can resend the verification message below.");
+        return;
+      }
+      if(!response.ok) throw new Error(body.error || "Request failed.");
+
+      if(mode==="login") {
+        onLogin(body);
+      } else if(mode==="register") {
+        setMode("verify");
+        setPassword("");
+        setMessage(body.message || "Check your email to verify the address and activate your V79 workspace.");
+      } else {
+        setMessage(body.message || (mode==="forgot"
+          ? "If the account exists, reset instructions have been sent."
+          : "If the account is waiting for verification, a new verification email has been sent."));
+      }
+    } catch(err:any) {
       setError(err.message || "Request failed.");
     } finally {
       setBusy(false);
     }
   }
 
-  const plans = planData?.plans || [
+  const plans=planData?.plans || [
     {id:"start",name:"V79 Start",monthlyXcd:149,includedUsers:2,products:["ffpro","tiquet"]},
     {id:"business",name:"V79 Business",monthlyXcd:299,includedUsers:5,products:["ffpro","tiquet","marketing"]},
     {id:"advantage",name:"V79 Advantage",monthlyXcd:499,includedUsers:10,products:["ffpro","tiquet","marketing"]},
   ];
+  const title =
+    mode==="login" ? "Welcome back" :
+    mode==="register" ? "Start your V79 workspace" :
+    mode==="forgot" ? "Reset your password" :
+    "Verify your email";
+  const help =
+    mode==="login" ? "Sign in with your verified V79 Hub credentials." :
+    mode==="register" ? `Verify your email first; then your ${planData?.trialDays ?? 14}-day trial begins.` :
+    mode==="forgot" ? "Enter your email. If it belongs to a verified Hub account, we will send a 30-minute reset link." :
+    "Enter the account email to send a fresh 24-hour verification link.";
 
   return (
     <main className="min-h-screen bg-slate-950 text-white">
@@ -189,13 +225,13 @@ function Login({ onLogin }: { onLogin: (session: Session) => void }) {
           </p>
           <div className="mt-10 grid gap-4 sm:grid-cols-3">
             {[
-              [ShieldCheck, "Secure", "Hub-managed access and entitlements"],
-              [Building2, "Unified", "One organisation identity"],
-              [Activity, "Actionable", "Cross-app signals and next actions"],
-            ].map(([Icon, title, detail]: any) => (
-              <div key={title} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
-                <Icon className="mb-4 text-cyan-300" size={22} />
-                <div className="font-medium">{title}</div>
+              [ShieldCheck,"Secure","Verified identity and Hub-managed access"],
+              [Building2,"Unified","One organisation identity"],
+              [Activity,"Actionable","Cross-app signals and next actions"],
+            ].map(([Icon,itemTitle,detail]:any)=>(
+              <div key={itemTitle} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+                <Icon className="mb-4 text-cyan-300" size={22}/>
+                <div className="font-medium">{itemTitle}</div>
                 <div className="mt-1 text-sm leading-5 text-slate-400">{detail}</div>
               </div>
             ))}
@@ -204,18 +240,20 @@ function Login({ onLogin }: { onLogin: (session: Session) => void }) {
 
         <section className="rounded-3xl border border-white/10 bg-white/[0.06] p-7 shadow-2xl shadow-cyan-950/20 backdrop-blur sm:p-9">
           <div className="flex rounded-xl bg-slate-900/70 p-1">
-            <button type="button" onClick={()=>{setMode("login");setError("");}} className={"flex-1 rounded-lg px-3 py-2 text-sm font-semibold " + (mode==="login" ? "bg-white text-slate-950" : "text-slate-400")}>Sign in</button>
-            <button type="button" disabled={planData?.selfServiceSignup===false} onClick={()=>{setMode("register");setError("");}} className={"flex-1 rounded-lg px-3 py-2 text-sm font-semibold disabled:opacity-40 " + (mode==="register" ? "bg-white text-slate-950" : "text-slate-400")}>Create account</button>
+            <button type="button" onClick={()=>{setMode("login");setError("");setMessage("");}} className={"flex-1 rounded-lg px-3 py-2 text-sm font-semibold " + (mode==="login"||mode==="forgot"||mode==="verify" ? "bg-white text-slate-950" : "text-slate-400")}>Sign in</button>
+            <button type="button" disabled={planData?.selfServiceSignup===false} onClick={()=>{setMode("register");setError("");setMessage("");}} className={"flex-1 rounded-lg px-3 py-2 text-sm font-semibold disabled:opacity-40 " + (mode==="register" ? "bg-white text-slate-950" : "text-slate-400")}>Create account</button>
           </div>
+
+          {planData?.signupConfigured===true && planData?.emailDeliveryConfigured===false && (
+            <div className="mt-4 rounded-xl border border-amber-300/20 bg-amber-300/10 px-4 py-3 text-xs leading-5 text-amber-100">
+              Public signup is waiting for verified transactional email delivery. Existing users can still sign in.
+            </div>
+          )}
 
           <div className="mt-7">
             <div className="text-sm font-medium uppercase tracking-[0.18em] text-cyan-300">V79 Hub</div>
-            <h2 className="mt-2 text-3xl font-semibold">{mode==="login" ? "Welcome back" : "Start your V79 workspace"}</h2>
-            <p className="mt-2 text-sm leading-6 text-slate-400">
-              {mode==="login"
-                ? "Sign in with your V79 Hub credentials."
-                : "Try the selected plan for " + (planData?.trialDays ?? 14) + " days. Paid access is required when the trial ends."}
-            </p>
+            <h2 className="mt-2 text-3xl font-semibold">{title}</h2>
+            <p className="mt-2 text-sm leading-6 text-slate-400">{help}</p>
           </div>
 
           <form onSubmit={submit} className="mt-7">
@@ -229,7 +267,6 @@ function Login({ onLogin }: { onLogin: (session: Session) => void }) {
                     <input autoComplete="organization" required minLength={2} value={organizationName} onChange={e=>setOrganizationName(e.target.value)} className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900/80 px-4 py-3 outline-none ring-cyan-300 focus:ring-2"/>
                   </label>
                 </div>
-
                 <div className="mt-5 grid gap-2">
                   {plans.map((item:any)=>(
                     <button key={item.id} type="button" onClick={()=>setPlan(item.id)} className={"rounded-2xl border p-4 text-left transition " + (plan===item.id ? "border-cyan-300 bg-cyan-300/10" : "border-white/10 bg-slate-900/40 hover:border-white/20")}>
@@ -245,24 +282,132 @@ function Login({ onLogin }: { onLogin: (session: Session) => void }) {
 
             <label className={(mode==="register" ? "mt-5 " : "") + "block text-sm font-medium text-slate-200"}>
               Email
-              <input autoComplete="email" type="email" required value={email} onChange={e => setEmail(e.target.value)} className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900/80 px-4 py-3 outline-none ring-cyan-300 transition focus:ring-2"/>
+              <input autoComplete="email" type="email" required value={email} onChange={e=>setEmail(e.target.value)} className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900/80 px-4 py-3 outline-none ring-cyan-300 transition focus:ring-2"/>
             </label>
-            <label className="mt-5 block text-sm font-medium text-slate-200">
-              Password
-              <input autoComplete={mode==="login"?"current-password":"new-password"} type="password" required minLength={mode==="register"?16:1} value={password} onChange={e => setPassword(e.target.value)} className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900/80 px-4 py-3 outline-none ring-cyan-300 transition focus:ring-2"/>
-              {mode==="register" && <span className="mt-1 block text-[11px] text-slate-500">Use at least 16 characters.</span>}
-            </label>
+
+            {(mode==="login"||mode==="register") && (
+              <label className="mt-5 block text-sm font-medium text-slate-200">
+                Password
+                <input autoComplete={mode==="login"?"current-password":"new-password"} type="password" required minLength={mode==="register"?16:1} value={password} onChange={e=>setPassword(e.target.value)} className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900/80 px-4 py-3 outline-none ring-cyan-300 transition focus:ring-2"/>
+                {mode==="register" && <span className="mt-1 block text-[11px] text-slate-500">Use at least 16 characters.</span>}
+              </label>
+            )}
+
             {error && <div role="alert" className="mt-5 rounded-xl border border-rose-400/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-100">{error}</div>}
+            {message && <div role="status" className="mt-5 rounded-xl border border-cyan-300/20 bg-cyan-300/10 px-4 py-3 text-sm text-cyan-100">{message}</div>}
+
             <button disabled={busy} className="mt-7 w-full rounded-xl bg-cyan-300 px-4 py-3 font-semibold text-slate-950 transition hover:bg-cyan-200 disabled:opacity-60">
-              {busy ? (mode==="login"?"Signing in…":"Creating workspace…") : (mode==="login"?"Sign in to V79 Hub":"Start " + (planData?.trialDays ?? 14) + "-day trial")}
+              {busy ? "Working…" :
+                mode==="login" ? "Sign in to V79 Hub" :
+                mode==="register" ? "Create workspace & verify email" :
+                mode==="forgot" ? "Send password reset" :
+                "Resend verification email"}
             </button>
-            {mode==="register" && <p className="mt-4 text-center text-[11px] leading-5 text-slate-500">No payment is recorded by this form. Access expires at the end of the trial unless V79 billing activates the subscription.</p>}
+
+            {mode==="login" && (
+              <div className="mt-4 flex flex-wrap justify-center gap-x-4 gap-y-2 text-xs">
+                <button type="button" onClick={()=>{setMode("forgot");setError("");setMessage("");}} className="text-cyan-200 hover:text-cyan-100">Forgot password?</button>
+                <button type="button" onClick={()=>{setMode("verify");setError("");setMessage("");}} className="text-slate-400 hover:text-slate-300">Resend verification</button>
+              </div>
+            )}
+            {(mode==="forgot"||mode==="verify") && (
+              <button type="button" onClick={()=>{setMode("login");setError("");setMessage("");}} className="mt-4 w-full text-center text-xs text-slate-400 hover:text-slate-300">Back to sign in</button>
+            )}
+            {mode==="register" && <p className="mt-4 text-center text-[11px] leading-5 text-slate-500">Your trial starts only after email verification. No payment is taken by this form.</p>}
           </form>
           <p className="mt-6 text-center text-xs text-slate-500">From Idea to Advantage</p>
         </section>
       </div>
     </main>
   );
+}
+
+function VerifyEmail({ token, onVerified }: { token:string; onVerified:(session:Session)=>void }) {
+  const [busy,setBusy]=useState(false);
+  const [error,setError]=useState("");
+
+  async function verify() {
+    setBusy(true);setError("");
+    try {
+      const response=await fetch("/api/auth/verify-email",{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({token}),
+      });
+      const body=await response.json().catch(()=>({}));
+      if(!response.ok) throw new Error(body.error||"Email verification failed.");
+      const url=new URL(window.location.href);
+      url.searchParams.delete("verify");
+      window.history.replaceState(null,"",url.pathname+url.search+url.hash);
+      onVerified(body);
+    } catch(err:any) {
+      setError(err.message||"Email verification failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <main className="min-h-screen bg-slate-950 text-white">
+    <div className="mx-auto flex min-h-screen max-w-xl items-center px-6 py-12">
+      <section className="w-full rounded-3xl border border-white/10 bg-white/[0.06] p-7 shadow-2xl">
+        <div className="text-sm font-semibold uppercase tracking-[.18em] text-cyan-300">V79 Hub security</div>
+        <h1 className="mt-2 text-3xl font-semibold">Confirm your email</h1>
+        <p className="mt-3 text-sm leading-6 text-slate-400">Press the button below to verify this address and start the V79 trial. Opening this page alone does not activate the workspace.</p>
+        {error && <div role="alert" className="mt-5 rounded-xl border border-rose-400/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-100">{error}</div>}
+        <button onClick={verify} disabled={busy} className="mt-6 w-full rounded-xl bg-cyan-300 px-4 py-3 font-semibold text-slate-950 disabled:opacity-50">{busy?"Verifying…":"Confirm email & activate workspace"}</button>
+        <button onClick={()=>window.location.assign("/")} className="mt-3 w-full text-center text-xs text-slate-400 hover:text-slate-300">Back to sign in</button>
+      </section>
+    </div>
+  </main>;
+}
+
+function ResetPassword({ token }: { token:string }) {
+  const [password,setPassword]=useState("");
+  const [confirm,setConfirm]=useState("");
+  const [busy,setBusy]=useState(false);
+  const [error,setError]=useState("");
+  const [done,setDone]=useState(false);
+
+  async function submit(event:FormEvent) {
+    event.preventDefault();
+    setError("");
+    if(password!==confirm) return setError("The passwords do not match.");
+    setBusy(true);
+    try {
+      const response=await fetch("/api/auth/reset-password",{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({token,newPassword:password}),
+      });
+      const body=await response.json().catch(()=>({}));
+      if(!response.ok) throw new Error(body.error||"Password reset failed.");
+      setDone(true);
+      const url=new URL(window.location.href);
+      url.searchParams.delete("reset");
+      window.history.replaceState(null,"",url.pathname+url.search+url.hash);
+    } catch(err:any) {
+      setError(err.message||"Password reset failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <main className="min-h-screen bg-slate-950 text-white">
+    <div className="mx-auto flex min-h-screen max-w-xl items-center px-6 py-12">
+      <section className="w-full rounded-3xl border border-white/10 bg-white/[0.06] p-7 shadow-2xl">
+        <div className="text-sm font-semibold uppercase tracking-[.18em] text-cyan-300">V79 Hub security</div>
+        <h1 className="mt-2 text-3xl font-semibold">Choose a new password</h1>
+        <p className="mt-2 text-sm leading-6 text-slate-400">Use at least 16 characters. Completing the reset signs out all existing Hub sessions for this account.</p>
+        {error && <div role="alert" className="mt-5 rounded-xl border border-rose-400/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-100">{error}</div>}
+        {done ? <div className="mt-6"><div className="rounded-xl border border-emerald-300/20 bg-emerald-300/10 px-4 py-3 text-sm text-emerald-100">Password updated. You can now sign in with the new password.</div><button onClick={()=>window.location.assign("/")} className="mt-5 w-full rounded-xl bg-cyan-300 px-4 py-3 font-semibold text-slate-950">Return to sign in</button></div> :
+        <form onSubmit={submit} className="mt-6 space-y-4">
+          <label className="block text-sm text-slate-200">New password<input required type="password" minLength={16} autoComplete="new-password" value={password} onChange={e=>setPassword(e.target.value)} className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900/80 px-4 py-3 outline-none ring-cyan-300 focus:ring-2"/></label>
+          <label className="block text-sm text-slate-200">Confirm new password<input required type="password" minLength={16} autoComplete="new-password" value={confirm} onChange={e=>setConfirm(e.target.value)} className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900/80 px-4 py-3 outline-none ring-cyan-300 focus:ring-2"/></label>
+          <button disabled={busy} className="w-full rounded-xl bg-cyan-300 px-4 py-3 font-semibold text-slate-950 disabled:opacity-50">{busy?"Updating…":"Update password"}</button>
+        </form>}
+      </section>
+    </div>
+  </main>;
 }
 
 function ProductCard({ product, result }: { product: Integration["product"]; result?: ProductResult }) {
@@ -547,7 +692,13 @@ function TeamAccess({ session }: { session:Session }) {
       const r=await fetch("/api/team/invitations",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email,role,products})});
       const b=await r.json().catch(()=>({}));
       if(!r.ok)throw new Error(b.error||"Could not create invitation.");
-      setInviteUrl(b.inviteUrl);setEmail("");setMessage("Invitation created. Share the secure link with the invited person.");await load();
+      setInviteUrl(b.inviteUrl);setEmail("");
+      setMessage(b.emailDelivery?.sent
+        ? "Invitation created and emailed. The secure link is also available below."
+        : team?.emailDeliveryConfigured
+          ? "Invitation created, but email delivery failed. Share the secure link below."
+          : "Invitation created. Transactional email is not configured, so share the secure link below.");
+      await load();
     }catch(e:any){setMessage(e.message||"Could not create invitation.");}
     finally{setBusy("");}
   }
@@ -854,6 +1005,8 @@ export default function App() {
   const [notice, setNotice] = useState("");
   const returnTarget = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("return") : null;
   const inviteToken = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("invite") : null;
+  const resetToken = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("reset") : null;
+  const verifyToken = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("verify") : null;
   const billingResult = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("billing") : null;
   const managedReturnTarget = returnTarget && ["ffpro","tiquet","marketing"].includes(returnTarget) ? returnTarget as Integration["product"] : null;
 
@@ -916,6 +1069,8 @@ export default function App() {
     setSession(null); setDashboard(null); setIntegrations([]);
   }
 
+  if (verifyToken) return <VerifyEmail token={verifyToken} onVerified={setSession} />;
+  if (resetToken) return <ResetPassword token={resetToken} />;
   if (inviteToken) return <InviteAccept token={inviteToken} onAccepted={setSession} />;
 
   if (session === undefined) {
