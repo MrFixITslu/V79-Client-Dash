@@ -298,6 +298,14 @@ function productEntitled(organizationId: string, product: string) {
   if (product === "academy") return true;
   const subscription = subscriptionFor(organizationId);
   if (!subscription || !["active","trialing"].includes(subscription.status)) return false;
+  if (subscription.status === "trialing") {
+    const trialEnd = subscription.trialEndsAt ? new Date(subscription.trialEndsAt).getTime() : 0;
+    if (!Number.isFinite(trialEnd) || trialEnd <= Date.now()) return false;
+  }
+  if (subscription.status === "active" && subscription.currentPeriodEnd) {
+    const periodEnd = new Date(subscription.currentPeriodEnd).getTime();
+    if (Number.isFinite(periodEnd) && periodEnd <= Date.now()) return false;
+  }
   const plans: Record<string,string[]> = {
     start: ["ffpro","tiquet"],
     business: ["ffpro","tiquet","marketing"],
