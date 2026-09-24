@@ -76,7 +76,7 @@ Marketing uses a Hub-managed organisation mapping; customers do not manually att
 
 The Hub dashboard also includes an Action Centre that derives practical next actions from connected product summaries without copying specialist product databases into Hub.
 
-Billing-provider integration is deliberately separate from entitlement enforcement. Subscription records must only be moved to active/trialing by trusted platform administration or a verified payment workflow.
+Billing-provider integration remains separate from entitlement enforcement, but Hub now includes a verified hosted-checkout workflow. Subscription records move to active only after the configured provider transaction is bound to the V79 billing order and its return signature is verified.
 
 
 ## Customer trials and plan catalogue
@@ -91,3 +91,24 @@ Hub now carries the commercial entitlement catalogue:
 A trial record is real access-control state, not a simulated payment. Trial entitlements expire at `trial_ends_at`. Active subscriptions can also be bounded by `current_period_end`.
 
 Public self-service registration is **disabled by default**. Set `V79_SELF_SERVICE_SIGNUP=1` only when you intentionally want to accept public trials. `V79_TRIAL_DAYS` defaults to 14. Until email verification and a payment workflow are connected, keeping self-service disabled is the safer production setting.
+
+
+## Hosted billing and WiPay
+
+Phase 6 adds an owner-only Billing area for prepaid monthly or annual V79 access. It does **not** store card details and it does **not** enable automatic recurring charges.
+
+The first adapter is WiPay because V79 operates in Saint Lucia. Billing stays disabled unless all of the following are explicitly configured:
+
+- `V79_BILLING_PROVIDER=wipay`
+- `WIPAY_PAYMENT_URL`
+- `WIPAY_ACCOUNT_NUMBER`
+- `WIPAY_API_KEY`
+- `WIPAY_COUNTRY_CODE`
+- `WIPAY_CURRENCY=XCD`
+- `WIPAY_ENVIRONMENT=sandbox` or `live`
+
+Do not guess the Saint Lucia endpoint or country code from another WiPay territory. Use the values supplied for the verified merchant account. `WIPAY_ALLOWED_HOSTS` is only needed if merchant onboarding provides a hosted-checkout hostname outside the normal WiPay Financial domain.
+
+The checkout contract deliberately requires WiPay to return a provider transaction ID before the customer leaves V79. The browser return must present that same transaction ID and a valid provider hash before Hub activates the subscription.
+
+Mid-period plan changes are not automatically prorated in this release. Renewals of the current plan are supported; controlled plan changes during an already-paid period should be handled by V79 support until a tested proration policy is added.
