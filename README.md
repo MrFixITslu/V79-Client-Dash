@@ -41,6 +41,31 @@ The Hub validates identity, membership, subscription and app launch before it re
 
 Existing Academy mappings remain in the database for migration purposes but are ignored when requesting learner summaries or showing the Connections screen. Historic Academy organisation events are excluded from the shared timeline until a verified learner-to-organisation consent flow exists. The Hub database is stored at `data/v79-hub.db`.
 
+## Automatic deployment after a merge
+
+Every push to `main` (including a merged pull request) runs validation, publishes the container image, then transfers the tested source bundle over SSH and starts the Hub on your server. A failing test, image publish, server preflight, or container health check fails the workflow. Pull requests only run validation; they do not deploy. The Actions run is visible under **Actions → V79 CI/CD**. The container publication alone does not update the server.
+
+One-time server setup (run as an administrator on the server):
+
+1. Install Docker Engine with the Compose plugin and `rsync`. Create a dedicated `v79deploy` user with permission to run Docker. Docker access is privileged: use a dedicated account and limit who can change the `production` environment in GitHub.
+2. Give that user ownership of `/opt/v79/hub`; create `/opt/v79/hub/data`, and place `/opt/v79/hub/.env` there using `.env.example` as a guide. Keep `.env`, the SQLite database and its WAL files on the server. Back up and test restoring `data` and `.env` before enabling deployments.
+3. Create the shared Docker network: `docker network inspect proxy_network >/dev/null 2>&1 || docker network create proxy_network`. Keep the reverse proxy routing `hub.v79sl.com` to `v79-hub:3040` on that network and configure its TLS certificate.
+4. Generate a dedicated SSH key pair for GitHub Actions (for example `ssh-keygen -t ed25519 -f ./v79-hub-deploy-key -C v79-hub-actions`). Add the **public** key to the deploy user's `~/.ssh/authorized_keys`. Put the **private** key in GitHub only as the secret described below; never commit it or paste it into a ticket.
+5. From a trusted machine, obtain and verify the server's SSH host key fingerprint with your server provider or the server console. Save its `known_hosts` line for the production secret. `ssh-keyscan -p 22 your-host` collects a line but does not independently verify it.
+
+In **Repository → Settings → Environments**, create `production`. Add these **environment secrets** (the workflow uses this environment):
+
+| Secret | Value |
+| --- | --- |
+| `DEPLOY_HOST` | Public DNS name or IP of the SSH server (no scheme or port) |
+| `DEPLOY_USER` | Dedicated deploy user, such as `v79deploy` |
+| `DEPLOY_SSH_KEY` | Full private key including BEGIN/END lines |
+| `DEPLOY_KNOWN_HOSTS` | Verified OpenSSH `known_hosts` line for that host and port |
+
+If SSH uses a port other than 22, add `DEPLOY_SSH_PORT` under **production → Environment variables** and use the matching `[host]:port` format in `DEPLOY_KNOWN_HOSTS`. Restrict the production environment to `main` and trusted reviewers as appropriate. Do not put application secrets in GitHub Actions: the deployment reads `/opt/v79/hub/.env` on the server. First populate that file with strong, stable values and test the proxy, product endpoints and backups. On an empty server, the workflow deliberately fails until `.env`, `data`, and `proxy_network` exist.
+
+After setup, merge a PR into `main` or push to `main`. The deployment replaces only the app files in `/opt/v79/hub`, preserves `.env`, `data` and `backups`, builds the image there, and waits for a healthy Hub container. A failed health check needs investigation in the Actions log and `docker compose --project-name v79-hub -f /opt/v79/hub/docker-compose.yml logs --tail=100` on the server; the workflow does not roll back database migrations automatically. Manual **Run workflow** currently validates and does not deploy.
+
 ## Product service URLs
 
 When all applications share `proxy_network`, the recommended internal URLs are:
