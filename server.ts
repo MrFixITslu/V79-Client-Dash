@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { createServer as createViteServer } from "vite";
 import { signPlatformRequest, verifyPlatformRequest } from "./server/platform-contract.mjs";
 import { addBillingPeriod, normalizeMoney, verifyWipayResponse } from "./server/billing-contract.mjs";
+import { decryptSecret, encryptSecret, generateTotpSecret, verifyTotp } from "./server/security-contract.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -133,6 +134,14 @@ function migrateUserVerification() {
 }
 migrateUserVerification();
 
+function migrateUserMfa() {
+  const columns=(db.prepare("PRAGMA table_info(users)").all() as any[]).map(row=>String(row.name));
+  if(!columns.includes("mfa_secret_encrypted")) db.prepare("ALTER TABLE users ADD COLUMN mfa_secret_encrypted TEXT").run();
+  if(!columns.includes("mfa_pending_secret_encrypted")) db.prepare("ALTER TABLE users ADD COLUMN mfa_pending_secret_encrypted TEXT").run();
+  if(!columns.includes("mfa_enabled_at")) db.prepare("ALTER TABLE users ADD COLUMN mfa_enabled_at TEXT").run();
+}
+migrateUserMfa();
+
 function migrateIntegrationsForMarketing() {
   const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='integrations'").get() as any;
   const sql = String(row?.sql || "");
@@ -236,6 +245,66 @@ CREATE TABLE IF NOT EXISTS billing_orders (
 CREATE INDEX IF NOT EXISTS idx_billing_orders_org_created ON billing_orders(organization_id,created_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_billing_orders_provider_transaction
   ON billing_orders(provider_transaction_id) WHERE provider_transaction_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS auth_rate_limits (
+  scope TEXT NOT NULL,
+  key_hash TEXT NOT NULL,
+  window_started_at INTEGER NOT NULL,
+  count INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(scope,key_hash)
+);
+CREATE TABLE IF NOT EXISTS mfa_challenges (
+  token_hash TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  expires_at INTEGER NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_mfa_challenges_user ON mfa_challenges(user_id,expires_at);
+CREATE TABLE IF NOT EXISTS mfa_recovery_codes (
+  user_id TEXT NOT NULL,
+  code_hash TEXT NOT NULL,
+  used_at TEXT,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(user_id,code_hash),
+  FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS audit_log (
+  id TEXT PRIMARY KEY,
+  organization_id TEXT,
+  actor_user_id TEXT,
+  event_type TEXT NOT NULL,
+  target_type TEXT,
+  target_id TEXT,
+  ip_hash TEXT,
+  details_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_audit_log_org_created ON audit_log(organization_id,created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_log_actor_created ON audit_log(actor_user_id,created_at DESC);
+CREATE TABLE IF NOT EXISTS email_outbox (
+  id TEXT PRIMARY KEY,
+  recipient TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  html TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL UNIQUE,
+  status TEXT NOT NULL CHECK(status IN ('pending','sent','failed')),
+  attempts INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at INTEGER NOT NULL,
+  provider_message_id TEXT,
+  last_error TEXT,
+  created_at TEXT NOT NULL,
+  sent_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_email_outbox_pending ON email_outbox(status,next_attempt_at);
+CREATE TABLE IF NOT EXISTS product_summary_cache (
+  product TEXT NOT NULL,
+  external_subject_id TEXT NOT NULL,
+  summary_json TEXT NOT NULL,
+  fetched_at INTEGER NOT NULL,
+  PRIMARY KEY(product,external_subject_id)
+);
 `);
 
 function clean(value: unknown) {
