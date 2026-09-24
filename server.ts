@@ -480,6 +480,83 @@ app.put("/api/auth/password", requireAuth, (req,res)=>{
   db.prepare("DELETE FROM sessions WHERE user_id=? AND token_hash<>?").run(user.id,hashToken(token));
   res.json({success:true});
 });
+
+app.get("/api/apps/marketing/launch", requireAuth, (req,res)=>{
+  const user=(req as any).hubUser, m=(req as any).hubMembership;
+  if (!productEntitled(m.organizationId,"marketing")) {
+    return res.status(403).json({
+      error:"Your current V79 subscription does not include V79 Marketing.",
+      code:"ENTITLEMENT_REQUIRED",
+      subscription:subscriptionFor(m.organizationId) || null,
+    });
+  }
+  const publicUrl=(productConfig.marketing as any).publicUrl;
+  if(!publicUrl) return res.status(503).json({error:"V79 Marketing public URL is not configured."});
+  const token=crypto.randomBytes(32).toString("base64url");
+  const now=new Date().toISOString();
+  db.prepare("DELETE FROM app_launch_tickets WHERE user_id=? AND product='marketing'").run(user.id);
+  db.prepare("INSERT INTO app_launch_tickets(token_hash,user_id,organization_id,product,expires_at,created_at) VALUES(?,?,?,?,?,?)")
+    .run(hashToken(token),user.id,m.organizationId,"marketing",Date.now()+2*60_000,now);
+  db.prepare(`
+    INSERT INTO integrations(organization_id,product,external_subject_id,enabled,updated_at)
+    VALUES(?, 'marketing', ?, 1, ?)
+    ON CONFLICT(organization_id,product) DO UPDATE SET external_subject_id=excluded.external_subject_id,enabled=1,updated_at=excluded.updated_at
+  `).run(m.organizationId,m.organizationId,now);
+  const target=new URL("/api/platform/launch",publicUrl);
+  target.searchParams.set("ticket",token);
+  res.redirect(302,target.toString());
+});
+
+app.post("/api/platform/session/consume", (req:any,res)=>{
+  const source=clean(req.get("x-v79-service-id"));
+  if(source!=="v79-marketing") return res.status(401).json({error:"Unknown V79 launch consumer."});
+  const secret=clean(process.env.V79_MARKETING_LAUNCH_SECRET);
+  if(secret.length<32) return res.status(503).json({error:"Marketing launch integration is not configured."});
+  const timestamp=clean(req.get("x-v79-timestamp"));
+  const signature=clean(req.get("x-v79-signature"));
+  const bodyText=req.rawBody ? Buffer.from(req.rawBody).toString("utf8") : JSON.stringify(req.body || {});
+  const verified=verifyPlatformRequest({
+    method:req.method,
+    pathname:"/api/platform/session/consume",
+    timestamp,
+    body:bodyText,
+    secret,
+    signature,
+  });
+  if(!verified) return res.status(401).json({error:"Invalid or expired V79 launch signature."});
+
+  const ticket=clean(req.body?.ticket);
+  const product=clean(req.body?.product);
+  if(product!=="marketing" || !/^[A-Za-z0-9_-]{32,180}$/.test(ticket)) return res.status(400).json({error:"Invalid launch request."});
+  const tokenHash=hashToken(ticket);
+  const row=db.prepare(`
+    SELECT t.user_id AS userId,t.organization_id AS organizationId,t.expires_at AS expiresAt,
+      u.email,u.name,o.name AS organizationName,o.slug,m.role
+    FROM app_launch_tickets t
+    JOIN users u ON u.id=t.user_id
+    JOIN organizations o ON o.id=t.organization_id
+    JOIN memberships m ON m.user_id=t.user_id AND m.organization_id=t.organization_id
+    WHERE t.token_hash=? AND t.product='marketing'
+  `).get(tokenHash) as any;
+  if(!row || row.expiresAt<=Date.now()) {
+    if(row) db.prepare("DELETE FROM app_launch_tickets WHERE token_hash=?").run(tokenHash);
+    return res.status(401).json({error:"Launch ticket is invalid or expired."});
+  }
+  if(!productEntitled(row.organizationId,"marketing")) {
+    db.prepare("DELETE FROM app_launch_tickets WHERE token_hash=?").run(tokenHash);
+    return res.status(403).json({error:"V79 Marketing is not included in this subscription."});
+  }
+  db.prepare("DELETE FROM app_launch_tickets WHERE token_hash=?").run(tokenHash);
+  const subscription=subscriptionFor(row.organizationId);
+  res.json({
+    user:{id:row.userId,email:row.email,name:row.name},
+    organization:{id:row.organizationId,name:row.organizationName,slug:row.slug},
+    role:row.role,
+    plan:subscription?.plan || null,
+    entitlement:{product:"marketing",enabled:true},
+  });
+});
+
 app.get("/api/integrations", requireAuth, (req,res)=>{
   const m=(req as any).hubMembership;
   const rows=db.prepare("SELECT product,external_subject_id AS externalSubjectId,enabled,updated_at AS updatedAt FROM integrations WHERE organization_id=?").all(m.organizationId) as any[];
