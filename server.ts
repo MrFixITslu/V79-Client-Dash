@@ -72,6 +72,16 @@ CREATE TABLE IF NOT EXISTS sessions (
   created_at TEXT NOT NULL,
   FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS account_tokens (
+  token_hash TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  purpose TEXT NOT NULL CHECK(purpose IN ('verify_email','password_reset')),
+  expires_at INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  used_at TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_account_tokens_user_purpose ON account_tokens(user_id,purpose,expires_at);
 CREATE TABLE IF NOT EXISTS integrations (
   organization_id TEXT NOT NULL,
   product TEXT NOT NULL CHECK(product IN ('ffpro','tiquet','academy','marketing')),
@@ -111,6 +121,17 @@ CREATE TABLE IF NOT EXISTS app_launch_tickets (
   FOREIGN KEY(organization_id) REFERENCES organizations(id) ON DELETE CASCADE
 );
 `);
+
+function migrateUserVerification() {
+  const columns=(db.prepare("PRAGMA table_info(users)").all() as any[]).map(row=>String(row.name));
+  if(!columns.includes("email_verified_at")) {
+    db.prepare("ALTER TABLE users ADD COLUMN email_verified_at TEXT").run();
+    // Existing Hub users pre-date email verification. Preserve access rather
+    // than unexpectedly locking established customers out after deployment.
+    db.prepare("UPDATE users SET email_verified_at=created_at WHERE email_verified_at IS NULL").run();
+  }
+}
+migrateUserVerification();
 
 function migrateIntegrationsForMarketing() {
   const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='integrations'").get() as any;
@@ -246,6 +267,8 @@ const PLAN_CATALOG = {
 type PlanName = keyof typeof PLAN_CATALOG;
 const TRIAL_DAYS = Math.min(30, Math.max(0, Number(process.env.V79_TRIAL_DAYS || 14)));
 const SELF_SERVICE_SIGNUP = process.env.V79_SELF_SERVICE_SIGNUP === "1";
+const VERIFY_EMAIL_TTL_MS = 24 * 60 * 60_000;
+const PASSWORD_RESET_TTL_MS = 30 * 60_000;
 
 function validPlan(value: unknown): value is PlanName {
   return typeof value === "string" && value in PLAN_CATALOG;
@@ -263,6 +286,69 @@ function constantEqualHex(a: string, b: string) {
 }
 function hashToken(token: string) {
   return crypto.createHash("sha256").update(token).digest("hex");
+}
+function escapeHtml(value: unknown) {
+  return String(value ?? "")
+    .replace(/&/g,"&amp;")
+    .replace(/</g,"&lt;")
+    .replace(/>/g,"&gt;")
+    .replace(/"/g,"&quot;")
+    .replace(/'/g,"&#039;");
+}
+function mailConfig() {
+  const provider=clean(process.env.V79_MAIL_PROVIDER).toLowerCase() || "disabled";
+  const apiKey=clean(process.env.RESEND_API_KEY);
+  const from=clean(process.env.V79_MAIL_FROM);
+  const configured=provider==="resend" && apiKey.length>=12 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((from.match(/<([^>]+)>/)?.[1] || from).trim());
+  return {provider,apiKey,from,configured};
+}
+async function sendTransactionalEmail({to,subject,html,idempotencyKey}:{to:string;subject:string;html:string;idempotencyKey:string}) {
+  const cfg=mailConfig();
+  if(!cfg.configured) return {success:false,skipped:true,error:"Transactional email is not configured."};
+  try {
+    const response=await fetch("https://api.resend.com/emails",{
+      method:"POST",
+      headers:{
+        "content-type":"application/json",
+        "authorization":`Bearer ${cfg.apiKey}`,
+        "idempotency-key":idempotencyKey.slice(0,256),
+      },
+      body:JSON.stringify({from:cfg.from,to:[to],subject,html}),
+      signal:AbortSignal.timeout(10_000),
+    });
+    const body:any=await response.json().catch(()=>({}));
+    if(!response.ok) throw new Error(body?.message || `Email provider returned HTTP ${response.status}`);
+    return {success:true,skipped:false,id:clean(body?.id)};
+  } catch(error:any) {
+    const detail=String(error?.message || "Email delivery failed.").slice(0,240);
+    console.warn("[V79 Mail] Delivery failed:",detail);
+    return {success:false,skipped:false,error:detail};
+  }
+}
+function brandedAccountEmail(title:string,message:string,buttonLabel:string,url:string) {
+  return `<!doctype html><html><body style="margin:0;background:#f8fafc;font-family:Arial,sans-serif;color:#0f172a">
+  <table width="100%" cellpadding="0" cellspacing="0" style="padding:36px 16px;background:#f8fafc"><tr><td align="center">
+    <table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;background:#fff;border-radius:18px;overflow:hidden;border:1px solid #e2e8f0">
+      <tr><td style="background:#020617;color:#67e8f9;padding:24px 30px;font-size:20px;font-weight:700">V79 Hub</td></tr>
+      <tr><td style="padding:30px"><h1 style="margin:0 0 14px;font-size:24px;color:#0f172a">${escapeHtml(title)}</h1>
+        <p style="margin:0 0 24px;line-height:1.65;color:#475569">${escapeHtml(message)}</p>
+        <a href="${escapeHtml(url)}" style="display:inline-block;background:#0f172a;color:#fff;text-decoration:none;padding:13px 20px;border-radius:10px;font-weight:700">${escapeHtml(buttonLabel)}</a>
+        <p style="margin:24px 0 0;font-size:12px;line-height:1.5;color:#94a3b8">If the button does not work, copy this link:<br><span style="word-break:break-all">${escapeHtml(url)}</span></p>
+      </td></tr>
+      <tr><td style="padding:18px 30px;background:#f1f5f9;color:#64748b;font-size:12px">V79 Digital · From Idea to Advantage</td></tr>
+    </table>
+  </td></tr></table></body></html>`;
+}
+function createAccountToken(userId:string,purpose:"verify_email"|"password_reset",ttlMs:number) {
+  const raw=crypto.randomBytes(32).toString("base64url");
+  const now=new Date().toISOString();
+  const tx=db.transaction(()=>{
+    db.prepare("DELETE FROM account_tokens WHERE user_id=? AND purpose=?").run(userId,purpose);
+    db.prepare("INSERT INTO account_tokens(token_hash,user_id,purpose,expires_at,created_at) VALUES(?,?,?,?,?)")
+      .run(hashToken(raw),userId,purpose,Date.now()+ttlMs,now);
+  });
+  tx();
+  return raw;
 }
 function cookieValue(req: express.Request, name: string) {
   const hit = (req.headers.cookie || "").split(";").map(v => v.trim()).find(v => v.startsWith(name + "="));
@@ -352,6 +438,7 @@ setInterval(() => {
   for (const [key,value] of loginAttempts) if(value.resetAt<now) loginAttempts.delete(key);
   db.prepare("DELETE FROM app_launch_tickets WHERE expires_at <= ?").run(now);
   db.prepare("UPDATE team_invitations SET status='expired' WHERE status='pending' AND expires_at <= ?").run(now);
+  db.prepare("DELETE FROM account_tokens WHERE expires_at<=? OR used_at IS NOT NULL").run(now);
 }, 60_000).unref();
 
 function bootstrapOwner() {
