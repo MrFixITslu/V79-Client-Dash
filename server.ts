@@ -452,7 +452,7 @@ function bootstrapOwner() {
   if (password.length < 16) throw new Error("V79_HUB_ADMIN_PASSWORD must contain at least 16 characters on first start.");
   const userId=crypto.randomUUID(), orgId=`v79org_${crypto.randomUUID()}`, salt=crypto.randomBytes(16).toString("hex"), now=new Date().toISOString();
   const tx=db.transaction(()=>{
-    db.prepare("INSERT INTO users(id,email,name,password_salt,password_hash,created_at) VALUES(?,?,?,?,?,?)").run(userId,email,name,salt,passwordDigest(password,salt),now);
+    db.prepare("INSERT INTO users(id,email,name,password_salt,password_hash,created_at,email_verified_at) VALUES(?,?,?,?,?,?,?)").run(userId,email,name,salt,passwordDigest(password,salt),now,now);
     let slug=slugify(orgName), suffix=1;
     while(db.prepare("SELECT 1 FROM organizations WHERE slug=?").get(slug)) slug=`${slugify(orgName)}-${++suffix}`;
     db.prepare("INSERT INTO organizations(id,name,slug,created_at) VALUES(?,?,?,?)").run(orgId,orgName,slug,now);
@@ -811,10 +811,13 @@ app.get("/api/health", (_req,res)=>{
   catch { res.status(503).json({status:"storage_unavailable"}); }
 });
 app.get("/api/plans", (_req,res)=>{
+  const mail=mailConfig();
   res.json({
     currency:"XCD",
     trialDays:TRIAL_DAYS,
-    selfServiceSignup:SELF_SERVICE_SIGNUP,
+    selfServiceSignup:SELF_SERVICE_SIGNUP && mail.configured,
+    signupConfigured:SELF_SERVICE_SIGNUP,
+    emailDeliveryConfigured:mail.configured,
     plans:Object.entries(PLAN_CATALOG).map(([id,plan])=>({id,...plan})),
   });
 });
@@ -978,8 +981,12 @@ app.get("/api/billing/wipay/return", (req,res)=>{
   res.redirect(302,back.toString());
 });
 
-app.post("/api/auth/register", loginLimited, (req,res)=>{
+app.post("/api/auth/register", loginLimited, async (req,res)=>{
   if(!SELF_SERVICE_SIGNUP) return res.status(403).json({error:"Online registration is not currently open. Contact V79 Digital."});
+  if(!mailConfig().configured) return res.status(503).json({
+    error:"Online registration is waiting for verified transactional email configuration.",
+    code:"EMAIL_DELIVERY_NOT_CONFIGURED",
+  });
   const email=clean(req.body?.email).toLowerCase();
   const password=String(req.body?.password || "");
   const name=clean(req.body?.name);
@@ -997,31 +1004,44 @@ app.post("/api/auth/register", loginLimited, (req,res)=>{
   const orgId=`v79org_${crypto.randomUUID()}`;
   const salt=crypto.randomBytes(16).toString("hex");
   const now=new Date().toISOString();
-  const trialEndsAt=TRIAL_DAYS>0 ? new Date(Date.now()+TRIAL_DAYS*24*60*60_000).toISOString() : now;
   let slug=slugify(organizationName), suffix=1;
   while(db.prepare("SELECT 1 FROM organizations WHERE slug=?").get(slug)) slug=`${slugify(organizationName)}-${++suffix}`;
 
   const tx=db.transaction(()=>{
-    db.prepare("INSERT INTO users(id,email,name,password_salt,password_hash,created_at) VALUES(?,?,?,?,?,?)")
+    db.prepare("INSERT INTO users(id,email,name,password_salt,password_hash,created_at,email_verified_at) VALUES(?,?,?,?,?,?,NULL)")
       .run(userId,email,name,salt,passwordDigest(password,salt),now);
     db.prepare("INSERT INTO organizations(id,name,slug,created_at) VALUES(?,?,?,?)")
       .run(orgId,organizationName,slug,now);
     db.prepare("INSERT INTO memberships(user_id,organization_id,role,created_at) VALUES(?,?,?,?)")
       .run(userId,orgId,"owner",now);
-    db.prepare("INSERT INTO subscriptions(organization_id,plan,status,trial_ends_at,current_period_end,updated_at) VALUES(?,?,?,?,?,?)")
-      .run(orgId,plan,"trialing",trialEndsAt,null,now);
+    // The trial clock starts only after email verification.
+    db.prepare("INSERT INTO subscriptions(organization_id,plan,status,trial_ends_at,current_period_end,updated_at) VALUES(?,?, 'trialing',NULL,NULL,?)")
+      .run(orgId,plan,now);
   });
   tx();
-  ensureManagedIntegrations(orgId);
 
-  const token=crypto.randomBytes(32).toString("base64url");
-  db.prepare("INSERT INTO sessions(token_hash,user_id,expires_at,created_at) VALUES(?,?,?,?)")
-    .run(hashToken(token),userId,Date.now()+SESSION_TTL_MS,now);
-  setSessionCookie(res,token);
-  res.status(201).json({
-    user:{id:userId,email,name},
-    organization:{id:orgId,name:organizationName,slug,role:"owner"},
-    subscription:subscriptionFor(orgId),
+  const verificationToken=createAccountToken(userId,"verify_email",VERIFY_EMAIL_TTL_MS);
+  const verifyUrl=new URL("/api/auth/verify-email",canonicalOrigin(req));
+  verifyUrl.searchParams.set("token",verificationToken);
+  const delivery=await sendTransactionalEmail({
+    to:email,
+    subject:"Verify your V79 Hub email",
+    html:brandedAccountEmail(
+      "Verify your email",
+      `Hi ${name}. Confirm this email address to activate your V79 workspace and start your ${TRIAL_DAYS}-day trial.`,
+      "Verify email",
+      verifyUrl.toString()
+    ),
+    idempotencyKey:`verify-email/${userId}/${hashToken(verificationToken).slice(0,20)}`,
+  });
+  if(!delivery.success) return res.status(502).json({
+    error:"Your workspace was created, but the verification email could not be delivered. Use 'Resend verification' from the sign-in screen.",
+    code:"VERIFICATION_EMAIL_FAILED",
+  });
+
+  res.status(202).json({
+    verificationRequired:true,
+    message:"Check your email to verify the address and activate your V79 workspace.",
   });
 });
 
@@ -1031,6 +1051,10 @@ app.post("/api/auth/login", loginLimited, (req,res)=>{
   const user=db.prepare("SELECT * FROM users WHERE email=?").get(email) as any;
   const candidate=passwordDigest(password,user?.password_salt || "invalid-v79-hub-salt");
   if(!user || !constantEqualHex(candidate,user.password_hash)) return res.status(401).json({error:"Email or password is incorrect."});
+  if(!user.email_verified_at) return res.status(403).json({
+    error:"Verify your email before signing in.",
+    code:"EMAIL_VERIFICATION_REQUIRED",
+  });
   const token=crypto.randomBytes(32).toString("base64url"), now=new Date().toISOString();
   db.prepare("DELETE FROM sessions WHERE user_id=?").run(user.id);
   db.prepare("INSERT INTO sessions(token_hash,user_id,expires_at,created_at) VALUES(?,?,?,?)").run(hashToken(token),user.id,Date.now()+SESSION_TTL_MS,now);
@@ -1046,7 +1070,7 @@ app.post("/api/auth/logout", (req,res)=>{
 app.get("/api/auth/me", requireAuth, (req,res)=>{
   const user=(req as any).hubUser, m=(req as any).hubMembership;
   res.json({
-    user,
+    user:{...user,emailVerified:true},
     organization:{id:m.organizationId,name:m.organizationName,slug:m.slug,role:m.role},
     subscription: subscriptionFor(m.organizationId) || null,
   });
@@ -1110,11 +1134,11 @@ app.post("/api/team/invitations/:token/accept", loginLimited, (req,res)=>{
   try { products=JSON.parse(invite.products_json || "[]"); } catch {}
   const tx=db.transaction(()=>{
     if(!existing) {
-      db.prepare("INSERT INTO users(id,email,name,password_salt,password_hash,created_at) VALUES(?,?,?,?,?,?)")
-        .run(userId,invite.email,name,salt,passwordDigest(password,salt),now);
+      db.prepare("INSERT INTO users(id,email,name,password_salt,password_hash,created_at,email_verified_at) VALUES(?,?,?,?,?,?,?)")
+        .run(userId,invite.email,name,salt,passwordDigest(password,salt),now,now);
     } else {
-      db.prepare("UPDATE users SET name=?,password_salt=?,password_hash=? WHERE id=?")
-        .run(name,salt,passwordDigest(password,salt),userId);
+      db.prepare("UPDATE users SET name=?,password_salt=?,password_hash=?,email_verified_at=COALESCE(email_verified_at,?) WHERE id=?")
+        .run(name,salt,passwordDigest(password,salt),now,userId);
     }
     db.prepare("INSERT INTO memberships(user_id,organization_id,role,created_at) VALUES(?,?,?,?)")
       .run(userId,invite.organization_id,invite.role,now);
