@@ -20,12 +20,16 @@ services:
       - V79_TIQUET_EVENT_SECRET=${V79_TIQUET_EVENT_SECRET:-}
       - V79_FFPRO_EVENT_SECRET=${V79_FFPRO_EVENT_SECRET:-}
       - V79_ACADEMY_EVENT_SECRET=${V79_ACADEMY_EVENT_SECRET:-}
+      - V79_MARKETING_EVENT_SECRET=${V79_MARKETING_EVENT_SECRET:-}
+      - V79_MARKETING_LAUNCH_SECRET=${V79_MARKETING_LAUNCH_SECRET:-}
       - FFPRO_BASE_URL=${FFPRO_BASE_URL:-http://fire-finance-app:3010}
       - TIQUET_BASE_URL=${TIQUET_BASE_URL:-http://v79-tiquet-manager:3050}
       - ACADEMY_BASE_URL=${ACADEMY_BASE_URL:-http://v79_course_builder:3030}
+      - MARKETING_BASE_URL=${MARKETING_BASE_URL:-http://v79marketing-app:3070}
       - FFPRO_PUBLIC_URL=${FFPRO_PUBLIC_URL:-https://ffpro.v79sl.com}
       - TIQUET_PUBLIC_URL=${TIQUET_PUBLIC_URL:-https://tiquet.v79sl.com}
       - ACADEMY_PUBLIC_URL=${ACADEMY_PUBLIC_URL:-https://academy.v79sl.com}
+      - MARKETING_PUBLIC_URL=${MARKETING_PUBLIC_URL:-https://marketing.v79sl.com}
     expose:
       - "3040"
     volumes:
