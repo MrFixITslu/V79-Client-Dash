@@ -39,6 +39,9 @@ try {
     try {
       const health=await fetch(new URL(product.health,base),{signal:AbortSignal.timeout(5000)});
       if (!health.ok) throw new Error(`health HTTP ${health.status}`);
+      // A bare 404 might be an absent route; first prove the route rejects an unsigned request.
+      const unsigned=await fetch(new URL(pathname,base),{signal:AbortSignal.timeout(5000)});
+      if (unsigned.status!==401) throw new Error(`unsigned summary HTTP ${unsigned.status}; expected 401`);
       const summary=await fetch(new URL(pathname,base),{headers:{
         'x-v79-service-id':'v79-hub','x-v79-timestamp':timestamp,
         'x-v79-signature':signPlatformRequest({method:'GET',pathname,timestamp,body:'',secret}),
