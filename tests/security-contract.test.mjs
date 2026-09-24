@@ -33,5 +33,8 @@ test("MFA secrets are encrypted and authenticated at rest", () => {
   const encrypted = encryptSecret("JBSWY3DPEHPK3PXP", key);
   assert.notEqual(encrypted, "JBSWY3DPEHPK3PXP");
   assert.equal(decryptSecret(encrypted, key), "JBSWY3DPEHPK3PXP");
-  assert.throws(() => decryptSecret(encrypted.slice(0, -1) + "A", key));
+  const last = encrypted.at(-1);
+  const tampered = encrypted.slice(0, -1) + (last === "A" ? "B" : "A");
+  assert.notEqual(tampered, encrypted);
+  assert.throws(() => decryptSecret(tampered, key));
 });
