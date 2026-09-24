@@ -1,7 +1,7 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import {
   Activity, ArrowUpRight, BookOpenCheck, Building2, CircleDollarSign,
-  GraduationCap, Headphones, Link2, LogOut, RefreshCw, Settings2,
+  GraduationCap, Headphones, Link2, LogOut, Megaphone, RefreshCw, Settings2,
   ShieldCheck, Sparkles, TicketCheck, Unplug, Users
 } from "lucide-react";
 
@@ -11,12 +11,14 @@ type Session = {
 };
 
 type Integration = {
-  product: "ffpro" | "tiquet" | "academy";
+  product: "ffpro" | "tiquet" | "academy" | "marketing";
   name: string;
   linked: boolean;
   externalSubjectId: string;
   openUrl: string;
   updatedAt: string | null;
+  entitled?: boolean;
+  managedByHub?: boolean;
 };
 
 type ProductResult = {
@@ -25,10 +27,19 @@ type ProductResult = {
   status: "connected" | "unlinked" | "offline" | "error" | "not_configured";
   summary?: any;
   error?: string;
+  entitled?: boolean;
+};
+
+type Subscription = {
+  plan: "start" | "business" | "advantage";
+  status: "trialing" | "active" | "past_due" | "cancelled" | "suspended";
+  trialEndsAt?: string | null;
+  currentPeriodEnd?: string | null;
 };
 
 type DashboardPayload = {
   organization: { id: string; name: string; slug: string };
+  subscription?: Subscription | null;
   products: Record<Integration["product"], ProductResult>;
   events: Array<{ id: string; type: string; source: string; occurredAt: string; details?: { subjectId?: string | null; correlationId?: string | null; payload?: Record<string, unknown> } }>;
 };
@@ -51,9 +62,16 @@ const productMeta = {
   academy: {
     label: "V79 Academy",
     eyebrow: "Learning & capability",
-    description: "Courses, progress, memberships and certificates.",
+    description: "Public training stays independent; businesses can link learner progress to their Hub.",
     icon: GraduationCap,
     subjectHelp: "Academy learner ID or email",
+  },
+  marketing: {
+    label: "V79 Marketing",
+    eyebrow: "Growth engine",
+    description: "Campaigns, customer pipeline, content, brand intelligence and marketing analytics.",
+    icon: Megaphone,
+    subjectHelp: "Managed automatically by V79 Hub",
   },
 } as const;
 
@@ -177,6 +195,11 @@ function ProductCard({ product, result }: { product: Integration["product"]; res
       ["Month income", formatNumber(metrics.currentMonthIncome)],
       ["Month expenses", formatNumber(metrics.currentMonthExpenses)],
       ["Month net", formatNumber(metrics.currentMonthNet)],
+    ];
+    if (product === "marketing") return [
+      ["Customers", formatNumber(metrics.customers)],
+      ["Campaigns", formatNumber(metrics.activeCampaigns)],
+      ["Scheduled", formatNumber(metrics.scheduledPosts)],
     ];
     return [
       ["Enrolled", formatNumber(metrics.enrolledCourses)],
@@ -333,14 +356,15 @@ function Connections({ integrations, onChanged }: { integrations: Integration[];
                     value={values[item.product] || ""}
                     onChange={e => setValues(old => ({ ...old, [item.product]: e.target.value }))}
                     placeholder={meta.subjectHelp}
-                    className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 outline-none ring-cyan-300 focus:ring-2"
+                    disabled={item.managedByHub}
+                    className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 outline-none ring-cyan-300 focus:ring-2 disabled:cursor-not-allowed disabled:text-slate-400"
                   />
                 </label>
                 <div className="flex gap-2">
-                  <button disabled={busy === item.product} onClick={() => save(item.product)} className="rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50">
+                  {!item.managedByHub && <button disabled={busy === item.product} onClick={() => save(item.product)} className="rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50">
                     {busy === item.product ? "Saving…" : "Save"}
-                  </button>
-                  {item.linked && (
+                  </button>}
+                  {item.linked && !item.managedByHub && (
                     <button disabled={busy === item.product} aria-label={`Disconnect ${meta.label}`} onClick={() => disconnect(item.product)} className="rounded-xl border border-slate-200 px-3 py-2.5 text-slate-500 hover:bg-slate-50">
                       <Unplug size={18} />
                     </button>
@@ -366,6 +390,9 @@ function eventTitle(type: string) {
     "course.enrolled": "Course enrolment",
     "certificate.issued": "Certificate issued",
     "finance.snapshot.updated": "Financial snapshot updated",
+    "marketing.post_scheduled": "Marketing post scheduled",
+    "marketing.lead_created": "Marketing lead captured",
+    "marketing.customer_status_changed": "Marketing customer stage changed",
   };
   return labels[type] || type.split(/[._-]/).map(word => word ? word[0].toUpperCase()+word.slice(1) : "").join(" ");
 }
@@ -381,6 +408,9 @@ function eventDescription(event: DashboardPayload["events"][number]) {
     case "course.enrolled": return p.courseTitle ? `Enrolled in ${p.courseTitle}.` : "A learner enrolled in a course.";
     case "certificate.issued": return p.courseTitle ? `Completed ${p.courseTitle}.` : "A learner earned a certificate.";
     case "finance.snapshot.updated": return "FFPRO financial indicators were refreshed.";
+    case "marketing.post_scheduled": return p.scheduledFor ? `Content scheduled for ${new Date(p.scheduledFor).toLocaleString()}.` : "Marketing content was scheduled.";
+    case "marketing.lead_created": return p.channel ? `New enquiry captured through ${p.channel}.` : "A new marketing enquiry was captured.";
+    case "marketing.customer_status_changed": return p.to ? `Customer moved to ${p.to}.` : "A marketing customer stage changed.";
     default: return "Activity recorded across the V79 ecosystem.";
   }
 }
@@ -428,6 +458,7 @@ export default function App() {
   const [integrations, setIntegrations] = useState<Integration[]>([]);
   const [view, setView] = useState<"overview" | "connections">("overview");
   const [refreshing, setRefreshing] = useState(false);
+  const returnTarget = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("return") : null;
 
   const loadAll = useCallback(async () => {
     setRefreshing(true);
@@ -453,6 +484,12 @@ export default function App() {
   }, []);
 
   useEffect(() => { if (session) loadAll(); }, [session, loadAll]);
+
+  useEffect(() => {
+    if (session && returnTarget === "marketing") {
+      window.location.assign("/api/apps/marketing/launch");
+    }
+  }, [session, returnTarget]);
 
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
@@ -504,7 +541,7 @@ export default function App() {
                   </p>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
-                  <div className="rounded-2xl border border-white/10 bg-white/[0.05] px-5 py-4"><div className="text-2xl font-semibold">{connected}/3</div><div className="text-xs text-slate-400">Apps connected</div></div>
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.05] px-5 py-4"><div className="text-2xl font-semibold">{connected}/4</div><div className="text-xs text-slate-400">Apps connected</div></div>
                   <div className="rounded-2xl border border-white/10 bg-white/[0.05] px-5 py-4"><div className="text-2xl font-semibold capitalize">{session.organization.role}</div><div className="text-xs text-slate-400">Your access</div></div>
                 </div>
               </div>
@@ -515,8 +552,8 @@ export default function App() {
                 <div><p className="text-xs font-semibold uppercase tracking-[0.16em] text-cyan-700">Your ecosystem</p><h2 className="mt-1 text-2xl font-semibold tracking-tight">Run the business from one starting point</h2></div>
                 <button onClick={() => setView("connections")} className="hidden items-center gap-2 text-sm font-semibold text-slate-600 hover:text-slate-950 sm:flex"><Settings2 size={16} /> Manage connections</button>
               </div>
-              <div className="grid gap-5 lg:grid-cols-3">
-                {(["tiquet","ffpro","academy"] as const).map(product => <div key={product}><ProductCard product={product} result={dashboard?.products?.[product]} /></div>)}
+              <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
+                {(["tiquet","ffpro","marketing","academy"] as const).map(product => <div key={product}><ProductCard product={product} result={dashboard?.products?.[product]} /></div>)}
               </div>
             </section>
 
@@ -531,7 +568,7 @@ export default function App() {
               </div>
               <div className="rounded-3xl border border-slate-200 bg-white p-6">
                 <div className="flex items-center gap-3"><BookOpenCheck className="text-cyan-700" size={21}/><h2 className="font-semibold">What comes next</h2></div>
-                <p className="mt-4 text-sm leading-6 text-slate-500">After these read-only contracts are proven, Phase 2 adds single sign-on, universal organisation IDs and event-driven handoffs such as lead → customer → service → learning.</p>
+                <p className="mt-4 text-sm leading-6 text-slate-500">V79 Marketing now uses Hub-managed access and the shared organisation identity. FFPRO and Tiquet will move to the same launch model as the platform identity layer is standardised.</p>
               </div>
             </section>
           </>
@@ -542,7 +579,7 @@ export default function App() {
 
       <footer className="mx-auto flex max-w-7xl flex-col gap-2 px-5 pb-8 pt-2 text-xs text-slate-400 sm:flex-row sm:items-center sm:justify-between lg:px-8">
         <span>V79 Digital · secure business technology platform</span>
-        <span className="inline-flex items-center gap-1"><ShieldCheck size={13}/> Phase 1 connections are read-only</span>
+        <span className="inline-flex items-center gap-1"><ShieldCheck size={13}/> Hub-managed identity, entitlements and signed product connections</span>
       </footer>
     </div>
   );
