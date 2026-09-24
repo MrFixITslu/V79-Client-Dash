@@ -1,8 +1,8 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Activity, AlertTriangle, ArrowUpRight, BookOpenCheck, Building2, CheckCircle2, CircleDollarSign,
-  GraduationCap, Headphones, Lightbulb, Link2, LogOut, Megaphone, RefreshCw, Settings2,
-  ShieldCheck, Sparkles, TicketCheck, Unplug, Users
+  Activity, AlertTriangle, ArrowUpRight, Building2, CheckCircle2, CircleDollarSign,
+  GraduationCap, Headphones, Lightbulb, LogOut, Megaphone, RefreshCw, Settings2,
+  ShieldCheck, Sparkles, TicketCheck, Users
 } from "lucide-react";
 
 type Session = {
@@ -88,36 +88,39 @@ const productMeta = {
     eyebrow: "Operations",
     description: "Customers, jobs, service delivery and team activity.",
     icon: TicketCheck,
-    subjectHelp: "Tiquet account/workspace ID",
   },
   ffpro: {
     label: "FFPRO",
     eyebrow: "Financial intelligence",
     description: "Cash flow, budgets, financial goals and business visibility.",
     icon: CircleDollarSign,
-    subjectHelp: "FFPRO user ID",
   },
   academy: {
     label: "V79 Academy",
     eyebrow: "Learning & capability",
     description: "Public training stays independent; businesses can link learner progress to their Hub.",
     icon: GraduationCap,
-    subjectHelp: "Academy learner ID or email",
   },
   marketing: {
     label: "V79 Marketing",
     eyebrow: "Growth engine",
     description: "Campaigns, customer pipeline, content, brand intelligence and marketing analytics.",
     icon: Megaphone,
-    subjectHelp: "Managed automatically by V79 Hub",
   },
 } as const;
 
 function formatNumber(value: unknown) {
+  if (value === null || value === undefined || value === "") return "—";
   const number = Number(value);
   return Number.isFinite(number)
     ? new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(number)
     : "—";
+}
+
+function formatMoney(value: unknown) {
+  if (value === null || value === undefined || value === "") return "—";
+  const number = Number(value);
+  return Number.isFinite(number) ? new Intl.NumberFormat("en-LC", { style: "currency", currency: "XCD" }).format(number) : "—";
 }
 
 function statusLabel(status?: string) {
@@ -432,7 +435,7 @@ function ResetPassword({ token }: { token:string }) {
   </main>;
 }
 
-function ProductCard({ product, result }: { product: Integration["product"]; result?: ProductResult }) {
+function ProductCard({ product, result, role, onNavigate }: { product: Integration["product"]; result?: ProductResult; role: string; onNavigate: (view: "connections" | "team" | "billing") => void }) {
   const meta = productMeta[product];
   const Icon = meta.icon;
   const summary = result?.summary;
@@ -445,9 +448,9 @@ function ProductCard({ product, result }: { product: Integration["product"]; res
       ["Team", formatNumber(metrics.teamMembers)],
     ];
     if (product === "ffpro") return [
-      ["Month income", formatNumber(metrics.currentMonthIncome)],
-      ["Month expenses", formatNumber(metrics.currentMonthExpenses)],
-      ["Month net", formatNumber(metrics.currentMonthNet)],
+      ["Month income", formatMoney(metrics.currentMonthIncome)],
+      ["Month expenses", formatMoney(metrics.currentMonthExpenses)],
+      ["Income less expenses", formatMoney(metrics.currentMonthNet)],
     ];
     if (product === "marketing") return [
       ["Customers", formatNumber(metrics.customers)],
@@ -480,23 +483,24 @@ function ProductCard({ product, result }: { product: Integration["product"]; res
         }`}>{statusLabel(result?.status)}</span>
       </div>
       <p className="mt-5 min-h-12 text-sm leading-6 text-slate-500">{meta.description}</p>
-      <div className="mt-6 grid grid-cols-3 gap-2">
+      {(result?.status === "connected" || result?.status === "degraded") && <div className="mt-6 grid grid-cols-3 gap-2">
         {highlights.map(([label, value]) => (
           <div key={label} className="rounded-2xl bg-slate-50 p-3">
             <div className="truncate text-xs text-slate-400">{label}</div>
             <div className="mt-1 truncate text-lg font-semibold text-slate-900">{value}</div>
           </div>
         ))}
-      </div>
+      </div>}
       {result?.error && <p className="mt-4 text-xs text-amber-700">{result.error}</p>}
       <div className="mt-6 flex items-center justify-between border-t border-slate-100 pt-5">
-        <span className="text-xs text-slate-400">{summary?.generatedAt ? `Updated ${new Date(summary.generatedAt).toLocaleString()}` : "Connect to show live indicators"}</span>
+        <span className="text-xs text-slate-500">{result?.status === "degraded" ? "Last verified snapshot" : summary?.generatedAt ? `Updated ${new Date(summary.generatedAt).toLocaleString()}` : ""}</span>
         {result?.openUrl && result?.entitled !== false && result?.accessible !== false ? (
           <a href={result.openUrl} target={["ffpro","tiquet","marketing"].includes(product) ? "_self" : "_blank"} rel="noreferrer" className="inline-flex items-center gap-1 text-sm font-semibold text-slate-800 hover:text-cyan-700">
             Open <ArrowUpRight size={15} />
           </a>
-        ) : result?.entitled === false ? <span className="text-xs font-semibold text-amber-700">Plan upgrade required</span>
-          : result?.accessible === false ? <span className="text-xs font-semibold text-slate-500">Ask your Hub admin for access</span> : null}
+        ) : result?.entitled === false ? role === "owner" ? <button type="button" onClick={() => onNavigate("billing")} className="text-sm font-semibold text-amber-700">View plan</button> : <span className="text-xs text-amber-700">Ask the owner about plans</span>
+          : result?.accessible === false ? ["owner","admin"].includes(role) ? <button type="button" onClick={() => onNavigate("team")} className="text-sm font-semibold text-slate-700">View team access</button> : <span className="text-xs text-slate-600">Ask your Hub admin for access</span>
+          : null}
       </div>
     </article>
   );
@@ -672,53 +676,15 @@ function SecurityView({session}:{session:Session}) {
   </section>;
 }
 
-function Connections({ integrations, onChanged }: { integrations: Integration[]; onChanged: () => Promise<void> }) {
-  const [values, setValues] = useState<Record<string, string>>({});
-  const [message, setMessage] = useState("");
-  const [busy, setBusy] = useState("");
-
-  useEffect(() => {
-    setValues(Object.fromEntries(integrations.map(item => [item.product, item.externalSubjectId || ""])));
-  }, [integrations]);
-
-  async function save(product: Integration["product"]) {
-    setBusy(product); setMessage("");
-    try {
-      const response = await fetch(`/api/integrations/${product}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ externalSubjectId: values[product] || "" }),
-      });
-      const body = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(body.error || "Could not save the connection.");
-      setMessage(`${productMeta[product].label} connected.`);
-      await onChanged();
-    } catch (err: any) {
-      setMessage(err.message || "Could not save the connection.");
-    } finally { setBusy(""); }
-  }
-
-  async function disconnect(product: Integration["product"]) {
-    setBusy(product); setMessage("");
-    try {
-      const response = await fetch(`/api/integrations/${product}`, { method: "DELETE" });
-      if (!response.ok) throw new Error("Could not disconnect the product.");
-      setMessage(`${productMeta[product].label} disconnected.`);
-      await onChanged();
-    } catch (err: any) {
-      setMessage(err.message || "Could not disconnect the product.");
-    } finally { setBusy(""); }
-  }
-
+function Connections({ integrations }: { integrations: Integration[] }) {
   return (
     <section>
       <div className="mb-6">
         <h2 className="text-2xl font-semibold tracking-tight text-slate-950">Product connections</h2>
         <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
-          Link this organisation to the matching account in each V79 product. Phase 1 is read-only: the Hub can request aggregate indicators, but it cannot edit finance, jobs or Academy records.
+          Business apps use your Hub organisation identity. Academy learning remains public and uses each member’s own verified email. Open an app to finish its setup.
         </p>
       </div>
-      {message && <div role="status" className="mb-5 rounded-xl border border-cyan-200 bg-cyan-50 px-4 py-3 text-sm text-cyan-900">{message}</div>}
       <div className="space-y-4">
         {integrations.map(item => {
           const meta = productMeta[item.product];
@@ -728,28 +694,10 @@ function Connections({ integrations, onChanged }: { integrations: Integration[];
               <div className="grid gap-4 lg:grid-cols-[1fr_1.5fr_auto] lg:items-end">
                 <div className="flex items-center gap-3">
                   <div className="rounded-xl bg-slate-950 p-2.5 text-cyan-300"><Icon size={20} /></div>
-                  <div><div className="font-semibold text-slate-950">{meta.label}</div><div className="text-xs text-slate-400">{item.linked ? "Linked to this organisation" : "Not linked"}</div></div>
+                  <div><div className="font-semibold text-slate-950">{meta.label}</div><div className="text-xs text-slate-500">{item.product === "academy" ? "Personal learning by verified email" : item.entitled === false ? "Not included in this plan" : item.linked ? "Managed by V79 Hub" : "Waiting for subscription"}</div></div>
                 </div>
-                <label className="text-sm font-medium text-slate-700">
-                  {meta.subjectHelp}
-                  <input
-                    value={values[item.product] || ""}
-                    onChange={e => setValues(old => ({ ...old, [item.product]: e.target.value }))}
-                    placeholder={meta.subjectHelp}
-                    disabled={item.managedByHub}
-                    className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 outline-none ring-cyan-300 focus:ring-2 disabled:cursor-not-allowed disabled:text-slate-400"
-                  />
-                </label>
-                <div className="flex gap-2">
-                  {!item.managedByHub && <button disabled={busy === item.product} onClick={() => save(item.product)} className="rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50">
-                    {busy === item.product ? "Saving…" : "Save"}
-                  </button>}
-                  {item.linked && !item.managedByHub && (
-                    <button disabled={busy === item.product} aria-label={`Disconnect ${meta.label}`} onClick={() => disconnect(item.product)} className="rounded-xl border border-slate-200 px-3 py-2.5 text-slate-500 hover:bg-slate-50">
-                      <Unplug size={18} />
-                    </button>
-                  )}
-                </div>
+                <p className="text-sm text-slate-600">{meta.description}</p>
+                <div>{item.openUrl && item.accessible !== false && <a href={item.openUrl} className="inline-flex items-center gap-1 text-sm font-semibold text-cyan-800">Open app <ArrowUpRight size={15}/></a>}</div>
               </div>
             </div>
           );
@@ -1054,9 +1002,9 @@ function ActionCentre({ dashboard }: { dashboard: DashboardPayload | null }) {
     const mk:any = dashboard.products?.marketing?.summary?.metrics || {};
     const ac:any = dashboard.products?.academy?.summary?.metrics || {};
 
-    if (dashboard.products?.ffpro?.status === "connected" && Number.isFinite(Number(ff.currentMonthNet))) {
-      if (Number(ff.currentMonthNet) < 0) result.push({title:"Review this month's cash position",detail:"FFPRO shows expenses above income for the current month. Review the drivers before committing new spend.",product:"ffpro",priority:"attention"});
-      else result.push({title:"Cash position is positive",detail:"Current-month FFPRO net is positive. Check the forecast before deciding how much is available to reinvest.",product:"ffpro",priority:"good"});
+    if (dashboard.products?.ffpro?.status === "connected" && ff.currentMonthNet != null && Number.isFinite(Number(ff.currentMonthNet))) {
+      if (Number(ff.currentMonthNet) < 0) result.push({title:"Review this month's income and expenses",detail:"FFPRO shows expenses above income for this month. Check the underlying transactions and forecast.",product:"ffpro",priority:"attention"});
+      else result.push({title:"Income exceeds expenses this month",detail:"This month's recorded income exceeds expenses. Check balances and the forecast before deciding what is available to spend.",product:"ffpro",priority:"good"});
     }
     if (dashboard.products?.tiquet?.status === "connected") {
       const openJobs = Object.entries(tq.jobsByStatus || {}).filter(([status]) => !["paid","completed","closed"].includes(String(status).toLowerCase())).reduce((sum,[,value])=>sum+Number(value||0),0);
@@ -1141,12 +1089,32 @@ function BusinessTimeline({ events }: { events: DashboardPayload["events"] }) {
   );
 }
 
+function GettingStarted({ dashboard, role, onNavigate }: { dashboard: DashboardPayload; role: string; onNavigate: (view: "connections" | "team" | "billing") => void }) {
+  if (role !== "owner") return null;
+  const steps = [
+    { complete: Boolean(dashboard.subscription && ["trialing", "active"].includes(dashboard.subscription.status)), title: "Activate your workspace", detail: "Review your trial or subscription status.", action: () => onNavigate("billing"), label: "View plan" },
+    { complete: dashboard.products?.tiquet?.status === "connected", title: "Open V79 Tiquet", detail: dashboard.products?.tiquet?.status === "not_configured" ? "This app needs service configuration before it can be opened." : "Open the app to initialise and use your service workspace.", action: () => window.location.assign("/api/apps/tiquet/launch"), label: "Open Tiquet", available: dashboard.products?.tiquet?.status !== "not_configured" },
+    { complete: (dashboard.seats?.members ?? 0) > 1, title: "Invite your team", detail: "Give staff access to the apps they need.", action: () => onNavigate("team"), label: "Manage team" },
+  ];
+  const remaining = steps.filter(step => !step.complete);
+  if (!remaining.length) return null;
+  return <section className="mt-8 rounded-3xl border border-cyan-200 bg-cyan-50 p-6" aria-labelledby="getting-started-title">
+    <div className="flex flex-wrap items-center justify-between gap-2"><h2 id="getting-started-title" className="text-lg font-semibold">Finish setting up your workspace</h2><span className="text-sm text-cyan-900">{steps.length - remaining.length} of {steps.length} complete</span></div>
+    <div className="mt-4 grid gap-3 md:grid-cols-3">{steps.map(step => <div key={step.title} className="rounded-2xl bg-white p-4">
+      <div className="flex items-center gap-2 font-medium">{step.complete ? <CheckCircle2 size={18} className="text-emerald-700"/> : <Activity size={18} className="text-cyan-800"/>}{step.title}</div>
+      <p className="mt-2 text-sm text-slate-600">{step.detail}</p>
+      {!step.complete && (!("available" in step) || step.available) && <button type="button" onClick={step.action} className="mt-3 text-sm font-semibold text-cyan-900 underline underline-offset-4">{step.label}</button>}
+    </div>)}</div>
+  </section>;
+}
+
 export default function App() {
   const [session, setSession] = useState<Session | null | undefined>(undefined);
   const [dashboard, setDashboard] = useState<DashboardPayload | null>(null);
   const [integrations, setIntegrations] = useState<Integration[]>([]);
   const [view, setView] = useState<"overview" | "connections" | "team" | "billing" | "security">("overview");
   const [refreshing, setRefreshing] = useState(false);
+  const [loadError, setLoadError] = useState("");
   const [notice, setNotice] = useState("");
   const returnTarget = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("return") : null;
   const inviteToken = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("invite") : null;
@@ -1165,8 +1133,13 @@ export default function App() {
       if (dashRes.status === 401 || integrationRes.status === 401) {
         setSession(null); return;
       }
-      if (dashRes.ok) setDashboard(await dashRes.json());
-      if (integrationRes.ok) setIntegrations(await integrationRes.json());
+      if (!dashRes.ok || !integrationRes.ok) throw new Error("We could not load the latest workspace information. Please try again.");
+      const [nextDashboard, nextIntegrations] = await Promise.all([dashRes.json(), integrationRes.json()]);
+      setDashboard(nextDashboard);
+      setIntegrations(nextIntegrations);
+      setLoadError("");
+    } catch {
+      setLoadError("We could not load the latest workspace information. Please try again.");
     } finally { setRefreshing(false); }
   }, []);
 
@@ -1224,6 +1197,8 @@ export default function App() {
   if (!session) return <Login onLogin={setSession} />;
 
   const connected = Object.values(dashboard?.products || {}).filter((item: any) => item.status === "connected").length;
+  const entitled = (["tiquet", "ffpro", "marketing"] as const).filter(product => dashboard?.products?.[product]?.entitled).length;
+  const navigate = (next: "connections" | "team" | "billing") => setView(next);
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
@@ -1248,6 +1223,7 @@ export default function App() {
       </header>
 
       <main className="mx-auto max-w-7xl px-5 py-8 lg:px-8 lg:py-10">
+        {loadError && <div role="alert" className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-900"><span>{loadError}{dashboard ? " Showing the last loaded information." : ""}</span><button type="button" onClick={loadAll} disabled={refreshing} className="font-semibold underline disabled:opacity-50">Retry</button></div>}
         {notice && (
           <div role="status" className="mb-6 flex items-start justify-between gap-4 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-900">
             <span>{notice}</span>
@@ -1262,7 +1238,7 @@ export default function App() {
           {session.organization.role==="owner" && <button onClick={() => setView("billing")} className={`rounded-xl px-4 py-2 text-sm font-medium ${view === "billing" ? "bg-slate-950 text-white" : "bg-white"}`}>Billing</button>}
         </div>
 
-        {view === "overview" ? (
+        {view === "overview" && !dashboard && refreshing ? <div role="status" className="rounded-2xl bg-white p-8 text-slate-600">Loading your workspace…</div> : view === "overview" && !dashboard ? <div className="rounded-2xl bg-white p-8 text-slate-600">Your workspace is unavailable. Use Retry above to load it.</div> : view === "overview" ? (
           <>
             <section className="relative overflow-hidden rounded-3xl bg-slate-950 px-6 py-8 text-white sm:px-8 lg:px-10 lg:py-10">
               <div className="absolute -right-16 -top-28 h-72 w-72 rounded-full bg-cyan-300/10 blur-3xl" />
@@ -1275,11 +1251,13 @@ export default function App() {
                   </p>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
-                  <div className="rounded-2xl border border-white/10 bg-white/[0.05] px-5 py-4"><div className="text-2xl font-semibold">{connected}/4</div><div className="text-xs text-slate-400">Apps connected</div></div>
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.05] px-5 py-4"><div className="text-2xl font-semibold">{connected}/{entitled}</div><div className="text-xs text-slate-400">Live subscribed apps</div></div>
                   <div className="rounded-2xl border border-white/10 bg-white/[0.05] px-5 py-4"><div className="text-2xl font-semibold capitalize">{dashboard?.subscription?.plan || "—"}</div><div className="text-xs text-slate-400">{dashboard?.subscription?.status === "trialing" && dashboard.subscription.trialEndsAt ? `Trial to ${new Date(dashboard.subscription.trialEndsAt).toLocaleDateString()}` : dashboard?.subscription?.status ? `${dashboard.subscription.status} plan` : "Subscription"}</div></div>
                 </div>
               </div>
             </section>
+
+            {dashboard && <GettingStarted dashboard={dashboard} role={session.organization.role} onNavigate={navigate} />}
 
             <section className="mt-8">
               <div className="mb-5 flex items-end justify-between gap-4">
@@ -1287,28 +1265,16 @@ export default function App() {
                 {["owner","admin"].includes(session.organization.role) && <button onClick={() => setView("connections")} className="hidden items-center gap-2 text-sm font-semibold text-slate-600 hover:text-slate-950 sm:flex"><Settings2 size={16} /> Manage connections</button>}
               </div>
               <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
-                {(["tiquet","ffpro","marketing","academy"] as const).map(product => <div key={product}><ProductCard product={product} result={dashboard?.products?.[product]} /></div>)}
+                {(["tiquet","ffpro","marketing","academy"] as const).map(product => <div key={product}><ProductCard product={product} result={dashboard?.products?.[product]} role={session.organization.role} onNavigate={navigate} /></div>)}
               </div>
             </section>
 
             <ActionCentre dashboard={dashboard} />
             <BusinessTimeline events={dashboard?.events || []} />
 
-            <section className="mt-8 grid gap-5 lg:grid-cols-[1.2fr_.8fr]">
-              <div className="rounded-3xl border border-slate-200 bg-white p-6">
-                <div className="flex items-center gap-3"><div className="rounded-xl bg-cyan-50 p-2.5 text-cyan-700"><Link2 size={20}/></div><div><h2 className="font-semibold">Connected by design</h2><p className="text-sm text-slate-500">Each app stays independent while the Hub provides the shared business context.</p></div></div>
-                <div className="mt-6 grid gap-3 sm:grid-cols-3">
-                  {[["Website","Lead & acquisition"],["V79 Hub","Identity & visibility"],["V79 Apps","Specialist workflows"]].map(([title,text]) => <div key={title} className="rounded-2xl bg-slate-50 p-4"><div className="font-medium">{title}</div><div className="mt-1 text-xs text-slate-400">{text}</div></div>)}
-                </div>
-              </div>
-              <div className="rounded-3xl border border-slate-200 bg-white p-6">
-                <div className="flex items-center gap-3"><BookOpenCheck className="text-cyan-700" size={21}/><h2 className="font-semibold">What comes next</h2></div>
-                <p className="mt-4 text-sm leading-6 text-slate-500">Hub now manages access to Tiquet, FFPRO and Marketing. Use Team to assign operational and marketing access while finance remains owner-only.</p>
-              </div>
-            </section>
           </>
         ) : view === "connections" ? (
-          <Connections integrations={integrations} onChanged={async () => { await loadAll(); }} />
+          <Connections integrations={integrations} />
         ) : view === "team" ? (
           <TeamAccess session={session} />
         ) : view === "billing" ? (

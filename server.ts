@@ -773,9 +773,9 @@ function memberProducts(userId: string, organizationId: string) {
 }
 
 function memberCanAccessProduct(userId: string, organizationId: string, role: string, product: string) {
-  // Academy learner accounts remain independent of Hub. A linked learner summary
-  // is business administration data, so only the Hub owner/admin can see it.
-  if (product === "academy") return ["owner","admin"].includes(role);
+  // Academy remains public. Hub can request only the signed-in member's own
+  // verified email, never an arbitrary learner ID attached by an administrator.
+  if (product === "academy") return true;
   if (!productEntitled(organizationId, product)) return false;
   if (role === "owner") return true;
   if (product === "ffpro") return false;
@@ -1965,35 +1965,24 @@ app.get("/api/integrations", requireAuth, (req,res)=>{
     return {
       product,
       name:productConfig[product].name,
-      linked:Boolean(byProduct[product]?.enabled),
-      externalSubjectId:isAdministrator ? (byProduct[product]?.externalSubjectId || "") : "",
+      linked:product === "academy" ? Boolean(productConfig.academy.url) : Boolean(byProduct[product]?.enabled),
+      externalSubjectId:product === "academy" ? "" : isAdministrator ? (byProduct[product]?.externalSubjectId || "") : "",
       openUrl:accessible ? (productConfig[product].openUrl || "") : "",
       entitled:productEntitled(m.organizationId,product),
       accessible,
-      managedByHub:["ffpro","tiquet","marketing"].includes(product),
+      managedByHub:true,
       updatedAt:isAdministrator ? (byProduct[product]?.updatedAt || null) : null,
     };
   }));
 });
 app.put("/api/integrations/:product", requireAuth, requireAdmin, (req,res)=>{
   const product=req.params.product as Product;
-  if(["ffpro","tiquet","marketing"].includes(product)) return res.status(409).json({error:`${productConfig[product].name} is linked automatically by V79 Hub identity.`});
   if(!(product in productConfig)) return res.status(404).json({error:"Unknown V79 product."});
-  const externalSubjectId=clean(req.body?.externalSubjectId);
-  if(!/^[A-Za-z0-9._:@-]{1,180}$/.test(externalSubjectId)) return res.status(400).json({error:"Enter a valid product account identifier."});
-  const m=(req as any).hubMembership, now=new Date().toISOString();
-  db.prepare(`INSERT INTO integrations(organization_id,product,external_subject_id,enabled,updated_at)
-    VALUES(?,?,?,?,?) ON CONFLICT(organization_id,product) DO UPDATE SET external_subject_id=excluded.external_subject_id,enabled=1,updated_at=excluded.updated_at`)
-    .run(m.organizationId,product,externalSubjectId,1,now);
-  recordAudit(req,"integration.connected",{organizationId:m.organizationId,actorUserId:(req as any).hubUser?.id,targetType:"product",targetId:product});
-  res.json({success:true});
+  return res.status(409).json({error:`${productConfig[product].name} is linked automatically by V79 Hub identity.`});
 });
 app.delete("/api/integrations/:product", requireAuth, requireAdmin, (req,res)=>{
-  if(["ffpro","tiquet","marketing"].includes(req.params.product)) return res.status(409).json({error:"This V79 app connection is managed by the Hub subscription and identity."});
-  const m=(req as any).hubMembership;
-  db.prepare("DELETE FROM integrations WHERE organization_id=? AND product=?").run(m.organizationId,req.params.product);
-  recordAudit(req,"integration.disconnected",{organizationId:m.organizationId,actorUserId:(req as any).hubUser?.id,targetType:"product",targetId:req.params.product});
-  res.json({success:true});
+  if(!(req.params.product in productConfig)) return res.status(404).json({error:"Unknown V79 product."});
+  return res.status(409).json({error:"This V79 app connection is managed by the Hub subscription and identity."});
 });
 app.get("/api/platform/dashboard", requireAuth, async (req,res)=>{
   const m=(req as any).hubMembership;
@@ -2003,7 +1992,7 @@ app.get("/api/platform/dashboard", requireAuth, async (req,res)=>{
   const products:any={};
   const dashboardUser=(req as any).hubUser;
   await Promise.all((Object.keys(productConfig) as Product[]).map(async product=>{
-    const subject=integrations[product];
+    const subject=product === "academy" ? dashboardUser.email : integrations[product];
     const accessible=memberCanAccessProduct(dashboardUser.id,m.organizationId,m.role,product);
     products[product]=accessible
       ? (subject ? await fetchSummary(product,subject) : {status:"unlinked"})
@@ -2015,6 +2004,9 @@ app.get("/api/platform/dashboard", requireAuth, async (req,res)=>{
   }));
   const events=(db.prepare("SELECT id,type,source,occurred_at AS occurredAt,payload_json AS payloadJson FROM events WHERE organization_id=? ORDER BY occurred_at DESC LIMIT 50").all(m.organizationId) as any[])
     .filter((event:any)=>{
+      // Historic organisation-level Academy mappings cannot establish consent
+      // for a particular learner. Keep those events out of the shared timeline.
+      if (event.source === "academy") return false;
       const eventProduct=EVENT_SOURCE_PRODUCTS[event.source];
       return !eventProduct || memberCanAccessProduct(dashboardUser.id,m.organizationId,m.role,eventProduct);
     })
