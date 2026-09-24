@@ -860,12 +860,14 @@ export default function App() {
               </div>
               <div className="rounded-3xl border border-slate-200 bg-white p-6">
                 <div className="flex items-center gap-3"><BookOpenCheck className="text-cyan-700" size={21}/><h2 className="font-semibold">What comes next</h2></div>
-                <p className="mt-4 text-sm leading-6 text-slate-500">V79 Marketing now uses Hub-managed access and the shared organisation identity. FFPRO and Tiquet will move to the same launch model as the platform identity layer is standardised.</p>
+                <p className="mt-4 text-sm leading-6 text-slate-500">Hub now manages access to Tiquet, FFPRO and Marketing. Use Team to assign operational and marketing access while finance remains owner-only.</p>
               </div>
             </section>
           </>
-        ) : (
+        ) : view === "connections" ? (
           <Connections integrations={integrations} onChanged={async () => { await loadAll(); }} />
+        ) : (
+          <TeamAccess session={session} />
         )}
       </main>
 
