@@ -1,0 +1,17 @@
+.git
+.github
+.env
+.env.*
+!.env.example
+data
+backups
+uploads
+.incoming.*
+.deployed_sha
+node_modules
+dist
+coverage
+*.db
+*.db-*
+*.log
+*.tar.gz
