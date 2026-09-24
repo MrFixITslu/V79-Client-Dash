@@ -25,7 +25,7 @@ type Integration = {
 type ProductResult = {
   name: string;
   openUrl: string;
-  status: "connected" | "ready" | "unlinked" | "offline" | "error" | "not_configured" | "restricted";
+  status: "connected" | "degraded" | "ready" | "unlinked" | "offline" | "error" | "not_configured" | "restricted";
   summary?: any;
   error?: string;
   entitled?: boolean;
@@ -123,6 +123,7 @@ function formatNumber(value: unknown) {
 function statusLabel(status?: string) {
   switch (status) {
     case "connected": return "Connected";
+    case "degraded": return "Live data delayed";
     case "ready": return "Ready to activate";
     case "unlinked": return "Not linked";
     case "offline": return "Offline";
@@ -134,7 +135,9 @@ function statusLabel(status?: string) {
 }
 
 function Login({ onLogin }: { onLogin: (session: Session) => void }) {
-  const [mode, setMode] = useState<"login"|"register"|"forgot"|"verify">("login");
+  const [mode, setMode] = useState<"login"|"register"|"forgot"|"verify"|"mfa">("login");
+  const [challengeToken, setChallengeToken] = useState("");
+  const [mfaCode, setMfaCode] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
@@ -157,10 +160,12 @@ function Login({ onLogin }: { onLogin: (session: Session) => void }) {
         mode==="login" ? "/api/auth/login" :
         mode==="register" ? "/api/auth/register" :
         mode==="forgot" ? "/api/auth/forgot-password" :
-        "/api/auth/resend-verification";
+        mode==="verify" ? "/api/auth/resend-verification" :
+        "/api/auth/mfa/verify";
       const payload =
         mode==="login" ? {email,password} :
         mode==="register" ? {email,password,name,organizationName,plan} :
+        mode==="mfa" ? {challengeToken,code:mfaCode} :
         {email};
       const response=await fetch(endpoint,{
         method:"POST",
@@ -169,6 +174,14 @@ function Login({ onLogin }: { onLogin: (session: Session) => void }) {
       });
       const body=await response.json().catch(()=>({}));
 
+      if(mode==="login" && response.status===202 && body.mfaRequired) {
+        setChallengeToken(body.challengeToken || "");
+        setMfaCode("");
+        setPassword("");
+        setMode("mfa");
+        setMessage(body.message || "Enter your authenticator or recovery code.");
+        return;
+      }
       if(mode==="login" && response.status===403 && body.code==="EMAIL_VERIFICATION_REQUIRED") {
         setMode("verify");
         setMessage("Verify your email before signing in. You can resend the verification message below.");
@@ -176,7 +189,7 @@ function Login({ onLogin }: { onLogin: (session: Session) => void }) {
       }
       if(!response.ok) throw new Error(body.error || "Request failed.");
 
-      if(mode==="login") {
+      if(mode==="login" || mode==="mfa") {
         onLogin(body);
       } else if(mode==="register") {
         setMode("verify");
@@ -203,12 +216,14 @@ function Login({ onLogin }: { onLogin: (session: Session) => void }) {
     mode==="login" ? "Welcome back" :
     mode==="register" ? "Start your V79 workspace" :
     mode==="forgot" ? "Reset your password" :
-    "Verify your email";
+    mode==="verify" ? "Verify your email" :
+    "Confirm it’s you";
   const help =
     mode==="login" ? "Sign in with your verified V79 Hub credentials." :
     mode==="register" ? `Verify your email first; then your ${planData?.trialDays ?? 14}-day trial begins.` :
     mode==="forgot" ? "Enter your email. If it belongs to a verified Hub account, we will send a 30-minute reset link." :
-    "Enter the account email to send a fresh 24-hour verification link.";
+    mode==="verify" ? "Enter the account email to send a fresh 24-hour verification link." :
+    "Enter the six-digit code from your authenticator app, or use one of your one-time recovery codes.";
 
   return (
     <main className="min-h-screen bg-slate-950 text-white">
@@ -280,16 +295,22 @@ function Login({ onLogin }: { onLogin: (session: Session) => void }) {
               </>
             )}
 
-            <label className={(mode==="register" ? "mt-5 " : "") + "block text-sm font-medium text-slate-200"}>
+            {mode!=="mfa" && <label className={(mode==="register" ? "mt-5 " : "") + "block text-sm font-medium text-slate-200"}>
               Email
               <input autoComplete="email" type="email" required value={email} onChange={e=>setEmail(e.target.value)} className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900/80 px-4 py-3 outline-none ring-cyan-300 transition focus:ring-2"/>
-            </label>
+            </label>}
 
             {(mode==="login"||mode==="register") && (
               <label className="mt-5 block text-sm font-medium text-slate-200">
                 Password
                 <input autoComplete={mode==="login"?"current-password":"new-password"} type="password" required minLength={mode==="register"?16:1} value={password} onChange={e=>setPassword(e.target.value)} className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900/80 px-4 py-3 outline-none ring-cyan-300 transition focus:ring-2"/>
                 {mode==="register" && <span className="mt-1 block text-[11px] text-slate-500">Use at least 16 characters.</span>}
+              </label>
+            )}
+            {mode==="mfa" && (
+              <label className="block text-sm font-medium text-slate-200">
+                Authenticator or recovery code
+                <input autoFocus autoComplete="one-time-code" required value={mfaCode} onChange={e=>setMfaCode(e.target.value)} placeholder="123456 or XXXX-XXXX-XXXX" className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900/80 px-4 py-3 font-mono tracking-wider outline-none ring-cyan-300 transition focus:ring-2"/>
               </label>
             )}
 
@@ -301,7 +322,8 @@ function Login({ onLogin }: { onLogin: (session: Session) => void }) {
                 mode==="login" ? "Sign in to V79 Hub" :
                 mode==="register" ? "Create workspace & verify email" :
                 mode==="forgot" ? "Send password reset" :
-                "Resend verification email"}
+                mode==="verify" ? "Resend verification email" :
+                "Verify & sign in"}
             </button>
 
             {mode==="login" && (
@@ -310,8 +332,8 @@ function Login({ onLogin }: { onLogin: (session: Session) => void }) {
                 <button type="button" onClick={()=>{setMode("verify");setError("");setMessage("");}} className="text-slate-400 hover:text-slate-300">Resend verification</button>
               </div>
             )}
-            {(mode==="forgot"||mode==="verify") && (
-              <button type="button" onClick={()=>{setMode("login");setError("");setMessage("");}} className="mt-4 w-full text-center text-xs text-slate-400 hover:text-slate-300">Back to sign in</button>
+            {(mode==="forgot"||mode==="verify"||mode==="mfa") && (
+              <button type="button" onClick={()=>{setMode("login");setChallengeToken("");setMfaCode("");setError("");setMessage("");}} className="mt-4 w-full text-center text-xs text-slate-400 hover:text-slate-300">Back to sign in</button>
             )}
             {mode==="register" && <p className="mt-4 text-center text-[11px] leading-5 text-slate-500">Your trial starts only after email verification. No payment is taken by this form.</p>}
           </form>
@@ -481,49 +503,173 @@ function ProductCard({ product, result }: { product: Integration["product"]; res
 }
 
 function SecurityPanel() {
-  const [currentPassword, setCurrentPassword] = useState("");
-  const [newPassword, setNewPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-  const [message, setMessage] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [status,setStatus]=useState<any>(null);
+  const [currentPassword,setCurrentPassword]=useState("");
+  const [newPassword,setNewPassword]=useState("");
+  const [confirmPassword,setConfirmPassword]=useState("");
+  const [setupPassword,setSetupPassword]=useState("");
+  const [setup,setSetup]=useState<any>(null);
+  const [setupCode,setSetupCode]=useState("");
+  const [disablePassword,setDisablePassword]=useState("");
+  const [disableCode,setDisableCode]=useState("");
+  const [recoveryCodes,setRecoveryCodes]=useState<string[]>([]);
+  const [message,setMessage]=useState("");
+  const [busy,setBusy]=useState("");
 
-  async function submit(event: FormEvent) {
+  const load=useCallback(async()=>{
+    const response=await fetch("/api/auth/mfa");
+    const body=await response.json().catch(()=>({}));
+    if(response.ok) setStatus(body);
+  },[]);
+  useEffect(()=>{load();},[load]);
+
+  async function changePassword(event:FormEvent) {
     event.preventDefault();
     setMessage("");
-    if (newPassword !== confirmPassword) return setMessage("The new passwords do not match.");
-    setBusy(true);
+    if(newPassword!==confirmPassword) return setMessage("The new passwords do not match.");
+    setBusy("password");
     try {
-      const response = await fetch("/api/auth/password", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ currentPassword, newPassword }),
-      });
-      const body = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(body.error || "Could not change the password.");
-      setCurrentPassword(""); setNewPassword(""); setConfirmPassword("");
+      const response=await fetch("/api/auth/password",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({currentPassword,newPassword})});
+      const body=await response.json().catch(()=>({}));
+      if(!response.ok) throw new Error(body.error||"Could not change the password.");
+      setCurrentPassword("");setNewPassword("");setConfirmPassword("");
       setMessage("Password updated. Other Hub sessions were signed out.");
-    } catch (err: any) {
-      setMessage(err.message || "Could not change the password.");
-    } finally { setBusy(false); }
+    } catch(error:any) { setMessage(error.message||"Could not change the password."); }
+    finally { setBusy(""); }
   }
 
-  return (
-    <form onSubmit={submit} className="mt-8 rounded-2xl border border-slate-200 bg-white p-5">
+  async function startMfa(event:FormEvent) {
+    event.preventDefault();setBusy("setup");setMessage("");setRecoveryCodes([]);
+    try {
+      const response=await fetch("/api/auth/mfa/setup",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({currentPassword:setupPassword})});
+      const body=await response.json().catch(()=>({}));
+      if(!response.ok) throw new Error(body.error||"Could not start MFA setup.");
+      setSetup(body);setMessage("Authenticator setup created. Add the secret to your authenticator app, then confirm a six-digit code.");
+      await load();
+    } catch(error:any) { setMessage(error.message||"Could not start MFA setup."); }
+    finally { setBusy(""); }
+  }
+
+  async function enableMfa(event:FormEvent) {
+    event.preventDefault();setBusy("enable");setMessage("");
+    try {
+      const response=await fetch("/api/auth/mfa/enable",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({currentPassword:setupPassword,code:setupCode})});
+      const body=await response.json().catch(()=>({}));
+      if(!response.ok) throw new Error(body.error||"Could not enable MFA.");
+      setRecoveryCodes(body.recoveryCodes||[]);setSetup(null);setSetupCode("");setSetupPassword("");
+      setMessage("MFA is enabled. Save the recovery codes below before leaving this page.");
+      await load();
+    } catch(error:any) { setMessage(error.message||"Could not enable MFA."); }
+    finally { setBusy(""); }
+  }
+
+  async function disableMfa(event:FormEvent) {
+    event.preventDefault();setBusy("disable");setMessage("");
+    try {
+      const response=await fetch("/api/auth/mfa/disable",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({currentPassword:disablePassword,code:disableCode})});
+      const body=await response.json().catch(()=>({}));
+      if(!response.ok) throw new Error(body.error||"Could not disable MFA.");
+      setDisablePassword("");setDisableCode("");setRecoveryCodes([]);
+      setMessage("MFA is disabled for this Hub account.");
+      await load();
+    } catch(error:any) { setMessage(error.message||"Could not disable MFA."); }
+    finally { setBusy(""); }
+  }
+
+  return <div className="space-y-6">
+    <form onSubmit={changePassword} className="rounded-2xl border border-slate-200 bg-white p-5">
       <div className="flex items-center gap-3">
         <div className="rounded-xl bg-slate-950 p-2.5 text-cyan-300"><ShieldCheck size={20}/></div>
-        <div><h3 className="font-semibold text-slate-950">Hub security</h3><p className="text-xs text-slate-400">Change your Hub password and sign out your other Hub sessions.</p></div>
+        <div><h3 className="font-semibold text-slate-950">Password & sessions</h3><p className="text-xs text-slate-400">Use a strong unique password. Changing it signs out your other Hub sessions.</p></div>
       </div>
       <div className="mt-5 grid gap-4 lg:grid-cols-3">
         <label className="text-sm font-medium text-slate-700">Current password<input type="password" autoComplete="current-password" value={currentPassword} onChange={e=>setCurrentPassword(e.target.value)} required className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 outline-none ring-cyan-300 focus:ring-2"/></label>
         <label className="text-sm font-medium text-slate-700">New password<input type="password" autoComplete="new-password" minLength={16} value={newPassword} onChange={e=>setNewPassword(e.target.value)} required className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 outline-none ring-cyan-300 focus:ring-2"/></label>
         <label className="text-sm font-medium text-slate-700">Confirm new password<input type="password" autoComplete="new-password" minLength={16} value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} required className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 outline-none ring-cyan-300 focus:ring-2"/></label>
       </div>
-      <div className="mt-4 flex flex-wrap items-center gap-3">
-        <button disabled={busy} className="rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50">{busy ? "Updating…" : "Update password"}</button>
-        {message && <span role="status" className="text-sm text-slate-500">{message}</span>}
-      </div>
+      <button disabled={busy==="password"} className="mt-4 rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50">{busy==="password"?"Updating…":"Update password"}</button>
     </form>
-  );
+
+    <section className="rounded-2xl border border-slate-200 bg-white p-5">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="flex items-center gap-3"><div className="rounded-xl bg-cyan-50 p-2.5 text-cyan-700"><ShieldCheck size={20}/></div><div><h3 className="font-semibold text-slate-950">Multi-factor authentication</h3><p className="text-xs text-slate-400">Protect Hub access with any TOTP authenticator app plus one-time recovery codes.</p></div></div>
+        <span className={"rounded-full px-3 py-1 text-xs font-semibold "+(status?.enabled?"bg-emerald-50 text-emerald-700":"bg-slate-100 text-slate-600")}>{status?.enabled?"Enabled":"Not enabled"}</span>
+      </div>
+
+      {status && !status.configured && <div className="mt-5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">MFA is ready in the application but the server administrator must configure <code>V79_HUB_MFA_KEY</code> before it can be enabled.</div>}
+
+      {!status?.enabled && status?.configured && !setup && <form onSubmit={startMfa} className="mt-5 max-w-xl">
+        <label className="text-sm font-medium text-slate-700">Confirm current password<input type="password" autoComplete="current-password" value={setupPassword} onChange={e=>setSetupPassword(e.target.value)} required className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 outline-none ring-cyan-300 focus:ring-2"/></label>
+        <button disabled={busy==="setup"} className="mt-3 rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50">{busy==="setup"?"Preparing…":"Set up authenticator"}</button>
+      </form>}
+
+      {!status?.enabled && setup && <form onSubmit={enableMfa} className="mt-5">
+        <div className="rounded-2xl bg-slate-950 p-5 text-white">
+          <div className="text-xs font-semibold uppercase tracking-[.16em] text-cyan-300">Authenticator secret</div>
+          <div className="mt-2 break-all font-mono text-lg tracking-wider">{setup.secret}</div>
+          <p className="mt-2 text-xs leading-5 text-slate-400">In your authenticator app, add a time-based account manually and enter this secret. The issuer is V79 Hub.</p>
+          <a href={setup.otpauthUrl} className="mt-3 inline-flex text-xs font-semibold text-cyan-300">Open authenticator link</a>
+        </div>
+        <label className="mt-4 block max-w-sm text-sm font-medium text-slate-700">Six-digit code<input autoComplete="one-time-code" inputMode="numeric" pattern="[0-9]{6}" value={setupCode} onChange={e=>setSetupCode(e.target.value)} required className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 font-mono tracking-widest outline-none ring-cyan-300 focus:ring-2"/></label>
+        <button disabled={busy==="enable"} className="mt-3 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50">{busy==="enable"?"Verifying…":"Verify & enable MFA"}</button>
+      </form>}
+
+      {status?.enabled && <form onSubmit={disableMfa} className="mt-5 max-w-2xl rounded-2xl border border-rose-100 bg-rose-50/50 p-4">
+        <div className="font-medium text-slate-900">Disable MFA</div>
+        <p className="mt-1 text-xs text-slate-500">Confirm your password and a current authenticator or unused recovery code.</p>
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          <input type="password" autoComplete="current-password" placeholder="Current password" value={disablePassword} onChange={e=>setDisablePassword(e.target.value)} required className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm"/>
+          <input placeholder="Authenticator / recovery code" value={disableCode} onChange={e=>setDisableCode(e.target.value)} required className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-mono"/>
+        </div>
+        <button disabled={busy==="disable"} className="mt-3 rounded-xl border border-rose-200 bg-white px-4 py-2.5 text-sm font-semibold text-rose-700 disabled:opacity-50">{busy==="disable"?"Disabling…":"Disable MFA"}</button>
+      </form>}
+
+      {status?.enabled && <p className="mt-4 text-xs text-slate-500">{status.recoveryCodesRemaining} unused recovery code{status.recoveryCodesRemaining===1?"":"s"} remain.</p>}
+
+      {recoveryCodes.length>0 && <div className="mt-5 rounded-2xl border border-amber-200 bg-amber-50 p-5">
+        <div className="font-semibold text-amber-950">Save these recovery codes now</div>
+        <p className="mt-1 text-sm text-amber-800">Each code works once. Store them somewhere separate from your password; they will not be displayed again.</p>
+        <div className="mt-4 grid gap-2 sm:grid-cols-2">{recoveryCodes.map(code=><code key={code} className="rounded-lg bg-white px-3 py-2 text-center font-mono text-sm text-slate-800">{code}</code>)}</div>
+      </div>}
+    </section>
+
+    {message && <div role="status" className="rounded-xl border border-cyan-200 bg-cyan-50 px-4 py-3 text-sm text-cyan-900">{message}</div>}
+  </div>;
+}
+
+function AuditPanel() {
+  const [events,setEvents]=useState<any[]|null>(null);
+  const [message,setMessage]=useState("");
+  const load=useCallback(async()=>{
+    const response=await fetch("/api/audit?limit=80");
+    const body=await response.json().catch(()=>({}));
+    if(!response.ok){setMessage(body.error||"Could not load the audit trail.");return;}
+    setEvents(body);
+  },[]);
+  useEffect(()=>{load();},[load]);
+
+  return <section className="mt-8 rounded-3xl border border-slate-200 bg-white p-6">
+    <div className="flex items-center justify-between gap-4">
+      <div><p className="text-xs font-semibold uppercase tracking-[.16em] text-cyan-700">Accountability</p><h3 className="mt-1 text-xl font-semibold">Security & access audit trail</h3><p className="mt-1 text-sm text-slate-500">Recent sign-ins, security changes, invitations, role changes and app launches for this organisation.</p></div>
+      <button onClick={load} className="rounded-xl border border-slate-200 p-2.5 text-slate-500" aria-label="Refresh audit trail"><RefreshCw size={17}/></button>
+    </div>
+    {message && <div className="mt-4 rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-900">{message}</div>}
+    {!events ? <div className="grid min-h-32 place-items-center"><RefreshCw className="animate-spin text-slate-400"/></div> :
+      events.length===0 ? <div className="mt-5 rounded-2xl bg-slate-50 p-6 text-center text-sm text-slate-500">No audit events recorded yet.</div> :
+      <div className="mt-5 overflow-x-auto"><table className="w-full min-w-[720px] text-left text-sm">
+        <thead><tr className="border-b border-slate-200 text-xs uppercase tracking-wide text-slate-400"><th className="py-3 pr-4">When</th><th className="py-3 pr-4">Event</th><th className="py-3 pr-4">Actor</th><th className="py-3 pr-4">Target</th><th className="py-3">IP fingerprint</th></tr></thead>
+        <tbody>{events.map(event=><tr key={event.id} className="border-b border-slate-100 last:border-0"><td className="py-3 pr-4 text-slate-500">{new Date(event.createdAt).toLocaleString()}</td><td className="py-3 pr-4 font-medium text-slate-900">{String(event.eventType).replaceAll("."," · ")}</td><td className="py-3 pr-4"><div>{event.actorName}</div><div className="text-xs text-slate-400">{event.actorEmail||""}</div></td><td className="py-3 pr-4 text-slate-500">{event.targetType ? `${event.targetType}: ${event.targetId||"—"}` : "—"}</td><td className="py-3 font-mono text-xs text-slate-400">{event.ipFingerprint||"—"}</td></tr>)}</tbody>
+      </table></div>}
+  </section>;
+}
+
+function SecurityView({session}:{session:Session}) {
+  const admin=["owner","admin"].includes(session.organization.role);
+  return <section>
+    <div className="mb-6"><p className="text-xs font-semibold uppercase tracking-[.16em] text-cyan-700">Identity protection</p><h2 className="mt-1 text-2xl font-semibold tracking-tight">Security</h2><p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">Protect your Hub identity and review security-sensitive changes across the workspace.</p></div>
+    <SecurityPanel/>
+    {admin && <AuditPanel/>}
+  </section>;
 }
 
 function Connections({ integrations, onChanged }: { integrations: Integration[]; onChanged: () => Promise<void> }) {
@@ -609,7 +755,6 @@ function Connections({ integrations, onChanged }: { integrations: Integration[];
           );
         })}
       </div>
-      <SecurityPanel />
     </section>
   );
 }
@@ -1000,7 +1145,7 @@ export default function App() {
   const [session, setSession] = useState<Session | null | undefined>(undefined);
   const [dashboard, setDashboard] = useState<DashboardPayload | null>(null);
   const [integrations, setIntegrations] = useState<Integration[]>([]);
-  const [view, setView] = useState<"overview" | "connections" | "team" | "billing">("overview");
+  const [view, setView] = useState<"overview" | "connections" | "team" | "billing" | "security">("overview");
   const [refreshing, setRefreshing] = useState(false);
   const [notice, setNotice] = useState("");
   const returnTarget = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("return") : null;
@@ -1092,6 +1237,7 @@ export default function App() {
             <button onClick={() => setView("overview")} className={`rounded-lg px-4 py-2 text-sm font-medium ${view === "overview" ? "bg-white shadow-sm" : "text-slate-500"}`}>Overview</button>
             {["owner","admin"].includes(session.organization.role) && <button onClick={() => setView("connections")} className={`rounded-lg px-4 py-2 text-sm font-medium ${view === "connections" ? "bg-white shadow-sm" : "text-slate-500"}`}>Connections</button>}
             {["owner","admin"].includes(session.organization.role) && <button onClick={() => setView("team")} className={`rounded-lg px-4 py-2 text-sm font-medium ${view === "team" ? "bg-white shadow-sm" : "text-slate-500"}`}>Team</button>}
+            <button onClick={() => setView("security")} className={`rounded-lg px-4 py-2 text-sm font-medium ${view === "security" ? "bg-white shadow-sm" : "text-slate-500"}`}>Security</button>
             {session.organization.role==="owner" && <button onClick={() => setView("billing")} className={`rounded-lg px-4 py-2 text-sm font-medium ${view === "billing" ? "bg-white shadow-sm" : "text-slate-500"}`}>Billing</button>}
           </nav>
           <div className="flex items-center gap-2">
@@ -1112,6 +1258,7 @@ export default function App() {
           <button onClick={() => setView("overview")} className={`rounded-xl px-4 py-2 text-sm font-medium ${view === "overview" ? "bg-slate-950 text-white" : "bg-white"}`}>Overview</button>
           {["owner","admin"].includes(session.organization.role) && <button onClick={() => setView("connections")} className={`rounded-xl px-4 py-2 text-sm font-medium ${view === "connections" ? "bg-slate-950 text-white" : "bg-white"}`}>Connections</button>}
           {["owner","admin"].includes(session.organization.role) && <button onClick={() => setView("team")} className={`rounded-xl px-4 py-2 text-sm font-medium ${view === "team" ? "bg-slate-950 text-white" : "bg-white"}`}>Team</button>}
+          <button onClick={() => setView("security")} className={`rounded-xl px-4 py-2 text-sm font-medium ${view === "security" ? "bg-slate-950 text-white" : "bg-white"}`}>Security</button>
           {session.organization.role==="owner" && <button onClick={() => setView("billing")} className={`rounded-xl px-4 py-2 text-sm font-medium ${view === "billing" ? "bg-slate-950 text-white" : "bg-white"}`}>Billing</button>}
         </div>
 
@@ -1164,8 +1311,10 @@ export default function App() {
           <Connections integrations={integrations} onChanged={async () => { await loadAll(); }} />
         ) : view === "team" ? (
           <TeamAccess session={session} />
-        ) : (
+        ) : view === "billing" ? (
           <Billing />
+        ) : (
+          <SecurityView session={session} />
         )}
       </main>
 

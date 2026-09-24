@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { createServer as createViteServer } from "vite";
 import { signPlatformRequest, verifyPlatformRequest } from "./server/platform-contract.mjs";
 import { addBillingPeriod, normalizeMoney, verifyWipayResponse } from "./server/billing-contract.mjs";
+import { decryptSecret, encryptSecret, generateTotpSecret, verifyTotp } from "./server/security-contract.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -133,6 +134,14 @@ function migrateUserVerification() {
 }
 migrateUserVerification();
 
+function migrateUserMfa() {
+  const columns=(db.prepare("PRAGMA table_info(users)").all() as any[]).map(row=>String(row.name));
+  if(!columns.includes("mfa_secret_encrypted")) db.prepare("ALTER TABLE users ADD COLUMN mfa_secret_encrypted TEXT").run();
+  if(!columns.includes("mfa_pending_secret_encrypted")) db.prepare("ALTER TABLE users ADD COLUMN mfa_pending_secret_encrypted TEXT").run();
+  if(!columns.includes("mfa_enabled_at")) db.prepare("ALTER TABLE users ADD COLUMN mfa_enabled_at TEXT").run();
+}
+migrateUserMfa();
+
 function migrateIntegrationsForMarketing() {
   const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='integrations'").get() as any;
   const sql = String(row?.sql || "");
@@ -236,6 +245,66 @@ CREATE TABLE IF NOT EXISTS billing_orders (
 CREATE INDEX IF NOT EXISTS idx_billing_orders_org_created ON billing_orders(organization_id,created_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_billing_orders_provider_transaction
   ON billing_orders(provider_transaction_id) WHERE provider_transaction_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS auth_rate_limits (
+  scope TEXT NOT NULL,
+  key_hash TEXT NOT NULL,
+  window_started_at INTEGER NOT NULL,
+  count INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(scope,key_hash)
+);
+CREATE TABLE IF NOT EXISTS mfa_challenges (
+  token_hash TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  expires_at INTEGER NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_mfa_challenges_user ON mfa_challenges(user_id,expires_at);
+CREATE TABLE IF NOT EXISTS mfa_recovery_codes (
+  user_id TEXT NOT NULL,
+  code_hash TEXT NOT NULL,
+  used_at TEXT,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(user_id,code_hash),
+  FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS audit_log (
+  id TEXT PRIMARY KEY,
+  organization_id TEXT,
+  actor_user_id TEXT,
+  event_type TEXT NOT NULL,
+  target_type TEXT,
+  target_id TEXT,
+  ip_hash TEXT,
+  details_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_audit_log_org_created ON audit_log(organization_id,created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_log_actor_created ON audit_log(actor_user_id,created_at DESC);
+CREATE TABLE IF NOT EXISTS email_outbox (
+  id TEXT PRIMARY KEY,
+  recipient TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  html TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL UNIQUE,
+  status TEXT NOT NULL CHECK(status IN ('pending','sent','failed')),
+  attempts INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at INTEGER NOT NULL,
+  provider_message_id TEXT,
+  last_error TEXT,
+  created_at TEXT NOT NULL,
+  sent_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_email_outbox_pending ON email_outbox(status,next_attempt_at);
+CREATE TABLE IF NOT EXISTS product_summary_cache (
+  product TEXT NOT NULL,
+  external_subject_id TEXT NOT NULL,
+  summary_json TEXT NOT NULL,
+  fetched_at INTEGER NOT NULL,
+  PRIMARY KEY(product,external_subject_id)
+);
 `);
 
 function clean(value: unknown) {
@@ -310,14 +379,14 @@ async function sendTransactionalEmail({to,subject,html,idempotencyKey}:{to:strin
       method:"POST",
       headers:{
         "content-type":"application/json",
-        "authorization":`Bearer ${cfg.apiKey}`,
+        "authorization":"Bearer "+cfg.apiKey,
         "idempotency-key":idempotencyKey.slice(0,256),
       },
       body:JSON.stringify({from:cfg.from,to:[to],subject,html}),
       signal:AbortSignal.timeout(10_000),
     });
     const body:any=await response.json().catch(()=>({}));
-    if(!response.ok) throw new Error(body?.message || `Email provider returned HTTP ${response.status}`);
+    if(!response.ok) throw new Error(body?.message || ("Email provider returned HTTP "+response.status));
     return {success:true,skipped:false,id:clean(body?.id)};
   } catch(error:any) {
     const detail=String(error?.message || "Email delivery failed.").slice(0,240);
@@ -325,6 +394,56 @@ async function sendTransactionalEmail({to,subject,html,idempotencyKey}:{to:strin
     return {success:false,skipped:false,error:detail};
   }
 }
+
+async function deliverEmailOutboxItem(row:any) {
+  const delivery=await sendTransactionalEmail({
+    to:row.recipient,
+    subject:row.subject,
+    html:row.html,
+    idempotencyKey:row.idempotency_key,
+  });
+  if(delivery.skipped) return {...delivery,queued:true};
+  const attempts=Number(row.attempts||0)+1;
+  if(delivery.success) {
+    db.prepare("UPDATE email_outbox SET status='sent',attempts=?,provider_message_id=?,last_error=NULL,sent_at=? WHERE id=?")
+      .run(attempts,delivery.id||null,new Date().toISOString(),row.id);
+    return {...delivery,queued:false};
+  }
+  const terminal=attempts>=8;
+  const delayMs=Math.min(6*60*60_000,Math.pow(2,Math.min(attempts,8))*60_000);
+  db.prepare("UPDATE email_outbox SET status=?,attempts=?,next_attempt_at=?,last_error=? WHERE id=?")
+    .run(terminal?"failed":"pending",attempts,Date.now()+delayMs,delivery.error||"Email delivery failed.",row.id);
+  return {...delivery,queued:!terminal};
+}
+
+async function queueTransactionalEmail(args:{to:string;subject:string;html:string;idempotencyKey:string}) {
+  const cfg=mailConfig();
+  if(!cfg.configured) return {success:false,skipped:true,queued:false,error:"Transactional email is not configured."};
+  const now=new Date().toISOString();
+  const id=crypto.randomUUID();
+  db.prepare(`INSERT OR IGNORE INTO email_outbox(id,recipient,subject,html,idempotency_key,status,attempts,next_attempt_at,created_at)
+    VALUES(?,?,?,?,?,'pending',0,?,?)`).run(id,args.to,args.subject,args.html,args.idempotencyKey,Date.now(),now);
+  const row=db.prepare("SELECT * FROM email_outbox WHERE idempotency_key=?").get(args.idempotencyKey) as any;
+  if(!row) return {success:false,skipped:false,queued:false,error:"Could not queue transactional email."};
+  if(row.status==="sent") return {success:true,skipped:false,queued:false,id:row.provider_message_id||null};
+  if(row.status==="failed") return {success:false,skipped:false,queued:false,error:row.last_error||"Email delivery failed."};
+  return deliverEmailOutboxItem(row);
+}
+
+let emailOutboxBusy=false;
+async function processEmailOutbox() {
+  if(emailOutboxBusy || !mailConfig().configured) return;
+  emailOutboxBusy=true;
+  try {
+    const rows=db.prepare("SELECT * FROM email_outbox WHERE status='pending' AND next_attempt_at<=? ORDER BY created_at ASC LIMIT 10").all(Date.now()) as any[];
+    for(const row of rows) await deliverEmailOutboxItem(row);
+  } finally {
+    emailOutboxBusy=false;
+  }
+}
+setInterval(()=>{ void processEmailOutbox(); },60_000).unref();
+setTimeout(()=>{ void processEmailOutbox(); },2_000).unref();
+
 function brandedAccountEmail(title:string,message:string,buttonLabel:string,url:string) {
   return `<!doctype html><html><body style="margin:0;background:#f8fafc;font-family:Arial,sans-serif;color:#0f172a">
   <table width="100%" cellpadding="0" cellspacing="0" style="padding:36px 16px;background:#f8fafc"><tr><td align="center">
@@ -363,6 +482,93 @@ function clearSessionCookie(res: express.Response) {
   const pieces = [`${SESSION_COOKIE}=`, "HttpOnly", "Path=/", "SameSite=Lax", "Max-Age=0"];
   if (production) pieces.push("Secure");
   res.setHeader("Set-Cookie", pieces.join("; "));
+}
+
+function establishSession(userId:string,res:express.Response) {
+  const token=crypto.randomBytes(32).toString("base64url");
+  const now=new Date().toISOString();
+  db.prepare("DELETE FROM sessions WHERE user_id=?").run(userId);
+  db.prepare("INSERT INTO sessions(token_hash,user_id,expires_at,created_at) VALUES(?,?,?,?)")
+    .run(hashToken(token),userId,Date.now()+SESSION_TTL_MS,now);
+  setSessionCookie(res,token);
+  return token;
+}
+function mfaKey() {
+  const key=clean(process.env.V79_HUB_MFA_KEY);
+  return key.length>=32 ? key : "";
+}
+function auditHashKey() {
+  const candidates=[
+    clean(process.env.V79_AUDIT_HASH_KEY),
+    mfaKey(),
+    clean(process.env.V79_PLATFORM_SHARED_SECRET),
+  ];
+  return candidates.find(value=>value.length>=32) || "";
+}
+function privacyHash(value:string) {
+  const key=auditHashKey();
+  if(!key || !value) return null;
+  return crypto.createHmac("sha256",key).update(value).digest("hex");
+}
+function recordAudit(req:express.Request,eventType:string,options:{
+  organizationId?:string|null;
+  actorUserId?:string|null;
+  targetType?:string|null;
+  targetId?:string|null;
+  details?:Record<string,unknown>;
+}={}) {
+  try {
+    const actorUserId=options.actorUserId || (req as any).hubUser?.id || null;
+    const member=options.organizationId ? null : (actorUserId ? membership(actorUserId) : null);
+    const organizationId=options.organizationId || (req as any).hubMembership?.organizationId || member?.organizationId || null;
+    const detailsJson=JSON.stringify(options.details || {}).slice(0,8000);
+    db.prepare(`INSERT INTO audit_log(id,organization_id,actor_user_id,event_type,target_type,target_id,ip_hash,details_json,created_at)
+      VALUES(?,?,?,?,?,?,?,?,?)`)
+      .run(
+        crypto.randomUUID(),
+        organizationId,
+        actorUserId,
+        eventType.slice(0,120),
+        options.targetType || null,
+        options.targetId || null,
+        privacyHash(req.ip || ""),
+        detailsJson,
+        new Date().toISOString()
+      );
+  } catch(error:any) {
+    console.warn("[V79 Audit] Could not record event:",String(error?.message || error).slice(0,180));
+  }
+}
+function recoveryCodeHash(userId:string,code:string) {
+  const key=mfaKey();
+  if(!key) throw new Error("MFA encryption key is not configured.");
+  const normalized=String(code||"").toUpperCase().replace(/[^A-Z0-9]/g,"");
+  return crypto.createHmac("sha256",key).update(userId+":"+normalized).digest("hex");
+}
+function generateRecoveryCodes(count=8) {
+  return Array.from({length:count},()=>{
+    const raw=crypto.randomBytes(6).toString("hex").toUpperCase();
+    return raw.match(/.{1,4}/g)!.join("-");
+  });
+}
+function verifyUserMfaCode(user:any,code:string,consumeRecovery=false) {
+  const key=mfaKey();
+  if(!key || !user?.mfa_secret_encrypted || !user?.mfa_enabled_at) return {valid:false,method:null as string|null};
+  let secret="";
+  try { secret=decryptSecret(user.mfa_secret_encrypted,key); }
+  catch { return {valid:false,method:null as string|null}; }
+  const candidate=String(code||"").trim();
+  if(/^\d{6}$/.test(candidate) && verifyTotp(secret,candidate)) return {valid:true,method:"totp"};
+  const normalized=candidate.toUpperCase().replace(/[^A-Z0-9]/g,"");
+  if(normalized.length===12) {
+    const codeHash=recoveryCodeHash(user.id,normalized);
+    const row=db.prepare("SELECT used_at AS usedAt FROM mfa_recovery_codes WHERE user_id=? AND code_hash=?").get(user.id,codeHash) as any;
+    if(row && !row.usedAt) {
+      if(consumeRecovery) db.prepare("UPDATE mfa_recovery_codes SET used_at=? WHERE user_id=? AND code_hash=?").run(new Date().toISOString(),user.id,codeHash);
+      return {valid:true,method:"recovery"};
+    }
+  }
+  return {valid:false,method:null as string|null};
 }
 function currentUser(req: express.Request) {
   const token = cookieValue(req, SESSION_COOKIE);
@@ -420,22 +626,40 @@ app.use((req, res, next) => {
   next();
 });
 
-const loginAttempts = new Map<string, {count:number; resetAt:number}>();
-function loginLimited(req: express.Request, res: express.Response, next: express.NextFunction) {
-  const key = req.ip || "unknown", now = Date.now();
-  let item = loginAttempts.get(key);
-  if (!item || item.resetAt < now) item = { count: 0, resetAt: now + 15*60_000 };
-  item.count++; loginAttempts.set(key,item);
-  if (item.count > 15) {
-    res.setHeader("Retry-After","900");
-    return res.status(429).json({ error: "Too many sign-in attempts. Try again later." });
+function consumeRateLimit(scope:string,key:string,limit:number,windowMs:number) {
+  const now=Date.now();
+  const keyHash=hashToken(scope+":"+String(key||"unknown"));
+  const tx=db.transaction(()=>{
+    const row=db.prepare("SELECT window_started_at AS windowStartedAt,count FROM auth_rate_limits WHERE scope=? AND key_hash=?").get(scope,keyHash) as any;
+    if(!row || row.windowStartedAt+windowMs<=now) {
+      db.prepare(`INSERT INTO auth_rate_limits(scope,key_hash,window_started_at,count) VALUES(?,?,?,1)
+        ON CONFLICT(scope,key_hash) DO UPDATE SET window_started_at=excluded.window_started_at,count=1`)
+        .run(scope,keyHash,now);
+      return {allowed:true,retryAfterSeconds:0};
+    }
+    if(Number(row.count)>=limit) {
+      return {allowed:false,retryAfterSeconds:Math.max(1,Math.ceil((row.windowStartedAt+windowMs-now)/1000))};
+    }
+    db.prepare("UPDATE auth_rate_limits SET count=count+1 WHERE scope=? AND key_hash=?").run(scope,keyHash);
+    return {allowed:true,retryAfterSeconds:0};
+  });
+  return tx();
+}
+function loginLimited(req:express.Request,res:express.Response,next:express.NextFunction) {
+  const scope="auth:"+req.path;
+  const result=consumeRateLimit(scope,req.ip || "unknown",15,15*60_000);
+  if(!result.allowed) {
+    res.setHeader("Retry-After",String(result.retryAfterSeconds));
+    recordAudit(req,"auth.rate_limited",{details:{scope}});
+    return res.status(429).json({error:"Too many attempts. Try again later."});
   }
   next();
 }
 setInterval(() => {
   const now=Date.now();
   db.prepare("DELETE FROM sessions WHERE expires_at <= ?").run(now);
-  for (const [key,value] of loginAttempts) if(value.resetAt<now) loginAttempts.delete(key);
+  db.prepare("DELETE FROM auth_rate_limits WHERE window_started_at < ?").run(now-24*60*60_000);
+  db.prepare("DELETE FROM mfa_challenges WHERE expires_at <= ?").run(now);
   db.prepare("DELETE FROM app_launch_tickets WHERE expires_at <= ?").run(now);
   db.prepare("UPDATE team_invitations SET status='expired' WHERE status='pending' AND expires_at <= ?").run(now);
   db.prepare("DELETE FROM account_tokens WHERE expires_at<=? OR used_at IS NOT NULL").run(now);
@@ -698,6 +922,25 @@ async function fetchSummary(product: Product, externalSubjectId: string) {
   const pathname=`/api/platform/summary/${encodeURIComponent(externalSubjectId)}`;
   const timestamp=String(Date.now());
   const signature=signPlatformRequest({method:"GET",pathname,timestamp,body:"",secret});
+  const maxCacheMinutes=Math.max(5,Math.min(10080,Number(process.env.V79_SUMMARY_CACHE_MAX_AGE_MINUTES || 1440)));
+  const cached=()=>{
+    const row=db.prepare("SELECT summary_json AS summaryJson,fetched_at AS fetchedAt FROM product_summary_cache WHERE product=? AND external_subject_id=?")
+      .get(product,externalSubjectId) as any;
+    if(!row || Date.now()-Number(row.fetchedAt)>maxCacheMinutes*60_000) return null;
+    try { return {summary:JSON.parse(row.summaryJson),fetchedAt:Number(row.fetchedAt)}; } catch { return null; }
+  };
+  const degraded=(reason:string)=>{
+    const hit=cached();
+    if(!hit) return null;
+    return {
+      status:"degraded",
+      summary:hit.summary,
+      stale:true,
+      cachedAt:new Date(hit.fetchedAt).toISOString(),
+      error:`Live ${productConfig[product].name} data is temporarily unavailable. Showing the last verified snapshot from ${new Date(hit.fetchedAt).toLocaleString()}.`,
+      liveError:reason,
+    };
+  };
   try{
     const response=await fetch(new URL(pathname,cfg.url),{
       headers:{
@@ -711,13 +954,23 @@ async function fetchSummary(product: Product, externalSubjectId: string) {
     if(["ffpro","tiquet","marketing"].includes(product) && response.status===404) {
       return {status:"ready",error:`Open ${productConfig[product].name} to initialise this organisation's workspace.`};
     }
-    if(!response.ok) return {status:"error",error:body?.error || `Service returned HTTP ${response.status}`};
+    if(!response.ok) {
+      if(response.status===429 || response.status>=500) {
+        const fallback=degraded(body?.error || `Service returned HTTP ${response.status}`);
+        if(fallback) return fallback;
+      }
+      return {status:"error",error:body?.error || `Service returned HTTP ${response.status}`};
+    }
+    db.prepare(`INSERT INTO product_summary_cache(product,external_subject_id,summary_json,fetched_at) VALUES(?,?,?,?)
+      ON CONFLICT(product,external_subject_id) DO UPDATE SET summary_json=excluded.summary_json,fetched_at=excluded.fetched_at`)
+      .run(product,externalSubjectId,JSON.stringify(body),Date.now());
     return {status:"connected",summary:body};
   }catch(error:any){
-    return {status:"offline",error:error?.name==="TimeoutError"?"Service timed out.":"Service is currently unreachable."};
+    const reason=error?.name==="TimeoutError" ? "Service timed out." : "Service is currently unreachable.";
+    const fallback=degraded(reason);
+    return fallback || {status:"offline",error:reason};
   }
 }
-
 
 const EVENT_SOURCE_PRODUCTS: Record<string, Product | null> = {
   website: null,
@@ -820,8 +1073,20 @@ app.post("/api/platform/events", (req: any, res) => {
 });
 
 app.get("/api/health", (_req,res)=>{
-  try { db.prepare("SELECT 1").get(); res.json({status:"ok"}); }
-  catch { res.status(503).json({status:"storage_unavailable"}); }
+  try {
+    db.prepare("SELECT 1").get();
+    const emailQueue=db.prepare(`SELECT
+      SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) AS pending,
+      SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) AS failed
+      FROM email_outbox`).get() as any;
+    res.json({
+      status:"ok",
+      emailQueue:{pending:Number(emailQueue?.pending||0),failed:Number(emailQueue?.failed||0)},
+      mfaKeyConfigured:Boolean(mfaKey()),
+    });
+  } catch {
+    res.status(503).json({status:"storage_unavailable"});
+  }
 });
 app.get("/api/plans", (_req,res)=>{
   const mail=mailConfig();
@@ -1032,11 +1297,12 @@ app.post("/api/auth/register", loginLimited, async (req,res)=>{
       .run(orgId,plan,now);
   });
   tx();
+  recordAudit(req,"workspace.registered",{organizationId:orgId,actorUserId:userId,targetType:"organization",targetId:orgId,details:{plan}});
 
   const verificationToken=createAccountToken(userId,"verify_email",VERIFY_EMAIL_TTL_MS);
   const verifyUrl=new URL("/",canonicalOrigin(req));
   verifyUrl.searchParams.set("verify",verificationToken);
-  const delivery=await sendTransactionalEmail({
+  const delivery=await queueTransactionalEmail({
     to:email,
     subject:"Verify your V79 Hub email",
     html:brandedAccountEmail(
@@ -1047,8 +1313,8 @@ app.post("/api/auth/register", loginLimited, async (req,res)=>{
     ),
     idempotencyKey:`verify-email/${userId}/${hashToken(verificationToken).slice(0,20)}`,
   });
-  if(!delivery.success) return res.status(502).json({
-    error:"Your workspace was created, but the verification email could not be delivered. Use 'Resend verification' from the sign-in screen.",
+  if(!delivery.success && !delivery.queued) return res.status(502).json({
+    error:"Your workspace was created, but the verification email could not be queued. Use 'Resend verification' from the sign-in screen.",
     code:"VERIFICATION_EMAIL_FAILED",
   });
 
@@ -1085,6 +1351,7 @@ app.post("/api/auth/verify-email", loginLimited, (req,res)=>{
   });
   tx();
   ensureManagedIntegrations(m.organizationId);
+  recordAudit(req,"identity.email_verified",{organizationId:m.organizationId,actorUserId:row.userId,targetType:"user",targetId:row.userId});
 
   const sessionToken=crypto.randomBytes(32).toString("base64url");
   db.prepare("DELETE FROM sessions WHERE user_id=?").run(row.userId);
@@ -1108,7 +1375,7 @@ app.post("/api/auth/resend-verification", loginLimited, async (req,res)=>{
   const token=createAccountToken(user.id,"verify_email",VERIFY_EMAIL_TTL_MS);
   const verifyUrl=new URL("/",canonicalOrigin(req));
   verifyUrl.searchParams.set("verify",token);
-  await sendTransactionalEmail({
+  await queueTransactionalEmail({
     to:user.email,
     subject:"Verify your V79 Hub email",
     html:brandedAccountEmail(
@@ -1132,7 +1399,7 @@ app.post("/api/auth/forgot-password", loginLimited, async (req,res)=>{
   const token=createAccountToken(user.id,"password_reset",PASSWORD_RESET_TTL_MS);
   const resetUrl=new URL("/",canonicalOrigin(req));
   resetUrl.searchParams.set("reset",token);
-  await sendTransactionalEmail({
+  await queueTransactionalEmail({
     to:user.email,
     subject:"Reset your V79 Hub password",
     html:brandedAccountEmail(
@@ -1167,28 +1434,169 @@ app.post("/api/auth/reset-password", loginLimited, (req,res)=>{
     db.prepare("DELETE FROM sessions WHERE user_id=?").run(row.userId);
   });
   tx();
+  const resetMembership=membership(row.userId);
+  recordAudit(req,"security.password_reset",{organizationId:resetMembership?.organizationId,actorUserId:row.userId,targetType:"user",targetId:row.userId});
   res.json({success:true,message:"Password updated. Sign in with your new password."});
 });
 
 app.post("/api/auth/login", loginLimited, (req,res)=>{
   const email=clean(req.body?.email).toLowerCase(), password=String(req.body?.password || "");
   if(!email || !password) return res.status(400).json({error:"Email and password are required."});
+  const accountLimit=consumeRateLimit("login-account",email,10,15*60_000);
+  if(!accountLimit.allowed) {
+    res.setHeader("Retry-After",String(accountLimit.retryAfterSeconds));
+    recordAudit(req,"auth.login_rate_limited",{details:{accountHash:privacyHash(email)}});
+    return res.status(429).json({error:"Too many sign-in attempts. Try again later."});
+  }
   const user=db.prepare("SELECT * FROM users WHERE email=?").get(email) as any;
   const candidate=passwordDigest(password,user?.password_salt || "invalid-v79-hub-salt");
-  if(!user || !constantEqualHex(candidate,user.password_hash)) return res.status(401).json({error:"Email or password is incorrect."});
-  if(!user.email_verified_at) return res.status(403).json({
-    error:"Verify your email before signing in.",
-    code:"EMAIL_VERIFICATION_REQUIRED",
-  });
-  const token=crypto.randomBytes(32).toString("base64url"), now=new Date().toISOString();
-  db.prepare("DELETE FROM sessions WHERE user_id=?").run(user.id);
-  db.prepare("INSERT INTO sessions(token_hash,user_id,expires_at,created_at) VALUES(?,?,?,?)").run(hashToken(token),user.id,Date.now()+SESSION_TTL_MS,now);
-  setSessionCookie(res,token);
+  if(!user || !constantEqualHex(candidate,user.password_hash)) {
+    recordAudit(req,"auth.login_failed",{actorUserId:user?.id||null,details:{reason:"credentials"}});
+    return res.status(401).json({error:"Email or password is incorrect."});
+  }
+  if(!user.email_verified_at) {
+    recordAudit(req,"auth.login_blocked",{actorUserId:user.id,details:{reason:"email_unverified"}});
+    return res.status(403).json({
+      error:"Verify your email before signing in.",
+      code:"EMAIL_VERIFICATION_REQUIRED",
+    });
+  }
   const m=membership(user.id);
+  if(user.mfa_enabled_at && user.mfa_secret_encrypted) {
+    if(!mfaKey()) {
+      recordAudit(req,"auth.login_blocked",{actorUserId:user.id,organizationId:m?.organizationId,details:{reason:"mfa_key_unavailable"}});
+      return res.status(503).json({error:"Multi-factor authentication is temporarily unavailable. Contact V79 Digital support.",code:"MFA_CONFIGURATION_ERROR"});
+    }
+    const challengeToken=crypto.randomBytes(32).toString("base64url");
+    db.prepare("DELETE FROM mfa_challenges WHERE user_id=?").run(user.id);
+    db.prepare("INSERT INTO mfa_challenges(token_hash,user_id,expires_at,attempts,created_at) VALUES(?,?,?,0,?)")
+      .run(hashToken(challengeToken),user.id,Date.now()+5*60_000,new Date().toISOString());
+    recordAudit(req,"auth.mfa_challenge_created",{actorUserId:user.id,organizationId:m?.organizationId});
+    return res.status(202).json({
+      mfaRequired:true,
+      challengeToken,
+      methods:["totp","recovery"],
+      message:"Enter the six-digit code from your authenticator app or a recovery code.",
+    });
+  }
+  establishSession(user.id,res);
+  recordAudit(req,"auth.login_success",{actorUserId:user.id,organizationId:m?.organizationId,details:{mfa:false}});
   res.json({user:{id:user.id,email:user.email,name:user.name},organization:m?{id:m.organizationId,name:m.organizationName,slug:m.slug,role:m.role}:null});
 });
+
+app.post("/api/auth/mfa/verify", loginLimited, (req,res)=>{
+  const challengeToken=clean(req.body?.challengeToken);
+  const code=clean(req.body?.code);
+  if(!/^[A-Za-z0-9_-]{32,180}$/.test(challengeToken) || !code) return res.status(400).json({error:"Enter a valid MFA challenge and code."});
+  const challenge=db.prepare(`SELECT c.token_hash AS tokenHash,c.user_id AS userId,c.expires_at AS expiresAt,c.attempts,u.*
+    FROM mfa_challenges c JOIN users u ON u.id=c.user_id WHERE c.token_hash=?`).get(hashToken(challengeToken)) as any;
+  if(!challenge || challenge.expiresAt<=Date.now() || Number(challenge.attempts)>=5) {
+    if(challenge?.tokenHash) db.prepare("DELETE FROM mfa_challenges WHERE token_hash=?").run(challenge.tokenHash);
+    return res.status(401).json({error:"This MFA challenge has expired. Sign in again."});
+  }
+  const verification=verifyUserMfaCode(challenge,code,true);
+  if(!verification.valid) {
+    const attempts=Number(challenge.attempts)+1;
+    db.prepare("UPDATE mfa_challenges SET attempts=? WHERE token_hash=?").run(attempts,challenge.tokenHash);
+    const m=membership(challenge.userId);
+    recordAudit(req,"auth.mfa_failed",{actorUserId:challenge.userId,organizationId:m?.organizationId,details:{attempts}});
+    if(attempts>=5) db.prepare("DELETE FROM mfa_challenges WHERE token_hash=?").run(challenge.tokenHash);
+    return res.status(401).json({error:attempts>=5?"Too many invalid codes. Sign in again.":"That authentication code is not valid."});
+  }
+  db.prepare("DELETE FROM mfa_challenges WHERE token_hash=?").run(challenge.tokenHash);
+  establishSession(challenge.userId,res);
+  const m=membership(challenge.userId);
+  recordAudit(req,"auth.login_success",{actorUserId:challenge.userId,organizationId:m?.organizationId,details:{mfa:true,method:verification.method}});
+  res.json({user:{id:challenge.userId,email:challenge.email,name:challenge.name},organization:m?{id:m.organizationId,name:m.organizationName,slug:m.slug,role:m.role}:null});
+});
+
+app.get("/api/auth/mfa", requireAuth, (req,res)=>{
+  const user=(req as any).hubUser;
+  const record=db.prepare("SELECT mfa_enabled_at AS enabledAt,mfa_pending_secret_encrypted AS pending FROM users WHERE id=?").get(user.id) as any;
+  res.json({
+    configured:Boolean(mfaKey()),
+    enabled:Boolean(record?.enabledAt),
+    enabledAt:record?.enabledAt || null,
+    setupPending:Boolean(record?.pending),
+    recoveryCodesRemaining:Number((db.prepare("SELECT COUNT(*) AS count FROM mfa_recovery_codes WHERE user_id=? AND used_at IS NULL").get(user.id) as any)?.count||0),
+  });
+});
+
+app.post("/api/auth/mfa/setup", requireAuth, loginLimited, (req,res)=>{
+  const user=(req as any).hubUser, m=(req as any).hubMembership;
+  const key=mfaKey();
+  if(!key) return res.status(503).json({error:"MFA cannot be enabled until V79_HUB_MFA_KEY is configured with a stable 32+ character secret."});
+  const currentPassword=String(req.body?.currentPassword || "");
+  const record=db.prepare("SELECT password_salt,password_hash,mfa_enabled_at AS enabledAt FROM users WHERE id=?").get(user.id) as any;
+  if(!record || !constantEqualHex(passwordDigest(currentPassword,record.password_salt),record.password_hash)) return res.status(401).json({error:"Current password is incorrect."});
+  if(record.enabledAt) return res.status(409).json({error:"Multi-factor authentication is already enabled."});
+  const secret=generateTotpSecret();
+  db.prepare("UPDATE users SET mfa_pending_secret_encrypted=? WHERE id=?").run(encryptSecret(secret,key),user.id);
+  const label=encodeURIComponent(user.email);
+  const issuer=encodeURIComponent("V79 Hub");
+  const otpauthUrl=`otpauth://totp/${issuer}:${label}?secret=${secret}&issuer=${issuer}&algorithm=SHA1&digits=6&period=30`;
+  recordAudit(req,"security.mfa_setup_started",{actorUserId:user.id,organizationId:m.organizationId});
+  res.json({secret,otpauthUrl,message:"Add this account to your authenticator app, then enter a six-digit code to confirm."});
+});
+
+app.post("/api/auth/mfa/enable", requireAuth, loginLimited, (req,res)=>{
+  const user=(req as any).hubUser, m=(req as any).hubMembership;
+  const key=mfaKey();
+  if(!key) return res.status(503).json({error:"MFA encryption key is not configured."});
+  const currentPassword=String(req.body?.currentPassword || "");
+  const code=clean(req.body?.code);
+  const record=db.prepare("SELECT password_salt,password_hash,mfa_pending_secret_encrypted AS pending,mfa_enabled_at AS enabledAt FROM users WHERE id=?").get(user.id) as any;
+  if(!record || !constantEqualHex(passwordDigest(currentPassword,record.password_salt),record.password_hash)) return res.status(401).json({error:"Current password is incorrect."});
+  if(record.enabledAt) return res.status(409).json({error:"Multi-factor authentication is already enabled."});
+  if(!record.pending) return res.status(409).json({error:"Start MFA setup before enabling it."});
+  let secret="";
+  try { secret=decryptSecret(record.pending,key); } catch { return res.status(500).json({error:"The pending MFA setup could not be read. Start setup again."}); }
+  if(!verifyTotp(secret,code)) return res.status(400).json({error:"That six-digit authenticator code is not valid."});
+  const recoveryCodes=generateRecoveryCodes();
+  const now=new Date().toISOString();
+  const tx=db.transaction(()=>{
+    db.prepare("UPDATE users SET mfa_secret_encrypted=?,mfa_pending_secret_encrypted=NULL,mfa_enabled_at=? WHERE id=?").run(record.pending,now,user.id);
+    db.prepare("DELETE FROM mfa_recovery_codes WHERE user_id=?").run(user.id);
+    const insert=db.prepare("INSERT INTO mfa_recovery_codes(user_id,code_hash,created_at) VALUES(?,?,?)");
+    for(const recoveryCode of recoveryCodes) insert.run(user.id,recoveryCodeHash(user.id,recoveryCode),now);
+    const token=cookieValue(req,SESSION_COOKIE);
+    db.prepare("DELETE FROM sessions WHERE user_id=? AND token_hash<>?").run(user.id,hashToken(token));
+  });
+  tx();
+  recordAudit(req,"security.mfa_enabled",{actorUserId:user.id,organizationId:m.organizationId});
+  res.json({
+    success:true,
+    enabledAt:now,
+    recoveryCodes,
+    message:"MFA is enabled. Store these one-time recovery codes somewhere secure; V79 cannot show them again.",
+  });
+});
+
+app.post("/api/auth/mfa/disable", requireAuth, loginLimited, (req,res)=>{
+  const user=(req as any).hubUser, m=(req as any).hubMembership;
+  const currentPassword=String(req.body?.currentPassword || "");
+  const code=clean(req.body?.code);
+  const record=db.prepare("SELECT id,password_salt,password_hash,mfa_secret_encrypted,mfa_enabled_at FROM users WHERE id=?").get(user.id) as any;
+  if(!record || !constantEqualHex(passwordDigest(currentPassword,record.password_salt),record.password_hash)) return res.status(401).json({error:"Current password is incorrect."});
+  if(!record.mfa_enabled_at) return res.status(409).json({error:"Multi-factor authentication is not enabled."});
+  const verification=verifyUserMfaCode(record,code,true);
+  if(!verification.valid) return res.status(401).json({error:"Enter a valid authenticator or recovery code."});
+  const tx=db.transaction(()=>{
+    db.prepare("UPDATE users SET mfa_secret_encrypted=NULL,mfa_pending_secret_encrypted=NULL,mfa_enabled_at=NULL WHERE id=?").run(user.id);
+    db.prepare("DELETE FROM mfa_recovery_codes WHERE user_id=?").run(user.id);
+    db.prepare("DELETE FROM mfa_challenges WHERE user_id=?").run(user.id);
+    const token=cookieValue(req,SESSION_COOKIE);
+    db.prepare("DELETE FROM sessions WHERE user_id=? AND token_hash<>?").run(user.id,hashToken(token));
+  });
+  tx();
+  recordAudit(req,"security.mfa_disabled",{actorUserId:user.id,organizationId:m.organizationId,details:{method:verification.method}});
+  res.json({success:true});
+});
+
 app.post("/api/auth/logout", (req,res)=>{
+  const user=currentUser(req);
   const token=cookieValue(req,SESSION_COOKIE);
+  if(user) recordAudit(req,"auth.logout",{actorUserId:user.id});
   if(token) db.prepare("DELETE FROM sessions WHERE token_hash=?").run(hashToken(token));
   clearSessionCookie(res); res.json({success:true});
 });
@@ -1200,6 +1608,25 @@ app.get("/api/auth/me", requireAuth, (req,res)=>{
     subscription: subscriptionFor(m.organizationId) || null,
   });
 });
+app.get("/api/audit", requireAuth, requireAdmin, (req,res)=>{
+  const m=(req as any).hubMembership;
+  const limit=Math.max(1,Math.min(200,Number(req.query.limit||100)));
+  const rows=db.prepare(`SELECT a.id,a.event_type AS eventType,a.target_type AS targetType,a.target_id AS targetId,
+      a.ip_hash AS ipHash,a.details_json AS detailsJson,a.created_at AS createdAt,
+      u.name AS actorName,u.email AS actorEmail
+    FROM audit_log a LEFT JOIN users u ON u.id=a.actor_user_id
+    WHERE a.organization_id=? ORDER BY a.created_at DESC LIMIT ?`).all(m.organizationId,limit) as any[];
+  res.json(rows.map(row=>{
+    let details={}; try { details=JSON.parse(row.detailsJson||"{}"); } catch {}
+    return {
+      id:row.id,eventType:row.eventType,targetType:row.targetType,targetId:row.targetId,
+      actorName:row.actorName||"System",actorEmail:row.actorEmail||null,
+      ipFingerprint:row.ipHash?String(row.ipHash).slice(0,12):null,
+      details,createdAt:row.createdAt,
+    };
+  }));
+});
+
 app.put("/api/auth/password", requireAuth, (req,res)=>{
   const currentPassword=String(req.body?.currentPassword || "");
   const newPassword=String(req.body?.newPassword || "");
@@ -1213,6 +1640,7 @@ app.put("/api/auth/password", requireAuth, (req,res)=>{
   db.prepare("UPDATE users SET password_salt=?,password_hash=? WHERE id=?").run(salt,passwordDigest(newPassword,salt),user.id);
   const token=cookieValue(req,SESSION_COOKIE);
   db.prepare("DELETE FROM sessions WHERE user_id=? AND token_hash<>?").run(user.id,hashToken(token));
+  recordAudit(req,"security.password_changed",{actorUserId:user.id});
   res.json({success:true});
 });
 
@@ -1278,6 +1706,7 @@ app.post("/api/team/invitations/:token/accept", loginLimited, (req,res)=>{
     .run(hashToken(sessionToken),userId,Date.now()+SESSION_TTL_MS,now);
   setSessionCookie(res,sessionToken);
   const m=membership(userId);
+  recordAudit(req,"team.invitation_accepted",{organizationId:m?.organizationId,actorUserId:userId,targetType:"invitation",targetId:invite.id,details:{role:invite.role,products}});
   res.status(201).json({
     user:{id:userId,email:invite.email,name},
     organization:{id:m.organizationId,name:m.organizationName,slug:m.slug,role:m.role},
@@ -1343,9 +1772,9 @@ app.post("/api/team/invitations", requireAuth, requireAdmin, async (req,res)=>{
     .run(id,m.organizationId,email,role,JSON.stringify(products),hashToken(inviteToken),expiresAt,actor.id,now);
   const inviteUrl=new URL(canonicalOrigin(req));
   inviteUrl.searchParams.set("invite",inviteToken);
-  let emailDelivery:{sent:boolean;skipped:boolean;error?:string}={sent:false,skipped:true};
+  let emailDelivery:{sent:boolean;queued?:boolean;skipped:boolean;error?:string}={sent:false,queued:false,skipped:true};
   if(mailConfig().configured) {
-    const delivery=await sendTransactionalEmail({
+    const delivery=await queueTransactionalEmail({
       to:email,
       subject:`You're invited to ${m.organizationName} on V79 Hub`,
       html:brandedAccountEmail(
@@ -1356,8 +1785,9 @@ app.post("/api/team/invitations", requireAuth, requireAdmin, async (req,res)=>{
       ),
       idempotencyKey:`team-invite/${id}`,
     });
-    emailDelivery={sent:delivery.success,skipped:Boolean(delivery.skipped),...(delivery.error?{error:delivery.error}:{})};
+    emailDelivery={sent:delivery.success,queued:Boolean((delivery as any).queued),skipped:Boolean(delivery.skipped),...(delivery.error?{error:delivery.error}:{})};
   }
+  recordAudit(req,"team.invitation_created",{organizationId:m.organizationId,actorUserId:actor.id,targetType:"invitation",targetId:id,details:{role,products,emailHash:privacyHash(email)}});
   res.status(201).json({id,email,role,products,expiresAt:new Date(expiresAt).toISOString(),inviteUrl:inviteUrl.toString(),emailDelivery,seats:seatUsage(m.organizationId)});
 });
 
@@ -1365,6 +1795,7 @@ app.delete("/api/team/invitations/:id", requireAuth, requireAdmin, (req,res)=>{
   const m=(req as any).hubMembership;
   const result=db.prepare("UPDATE team_invitations SET status='revoked' WHERE id=? AND organization_id=? AND status='pending'").run(clean(req.params.id),m.organizationId);
   if(!result.changes) return res.status(404).json({error:"Pending invitation not found."});
+  recordAudit(req,"team.invitation_revoked",{organizationId:m.organizationId,actorUserId:(req as any).hubUser?.id,targetType:"invitation",targetId:clean(req.params.id)});
   res.json({success:true,seats:seatUsage(m.organizationId)});
 });
 
@@ -1381,6 +1812,7 @@ app.patch("/api/team/members/:userId", requireAuth, requireAdmin, (req,res)=>{
   db.prepare("UPDATE memberships SET role=? WHERE user_id=? AND organization_id=?").run(role,userId,m.organizationId);
   const products=assignMemberProducts(userId,m.organizationId,req.body?.products);
   db.prepare("DELETE FROM sessions WHERE user_id=?").run(userId);
+  recordAudit(req,"team.member_access_changed",{organizationId:m.organizationId,actorUserId:actor.id,targetType:"user",targetId:userId,details:{role,products}});
   res.json({success:true,role,products});
 });
 
@@ -1398,6 +1830,7 @@ app.delete("/api/team/members/:userId", requireAuth, requireAdmin, (req,res)=>{
     db.prepare("DELETE FROM users WHERE id=? AND NOT EXISTS(SELECT 1 FROM memberships WHERE user_id=?)").run(userId,userId);
   });
   tx();
+  recordAudit(req,"team.member_removed",{organizationId:m.organizationId,actorUserId:actor.id,targetType:"user",targetId:userId,details:{previousRole:target.role}});
   res.json({success:true,seats:seatUsage(m.organizationId)});
 });
 
@@ -1451,6 +1884,7 @@ app.get("/api/apps/:product/launch", requireAuth, (req,res)=>{
   ensureManagedIntegrations(m.organizationId);
   const target=new URL("/api/platform/launch",publicUrl);
   target.searchParams.set("ticket",token);
+  recordAudit(req,"app.launch_requested",{organizationId:m.organizationId,actorUserId:user.id,targetType:"product",targetId:product});
   res.redirect(302,target.toString());
 });
 
@@ -1551,12 +1985,14 @@ app.put("/api/integrations/:product", requireAuth, requireAdmin, (req,res)=>{
   db.prepare(`INSERT INTO integrations(organization_id,product,external_subject_id,enabled,updated_at)
     VALUES(?,?,?,?,?) ON CONFLICT(organization_id,product) DO UPDATE SET external_subject_id=excluded.external_subject_id,enabled=1,updated_at=excluded.updated_at`)
     .run(m.organizationId,product,externalSubjectId,1,now);
+  recordAudit(req,"integration.connected",{organizationId:m.organizationId,actorUserId:(req as any).hubUser?.id,targetType:"product",targetId:product});
   res.json({success:true});
 });
 app.delete("/api/integrations/:product", requireAuth, requireAdmin, (req,res)=>{
   if(["ffpro","tiquet","marketing"].includes(req.params.product)) return res.status(409).json({error:"This V79 app connection is managed by the Hub subscription and identity."});
   const m=(req as any).hubMembership;
   db.prepare("DELETE FROM integrations WHERE organization_id=? AND product=?").run(m.organizationId,req.params.product);
+  recordAudit(req,"integration.disconnected",{organizationId:m.organizationId,actorUserId:(req as any).hubUser?.id,targetType:"product",targetId:req.params.product});
   res.json({success:true});
 });
 app.get("/api/platform/dashboard", requireAuth, async (req,res)=>{
