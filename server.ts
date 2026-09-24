@@ -379,14 +379,14 @@ async function sendTransactionalEmail({to,subject,html,idempotencyKey}:{to:strin
       method:"POST",
       headers:{
         "content-type":"application/json",
-        "authorization":`Bearer ${cfg.apiKey}`,
+        "authorization":"Bearer "+cfg.apiKey,
         "idempotency-key":idempotencyKey.slice(0,256),
       },
       body:JSON.stringify({from:cfg.from,to:[to],subject,html}),
       signal:AbortSignal.timeout(10_000),
     });
     const body:any=await response.json().catch(()=>({}));
-    if(!response.ok) throw new Error(body?.message || `Email provider returned HTTP ${response.status}`);
+    if(!response.ok) throw new Error(body?.message || ("Email provider returned HTTP "+response.status));
     return {success:true,skipped:false,id:clean(body?.id)};
   } catch(error:any) {
     const detail=String(error?.message || "Email delivery failed.").slice(0,240);
@@ -394,6 +394,56 @@ async function sendTransactionalEmail({to,subject,html,idempotencyKey}:{to:strin
     return {success:false,skipped:false,error:detail};
   }
 }
+
+async function deliverEmailOutboxItem(row:any) {
+  const delivery=await sendTransactionalEmail({
+    to:row.recipient,
+    subject:row.subject,
+    html:row.html,
+    idempotencyKey:row.idempotency_key,
+  });
+  if(delivery.skipped) return {...delivery,queued:true};
+  const attempts=Number(row.attempts||0)+1;
+  if(delivery.success) {
+    db.prepare("UPDATE email_outbox SET status='sent',attempts=?,provider_message_id=?,last_error=NULL,sent_at=? WHERE id=?")
+      .run(attempts,delivery.id||null,new Date().toISOString(),row.id);
+    return {...delivery,queued:false};
+  }
+  const terminal=attempts>=8;
+  const delayMs=Math.min(6*60*60_000,Math.pow(2,Math.min(attempts,8))*60_000);
+  db.prepare("UPDATE email_outbox SET status=?,attempts=?,next_attempt_at=?,last_error=? WHERE id=?")
+    .run(terminal?"failed":"pending",attempts,Date.now()+delayMs,delivery.error||"Email delivery failed.",row.id);
+  return {...delivery,queued:!terminal};
+}
+
+async function queueTransactionalEmail(args:{to:string;subject:string;html:string;idempotencyKey:string}) {
+  const cfg=mailConfig();
+  if(!cfg.configured) return {success:false,skipped:true,queued:false,error:"Transactional email is not configured."};
+  const now=new Date().toISOString();
+  const id=crypto.randomUUID();
+  db.prepare(`INSERT OR IGNORE INTO email_outbox(id,recipient,subject,html,idempotency_key,status,attempts,next_attempt_at,created_at)
+    VALUES(?,?,?,?,?,'pending',0,?,?)`).run(id,args.to,args.subject,args.html,args.idempotencyKey,Date.now(),now);
+  const row=db.prepare("SELECT * FROM email_outbox WHERE idempotency_key=?").get(args.idempotencyKey) as any;
+  if(!row) return {success:false,skipped:false,queued:false,error:"Could not queue transactional email."};
+  if(row.status==="sent") return {success:true,skipped:false,queued:false,id:row.provider_message_id||null};
+  if(row.status==="failed") return {success:false,skipped:false,queued:false,error:row.last_error||"Email delivery failed."};
+  return deliverEmailOutboxItem(row);
+}
+
+let emailOutboxBusy=false;
+async function processEmailOutbox() {
+  if(emailOutboxBusy || !mailConfig().configured) return;
+  emailOutboxBusy=true;
+  try {
+    const rows=db.prepare("SELECT * FROM email_outbox WHERE status='pending' AND next_attempt_at<=? ORDER BY created_at ASC LIMIT 10").all(Date.now()) as any[];
+    for(const row of rows) await deliverEmailOutboxItem(row);
+  } finally {
+    emailOutboxBusy=false;
+  }
+}
+setInterval(()=>{ void processEmailOutbox(); },60_000).unref();
+setTimeout(()=>{ void processEmailOutbox(); },2_000).unref();
+
 function brandedAccountEmail(title:string,message:string,buttonLabel:string,url:string) {
   return `<!doctype html><html><body style="margin:0;background:#f8fafc;font-family:Arial,sans-serif;color:#0f172a">
   <table width="100%" cellpadding="0" cellspacing="0" style="padding:36px 16px;background:#f8fafc"><tr><td align="center">
