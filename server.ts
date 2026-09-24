@@ -902,8 +902,8 @@ const productConfig = {
   academy: {
     name:"V79 Academy",
     url:clean(process.env.ACADEMY_BASE_URL),
-    openUrl:clean(process.env.ACADEMY_PUBLIC_URL) || clean(process.env.ACADEMY_BASE_URL),
-    publicUrl:clean(process.env.ACADEMY_PUBLIC_URL) || clean(process.env.ACADEMY_BASE_URL),
+    openUrl:clean(process.env.ACADEMY_PUBLIC_URL) || "https://v79academy.v79sl.com/academy",
+    publicUrl:clean(process.env.ACADEMY_PUBLIC_URL) || "https://v79academy.v79sl.com/academy",
   },
   marketing: {
     name:"V79 Marketing",
