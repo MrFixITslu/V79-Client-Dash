@@ -386,8 +386,7 @@ function subscriptionFor(organizationId: string) {
   return db.prepare("SELECT plan,status,trial_ends_at AS trialEndsAt,current_period_end AS currentPeriodEnd,updated_at AS updatedAt FROM subscriptions WHERE organization_id=?").get(organizationId) as any;
 }
 
-function productEntitled(organizationId: string, product: string) {
-  if (product === "academy") return true;
+function subscriptionUsable(organizationId: string) {
   const subscription = subscriptionFor(organizationId);
   if (!subscription || !["active","trialing"].includes(subscription.status)) return false;
   if (subscription.status === "trialing") {
@@ -398,6 +397,13 @@ function productEntitled(organizationId: string, product: string) {
     const periodEnd = new Date(subscription.currentPeriodEnd).getTime();
     if (Number.isFinite(periodEnd) && periodEnd <= Date.now()) return false;
   }
+  return true;
+}
+
+function productEntitled(organizationId: string, product: string) {
+  if (product === "academy") return true;
+  if (!subscriptionUsable(organizationId)) return false;
+  const subscription = subscriptionFor(organizationId);
   const plan = PLAN_CATALOG[subscription.plan as PlanName];
   return Boolean(plan?.products.includes(product as any));
 }
@@ -748,6 +754,7 @@ app.post("/api/team/invitations/:token/accept", loginLimited, (req,res)=>{
 
   const invite=db.prepare("SELECT * FROM team_invitations WHERE token_hash=?").get(hashToken(token)) as any;
   if(!invite || invite.status!=="pending" || invite.expires_at<=Date.now()) return res.status(404).json({error:"This invitation is invalid or has expired."});
+  if(!subscriptionUsable(invite.organization_id)) return res.status(403).json({error:"This V79 workspace does not currently have an active trial or subscription for additional team seats."});
   const usage=seatUsage(invite.organization_id);
   if(usage.members>=usage.limit) return res.status(409).json({error:"This V79 plan has no available team seats."});
   const existing=db.prepare("SELECT u.id,m.organization_id AS organizationId FROM users u LEFT JOIN memberships m ON m.user_id=u.id WHERE u.email=? LIMIT 1").get(invite.email) as any;
@@ -825,7 +832,10 @@ app.post("/api/team/invitations", requireAuth, requireAdmin, (req,res)=>{
   if(!["admin","member"].includes(role)) return res.status(400).json({error:"Choose a valid team role."});
   if(role==="admin" && m.role!=="owner") return res.status(403).json({error:"Only the organisation owner can invite another administrator."});
   if(db.prepare("SELECT 1 FROM users u JOIN memberships mm ON mm.user_id=u.id WHERE mm.organization_id=? AND u.email=?").get(m.organizationId,email)) return res.status(409).json({error:"That person is already a member of this workspace."});
+  const existingHubUser=db.prepare("SELECT u.id,o.name AS organizationName FROM users u LEFT JOIN memberships mm ON mm.user_id=u.id LEFT JOIN organizations o ON o.id=mm.organization_id WHERE u.email=? LIMIT 1").get(email) as any;
+  if(existingHubUser) return res.status(409).json({error:existingHubUser.organizationName ? `That email already belongs to another V79 Hub workspace (${existingHubUser.organizationName}).` : "That email already belongs to a V79 Hub account."});
   if(db.prepare("SELECT 1 FROM team_invitations WHERE organization_id=? AND email=? AND status='pending' AND expires_at>?").get(m.organizationId,email,Date.now())) return res.status(409).json({error:"A current invitation already exists for this email."});
+  if(!subscriptionUsable(m.organizationId)) return res.status(403).json({error:"An active trial or subscription is required before adding team seats."});
   const usage=seatUsage(m.organizationId);
   if(usage.used>=usage.limit) return res.status(409).json({error:`Your plan includes ${usage.limit} Hub user seat${usage.limit===1?"":"s"}. Revoke an invite, remove a member or change plan before inviting another user.`});
 
