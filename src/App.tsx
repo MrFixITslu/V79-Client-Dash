@@ -346,7 +346,7 @@ function SecurityPanel() {
     <form onSubmit={submit} className="mt-8 rounded-2xl border border-slate-200 bg-white p-5">
       <div className="flex items-center gap-3">
         <div className="rounded-xl bg-slate-950 p-2.5 text-cyan-300"><ShieldCheck size={20}/></div>
-        <div><h3 className="font-semibold text-slate-950">Hub security</h3><p className="text-xs text-slate-400">Change the organisation owner password without touching the database.</p></div>
+        <div><h3 className="font-semibold text-slate-950">Hub security</h3><p className="text-xs text-slate-400">Change your Hub password and sign out your other Hub sessions.</p></div>
       </div>
       <div className="mt-5 grid gap-4 lg:grid-cols-3">
         <label className="text-sm font-medium text-slate-700">Current password<input type="password" autoComplete="current-password" value={currentPassword} onChange={e=>setCurrentPassword(e.target.value)} required className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 outline-none ring-cyan-300 focus:ring-2"/></label>
@@ -796,7 +796,7 @@ export default function App() {
           </div>
           <nav className="hidden rounded-xl bg-slate-100 p-1 sm:flex" aria-label="Hub sections">
             <button onClick={() => setView("overview")} className={`rounded-lg px-4 py-2 text-sm font-medium ${view === "overview" ? "bg-white shadow-sm" : "text-slate-500"}`}>Overview</button>
-            <button onClick={() => setView("connections")} className={`rounded-lg px-4 py-2 text-sm font-medium ${view === "connections" ? "bg-white shadow-sm" : "text-slate-500"}`}>Connections</button>
+            {["owner","admin"].includes(session.organization.role) && <button onClick={() => setView("connections")} className={`rounded-lg px-4 py-2 text-sm font-medium ${view === "connections" ? "bg-white shadow-sm" : "text-slate-500"}`}>Connections</button>}
             {["owner","admin"].includes(session.organization.role) && <button onClick={() => setView("team")} className={`rounded-lg px-4 py-2 text-sm font-medium ${view === "team" ? "bg-white shadow-sm" : "text-slate-500"}`}>Team</button>}
           </nav>
           <div className="flex items-center gap-2">
@@ -815,7 +815,7 @@ export default function App() {
         )}
         <div className="mb-6 flex gap-2 sm:hidden">
           <button onClick={() => setView("overview")} className={`flex-1 rounded-xl px-4 py-2 text-sm font-medium ${view === "overview" ? "bg-slate-950 text-white" : "bg-white"}`}>Overview</button>
-          <button onClick={() => setView("connections")} className={`flex-1 rounded-xl px-4 py-2 text-sm font-medium ${view === "connections" ? "bg-slate-950 text-white" : "bg-white"}`}>Connections</button>
+          {["owner","admin"].includes(session.organization.role) && <button onClick={() => setView("connections")} className={`flex-1 rounded-xl px-4 py-2 text-sm font-medium ${view === "connections" ? "bg-slate-950 text-white" : "bg-white"}`}>Connections</button>}
           {["owner","admin"].includes(session.organization.role) && <button onClick={() => setView("team")} className={`flex-1 rounded-xl px-4 py-2 text-sm font-medium ${view === "team" ? "bg-slate-950 text-white" : "bg-white"}`}>Team</button>}
         </div>
 
@@ -841,7 +841,7 @@ export default function App() {
             <section className="mt-8">
               <div className="mb-5 flex items-end justify-between gap-4">
                 <div><p className="text-xs font-semibold uppercase tracking-[0.16em] text-cyan-700">Your ecosystem</p><h2 className="mt-1 text-2xl font-semibold tracking-tight">Run the business from one starting point</h2></div>
-                <button onClick={() => setView("connections")} className="hidden items-center gap-2 text-sm font-semibold text-slate-600 hover:text-slate-950 sm:flex"><Settings2 size={16} /> Manage connections</button>
+                {["owner","admin"].includes(session.organization.role) && <button onClick={() => setView("connections")} className="hidden items-center gap-2 text-sm font-semibold text-slate-600 hover:text-slate-950 sm:flex"><Settings2 size={16} /> Manage connections</button>}
               </div>
               <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
                 {(["tiquet","ffpro","marketing","academy"] as const).map(product => <div key={product}><ProductCard product={product} result={dashboard?.products?.[product]} /></div>)}
