@@ -306,6 +306,16 @@ function productEntitled(organizationId: string, product: string) {
   return Boolean(plans[subscription.plan]?.includes(product));
 }
 
+function ensureManagedIntegrations(organizationId: string) {
+  if (!productEntitled(organizationId,"marketing")) return;
+  const now=new Date().toISOString();
+  db.prepare(`
+    INSERT INTO integrations(organization_id,product,external_subject_id,enabled,updated_at)
+    VALUES(?, 'marketing', ?, 1, ?)
+    ON CONFLICT(organization_id,product) DO UPDATE SET external_subject_id=excluded.external_subject_id,enabled=1,updated_at=excluded.updated_at
+  `).run(organizationId,organizationId,now);
+}
+
 const productConfig = {
   ffpro: { name:"FFPRO", url:clean(process.env.FFPRO_BASE_URL), openUrl:clean(process.env.FFPRO_PUBLIC_URL) || clean(process.env.FFPRO_BASE_URL) },
   tiquet: { name:"V79 Tiquet", url:clean(process.env.TIQUET_BASE_URL), openUrl:clean(process.env.TIQUET_PUBLIC_URL) || clean(process.env.TIQUET_BASE_URL) },
@@ -559,6 +569,7 @@ app.post("/api/platform/session/consume", (req:any,res)=>{
 
 app.get("/api/integrations", requireAuth, (req,res)=>{
   const m=(req as any).hubMembership;
+  ensureManagedIntegrations(m.organizationId);
   const rows=db.prepare("SELECT product,external_subject_id AS externalSubjectId,enabled,updated_at AS updatedAt FROM integrations WHERE organization_id=?").all(m.organizationId) as any[];
   const byProduct=Object.fromEntries(rows.map(row=>[row.product,row]));
   res.json((Object.keys(productConfig) as Product[]).map(product=>({
@@ -574,6 +585,7 @@ app.get("/api/integrations", requireAuth, (req,res)=>{
 });
 app.put("/api/integrations/:product", requireAuth, requireAdmin, (req,res)=>{
   const product=req.params.product as Product;
+  if(product==="marketing") return res.status(409).json({error:"V79 Marketing is linked automatically by Hub identity."});
   if(!(product in productConfig)) return res.status(404).json({error:"Unknown V79 product."});
   const externalSubjectId=clean(req.body?.externalSubjectId);
   if(!/^[A-Za-z0-9._:@-]{1,180}$/.test(externalSubjectId)) return res.status(400).json({error:"Enter a valid product account identifier."});
@@ -584,12 +596,14 @@ app.put("/api/integrations/:product", requireAuth, requireAdmin, (req,res)=>{
   res.json({success:true});
 });
 app.delete("/api/integrations/:product", requireAuth, requireAdmin, (req,res)=>{
+  if(req.params.product==="marketing") return res.status(409).json({error:"V79 Marketing is managed by the Hub subscription."});
   const m=(req as any).hubMembership;
   db.prepare("DELETE FROM integrations WHERE organization_id=? AND product=?").run(m.organizationId,req.params.product);
   res.json({success:true});
 });
 app.get("/api/platform/dashboard", requireAuth, async (req,res)=>{
   const m=(req as any).hubMembership;
+  ensureManagedIntegrations(m.organizationId);
   const rows=db.prepare("SELECT product,external_subject_id AS externalSubjectId FROM integrations WHERE organization_id=? AND enabled=1").all(m.organizationId) as any[];
   const integrations=Object.fromEntries(rows.map(row=>[row.product,row.externalSubjectId]));
   const products:any={};
