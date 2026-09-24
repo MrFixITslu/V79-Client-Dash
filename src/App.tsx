@@ -18,16 +18,18 @@ type Integration = {
   openUrl: string;
   updatedAt: string | null;
   entitled?: boolean;
+  accessible?: boolean;
   managedByHub?: boolean;
 };
 
 type ProductResult = {
   name: string;
   openUrl: string;
-  status: "connected" | "ready" | "unlinked" | "offline" | "error" | "not_configured";
+  status: "connected" | "ready" | "unlinked" | "offline" | "error" | "not_configured" | "restricted";
   summary?: any;
   error?: string;
   entitled?: boolean;
+  accessible?: boolean;
 };
 
 type Subscription = {
@@ -40,8 +42,23 @@ type Subscription = {
 type DashboardPayload = {
   organization: { id: string; name: string; slug: string };
   subscription?: Subscription | null;
+  seats?: { members:number; pendingInvites:number; used:number; limit:number };
   products: Record<Integration["product"], ProductResult>;
   events: Array<{ id: string; type: string; source: string; occurredAt: string; details?: { subjectId?: string | null; correlationId?: string | null; payload?: Record<string, unknown> } }>;
+};
+
+type TeamMember = {
+  id:string; email:string; name:string; role:"owner"|"admin"|"member"; joinedAt:string; products:string[];
+};
+type TeamInvitation = {
+  id:string; email:string; role:"admin"|"member"; products:string[]; expiresAt:string; createdAt:string;
+};
+type TeamPayload = {
+  seats:{members:number;pendingInvites:number;used:number;limit:number};
+  assignableProducts:string[];
+  financeAccess:"owner_only";
+  members:TeamMember[];
+  invitations:TeamInvitation[];
 };
 
 const productMeta = {
@@ -90,6 +107,7 @@ function statusLabel(status?: string) {
     case "offline": return "Offline";
     case "not_configured": return "Needs setup";
     case "error": return "Check connection";
+    case "restricted": return "Not assigned";
     default: return "Loading";
   }
 }
@@ -270,6 +288,7 @@ function ProductCard({ product, result }: { product: Integration["product"]; res
           result?.status === "connected" ? "bg-emerald-50 text-emerald-700" :
           result?.status === "ready" ? "bg-cyan-50 text-cyan-700" :
           result?.status === "unlinked" ? "bg-slate-100 text-slate-600" :
+          result?.status === "restricted" ? "bg-slate-100 text-slate-500" :
           "bg-amber-50 text-amber-700"
         }`}>{statusLabel(result?.status)}</span>
       </div>
@@ -285,11 +304,12 @@ function ProductCard({ product, result }: { product: Integration["product"]; res
       {result?.error && <p className="mt-4 text-xs text-amber-700">{result.error}</p>}
       <div className="mt-6 flex items-center justify-between border-t border-slate-100 pt-5">
         <span className="text-xs text-slate-400">{summary?.generatedAt ? `Updated ${new Date(summary.generatedAt).toLocaleString()}` : "Connect to show live indicators"}</span>
-        {result?.openUrl && result?.entitled !== false ? (
+        {result?.openUrl && result?.entitled !== false && result?.accessible !== false ? (
           <a href={result.openUrl} target={["ffpro","tiquet","marketing"].includes(product) ? "_self" : "_blank"} rel="noreferrer" className="inline-flex items-center gap-1 text-sm font-semibold text-slate-800 hover:text-cyan-700">
             Open <ArrowUpRight size={15} />
           </a>
-        ) : result?.entitled === false ? <span className="text-xs font-semibold text-amber-700">Plan upgrade required</span> : null}
+        ) : result?.entitled === false ? <span className="text-xs font-semibold text-amber-700">Plan upgrade required</span>
+          : result?.accessible === false ? <span className="text-xs font-semibold text-slate-500">Ask your Hub admin for access</span> : null}
       </div>
     </article>
   );
@@ -326,7 +346,7 @@ function SecurityPanel() {
     <form onSubmit={submit} className="mt-8 rounded-2xl border border-slate-200 bg-white p-5">
       <div className="flex items-center gap-3">
         <div className="rounded-xl bg-slate-950 p-2.5 text-cyan-300"><ShieldCheck size={20}/></div>
-        <div><h3 className="font-semibold text-slate-950">Hub security</h3><p className="text-xs text-slate-400">Change the organisation owner password without touching the database.</p></div>
+        <div><h3 className="font-semibold text-slate-950">Hub security</h3><p className="text-xs text-slate-400">Change your Hub password and sign out your other Hub sessions.</p></div>
       </div>
       <div className="mt-5 grid gap-4 lg:grid-cols-3">
         <label className="text-sm font-medium text-slate-700">Current password<input type="password" autoComplete="current-password" value={currentPassword} onChange={e=>setCurrentPassword(e.target.value)} required className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 outline-none ring-cyan-300 focus:ring-2"/></label>
@@ -427,6 +447,147 @@ function Connections({ integrations, onChanged }: { integrations: Integration[];
       <SecurityPanel />
     </section>
   );
+}
+
+function InviteAccept({ token, onAccepted }: { token:string; onAccepted:(session:Session)=>void }) {
+  const [invite,setInvite]=useState<any>(null);
+  const [name,setName]=useState("");
+  const [password,setPassword]=useState("");
+  const [confirm,setConfirm]=useState("");
+  const [message,setMessage]=useState("");
+  const [busy,setBusy]=useState(false);
+
+  useEffect(()=>{
+    fetch(`/api/team/invitations/${encodeURIComponent(token)}`)
+      .then(async r=>{const b=await r.json().catch(()=>({}));if(!r.ok)throw new Error(b.error||"Invite unavailable.");return b;})
+      .then(setInvite).catch((e:any)=>setMessage(e.message||"Invite unavailable."));
+  },[token]);
+
+  async function submit(e:FormEvent){
+    e.preventDefault(); setMessage("");
+    if(password!==confirm) return setMessage("The passwords do not match.");
+    setBusy(true);
+    try{
+      const r=await fetch(`/api/team/invitations/${encodeURIComponent(token)}/accept`,{
+        method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name,password}),
+      });
+      const b=await r.json().catch(()=>({}));
+      if(!r.ok) throw new Error(b.error||"Could not accept the invitation.");
+      window.history.replaceState(null,"","/");
+      onAccepted(b);
+    }catch(e:any){setMessage(e.message||"Could not accept the invitation.");}
+    finally{setBusy(false);}
+  }
+
+  return <main className="min-h-screen bg-slate-950 text-white">
+    <div className="mx-auto flex min-h-screen max-w-xl items-center px-6 py-12">
+      <section className="w-full rounded-3xl border border-white/10 bg-white/[0.06] p-7 shadow-2xl">
+        <div className="text-sm font-semibold uppercase tracking-[.18em] text-cyan-300">V79 Hub invitation</div>
+        <h1 className="mt-2 text-3xl font-semibold">Join {invite?.organizationName || "your V79 workspace"}</h1>
+        {invite && <div className="mt-4 rounded-2xl bg-slate-900/70 p-4 text-sm text-slate-300">
+          <div><span className="text-slate-500">Email:</span> {invite.email}</div>
+          <div className="mt-1"><span className="text-slate-500">Role:</span> {invite.role}</div>
+          <div className="mt-1"><span className="text-slate-500">Apps:</span> {(invite.products||[]).map((p:string)=>productMeta[p as "tiquet"|"marketing"]?.label||p).join(", ") || "Hub only"}</div>
+        </div>}
+        {message && <div role="alert" className="mt-4 rounded-xl border border-amber-300/30 bg-amber-400/10 px-4 py-3 text-sm text-amber-100">{message}</div>}
+        {invite && <form onSubmit={submit} className="mt-6 space-y-4">
+          <label className="block text-sm text-slate-200">Your name<input required minLength={2} value={name} onChange={e=>setName(e.target.value)} className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900/80 px-4 py-3 outline-none ring-cyan-300 focus:ring-2"/></label>
+          <label className="block text-sm text-slate-200">Create Hub password<input required type="password" minLength={16} value={password} onChange={e=>setPassword(e.target.value)} className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900/80 px-4 py-3 outline-none ring-cyan-300 focus:ring-2"/></label>
+          <label className="block text-sm text-slate-200">Confirm password<input required type="password" minLength={16} value={confirm} onChange={e=>setConfirm(e.target.value)} className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900/80 px-4 py-3 outline-none ring-cyan-300 focus:ring-2"/></label>
+          <button disabled={busy} className="w-full rounded-xl bg-cyan-300 px-4 py-3 font-semibold text-slate-950 disabled:opacity-50">{busy?"Joining…":"Join V79 workspace"}</button>
+        </form>}
+      </section>
+    </div>
+  </main>;
+}
+
+function TeamAccess({ session }: { session:Session }) {
+  const [team,setTeam]=useState<TeamPayload|null>(null);
+  const [email,setEmail]=useState("");
+  const [role,setRole]=useState<"admin"|"member">("member");
+  const [products,setProducts]=useState<string[]>(["tiquet"]);
+  const [message,setMessage]=useState("");
+  const [inviteUrl,setInviteUrl]=useState("");
+  const [busy,setBusy]=useState("");
+
+  const load=useCallback(async()=>{
+    const r=await fetch("/api/team");
+    const b=await r.json().catch(()=>({}));
+    if(!r.ok){setMessage(b.error||"Could not load team access.");return;}
+    setTeam(b);
+  },[]);
+  useEffect(()=>{load();},[load]);
+
+  function toggleProduct(product:string){
+    setProducts(old=>old.includes(product)?old.filter(v=>v!==product):[...old,product]);
+  }
+  async function invite(e:FormEvent){
+    e.preventDefault();setBusy("invite");setMessage("");setInviteUrl("");
+    try{
+      const r=await fetch("/api/team/invitations",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email,role,products})});
+      const b=await r.json().catch(()=>({}));
+      if(!r.ok)throw new Error(b.error||"Could not create invitation.");
+      setInviteUrl(b.inviteUrl);setEmail("");setMessage("Invitation created. Share the secure link with the invited person.");await load();
+    }catch(e:any){setMessage(e.message||"Could not create invitation.");}
+    finally{setBusy("");}
+  }
+  async function revoke(id:string){
+    setBusy(id);setMessage("");
+    try{const r=await fetch(`/api/team/invitations/${id}`,{method:"DELETE"});const b=await r.json().catch(()=>({}));if(!r.ok)throw new Error(b.error||"Could not revoke invite.");await load();}
+    catch(e:any){setMessage(e.message||"Could not revoke invite.");}finally{setBusy("");}
+  }
+  async function saveMember(member:TeamMember,nextRole:string,nextProducts:string[]){
+    setBusy(member.id);setMessage("");
+    try{const r=await fetch(`/api/team/members/${member.id}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({role:nextRole,products:nextProducts})});const b=await r.json().catch(()=>({}));if(!r.ok)throw new Error(b.error||"Could not update team member.");await load();}
+    catch(e:any){setMessage(e.message||"Could not update team member.");}finally{setBusy("");}
+  }
+  async function removeMember(member:TeamMember){
+    setBusy(member.id);setMessage("");
+    try{const r=await fetch(`/api/team/members/${member.id}`,{method:"DELETE"});const b=await r.json().catch(()=>({}));if(!r.ok)throw new Error(b.error||"Could not remove team member.");await load();}
+    catch(e:any){setMessage(e.message||"Could not remove team member.");}finally{setBusy("");}
+  }
+
+  if(!team) return <div className="grid min-h-56 place-items-center"><RefreshCw className="animate-spin text-slate-400"/></div>;
+  const seats=team.seats;
+  return <section>
+    <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
+      <div><h2 className="text-2xl font-semibold tracking-tight">Team & app access</h2><p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">Your plan includes {seats.limit} Hub users. Pending invitations reserve a seat. FFPRO finance stays restricted to the organisation owner.</p></div>
+      <div className="rounded-2xl border border-slate-200 bg-white px-5 py-3 text-right"><div className="text-2xl font-semibold">{seats.used}/{seats.limit}</div><div className="text-xs text-slate-400">Seats used or reserved</div></div>
+    </div>
+    {message && <div role="status" className="mb-5 rounded-xl border border-cyan-200 bg-cyan-50 px-4 py-3 text-sm text-cyan-900">{message}</div>}
+    {inviteUrl && <div className="mb-5 rounded-2xl border border-emerald-200 bg-emerald-50 p-4"><div className="text-sm font-semibold text-emerald-900">Secure invitation link</div><div className="mt-2 break-all text-xs text-emerald-800">{inviteUrl}</div><button type="button" onClick={()=>navigator.clipboard?.writeText(inviteUrl)} className="mt-3 rounded-lg bg-emerald-800 px-3 py-2 text-xs font-semibold text-white">Copy invite link</button></div>}
+
+    <form onSubmit={invite} className="rounded-3xl border border-slate-200 bg-white p-6">
+      <div className="flex items-center gap-3"><div className="rounded-xl bg-slate-950 p-2.5 text-cyan-300"><Users size={20}/></div><div><h3 className="font-semibold">Invite a team member</h3><p className="text-xs text-slate-400">The invitation is locked to the email address and expires in seven days.</p></div></div>
+      <div className="mt-5 grid gap-4 lg:grid-cols-[1.4fr_.7fr_1fr_auto] lg:items-end">
+        <label className="text-sm font-medium text-slate-700">Email<input type="email" required value={email} onChange={e=>setEmail(e.target.value)} className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 outline-none ring-cyan-300 focus:ring-2"/></label>
+        <label className="text-sm font-medium text-slate-700">Role<select value={role} onChange={e=>setRole(e.target.value as any)} className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5">{session.organization.role==="owner"&&<option value="admin">Admin</option>}<option value="member">Member</option></select></label>
+        <div><div className="text-sm font-medium text-slate-700">App access</div><div className="mt-2 flex flex-wrap gap-2">{team.assignableProducts.map(product=><label key={product} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-sm"><input type="checkbox" checked={products.includes(product)} onChange={()=>toggleProduct(product)}/>{productMeta[product as "tiquet"|"marketing"].label}</label>)}</div></div>
+        <button disabled={busy==="invite"||seats.used>=seats.limit} className="rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40">{busy==="invite"?"Creating…":"Create invite"}</button>
+      </div>
+    </form>
+
+    <div className="mt-6 space-y-3">
+      {team.members.map(member=><div key={member.id}><MemberAccessRow member={member} team={team} currentUserId={session.user.id} owner={session.organization.role==="owner"} busy={busy===member.id} onSave={saveMember} onRemove={removeMember}/></div>)}
+    </div>
+    {team.invitations.length>0&&<div className="mt-8"><h3 className="font-semibold">Pending invitations</h3><div className="mt-3 space-y-2">{team.invitations.map(inv=><div key={inv.id} className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-dashed border-slate-300 bg-white p-4"><div><div className="font-medium">{inv.email}</div><div className="text-xs text-slate-400">{inv.role} · {inv.products.join(", ")||"Hub only"} · expires {new Date(inv.expiresAt).toLocaleDateString()}</div></div><button disabled={busy===inv.id} onClick={()=>revoke(inv.id)} className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600">Revoke</button></div>)}</div></div>}
+  </section>;
+}
+
+function MemberAccessRow({member,team,currentUserId,owner,busy,onSave,onRemove}:{member:TeamMember;team:TeamPayload;currentUserId:string;owner:boolean;busy:boolean;onSave:(m:TeamMember,r:string,p:string[])=>Promise<void>;onRemove:(m:TeamMember)=>Promise<void>}) {
+  const [role,setRole]=useState(member.role);
+  const [products,setProducts]=useState<string[]>(member.products);
+  useEffect(()=>{setRole(member.role);setProducts(member.products);},[member.role,member.products.join("|")]);
+  if(member.role==="owner") return <div className="rounded-2xl border border-slate-200 bg-white p-5"><div className="flex items-center justify-between"><div><div className="font-semibold">{member.name} <span className="ml-2 rounded-full bg-cyan-50 px-2 py-1 text-[10px] font-semibold uppercase text-cyan-700">Owner</span></div><div className="mt-1 text-sm text-slate-500">{member.email}</div></div><div className="text-xs text-slate-400">All subscribed apps · FFPRO finance owner</div></div></div>;
+  const toggle=(p:string)=>setProducts(old=>old.includes(p)?old.filter(v=>v!==p):[...old,p]);
+  return <div className="rounded-2xl border border-slate-200 bg-white p-5">
+    <div className="grid gap-4 lg:grid-cols-[1.2fr_.55fr_1.2fr_auto] lg:items-center">
+      <div><div className="font-semibold">{member.name}</div><div className="mt-1 text-sm text-slate-500">{member.email}</div></div>
+      <select value={role} disabled={!owner&&member.role==="admin"} onChange={e=>setRole(e.target.value as any)} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm">{owner&&<option value="admin">Admin</option>}<option value="member">Member</option></select>
+      <div className="flex flex-wrap gap-2">{team.assignableProducts.map(p=><label key={p} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-xs"><input type="checkbox" checked={products.includes(p)} onChange={()=>toggle(p)}/>{productMeta[p as "tiquet"|"marketing"].label}</label>)}</div>
+      <div className="flex gap-2"><button disabled={busy} onClick={()=>onSave(member,role,products)} className="rounded-xl bg-slate-950 px-3 py-2 text-xs font-semibold text-white disabled:opacity-40">Save</button>{member.id!==currentUserId&&<button disabled={busy} onClick={()=>onRemove(member)} className="rounded-xl border border-rose-200 px-3 py-2 text-xs font-semibold text-rose-700 disabled:opacity-40">Remove</button>}</div>
+    </div>
+  </div>;
 }
 
 function eventTitle(type: string) {
@@ -564,10 +725,11 @@ export default function App() {
   const [session, setSession] = useState<Session | null | undefined>(undefined);
   const [dashboard, setDashboard] = useState<DashboardPayload | null>(null);
   const [integrations, setIntegrations] = useState<Integration[]>([]);
-  const [view, setView] = useState<"overview" | "connections">("overview");
+  const [view, setView] = useState<"overview" | "connections" | "team">("overview");
   const [refreshing, setRefreshing] = useState(false);
   const [notice, setNotice] = useState("");
   const returnTarget = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("return") : null;
+  const inviteToken = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("invite") : null;
   const managedReturnTarget = returnTarget && ["ffpro","tiquet","marketing"].includes(returnTarget) ? returnTarget as Integration["product"] : null;
 
   const loadAll = useCallback(async () => {
@@ -603,6 +765,10 @@ export default function App() {
       setNotice(`${productMeta[managedReturnTarget].label} is not included in your current V79 subscription.`);
       return;
     }
+    if (product?.accessible === false) {
+      setNotice(`${productMeta[managedReturnTarget].label} has not been assigned to your Hub account.`);
+      return;
+    }
     window.location.assign(`/api/apps/${managedReturnTarget}/launch`);
   }, [session, managedReturnTarget, dashboard]);
 
@@ -610,6 +776,8 @@ export default function App() {
     await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
     setSession(null); setDashboard(null); setIntegrations([]);
   }
+
+  if (inviteToken) return <InviteAccept token={inviteToken} onAccepted={setSession} />;
 
   if (session === undefined) {
     return <div className="grid min-h-screen place-items-center bg-slate-950 text-slate-300"><RefreshCw className="animate-spin" /></div>;
@@ -628,7 +796,8 @@ export default function App() {
           </div>
           <nav className="hidden rounded-xl bg-slate-100 p-1 sm:flex" aria-label="Hub sections">
             <button onClick={() => setView("overview")} className={`rounded-lg px-4 py-2 text-sm font-medium ${view === "overview" ? "bg-white shadow-sm" : "text-slate-500"}`}>Overview</button>
-            <button onClick={() => setView("connections")} className={`rounded-lg px-4 py-2 text-sm font-medium ${view === "connections" ? "bg-white shadow-sm" : "text-slate-500"}`}>Connections</button>
+            {["owner","admin"].includes(session.organization.role) && <button onClick={() => setView("connections")} className={`rounded-lg px-4 py-2 text-sm font-medium ${view === "connections" ? "bg-white shadow-sm" : "text-slate-500"}`}>Connections</button>}
+            {["owner","admin"].includes(session.organization.role) && <button onClick={() => setView("team")} className={`rounded-lg px-4 py-2 text-sm font-medium ${view === "team" ? "bg-white shadow-sm" : "text-slate-500"}`}>Team</button>}
           </nav>
           <div className="flex items-center gap-2">
             <button onClick={loadAll} disabled={refreshing} aria-label="Refresh dashboard" className="rounded-xl border border-slate-200 p-2.5 text-slate-500 hover:bg-slate-50"><RefreshCw size={18} className={refreshing ? "animate-spin" : ""} /></button>
@@ -646,7 +815,8 @@ export default function App() {
         )}
         <div className="mb-6 flex gap-2 sm:hidden">
           <button onClick={() => setView("overview")} className={`flex-1 rounded-xl px-4 py-2 text-sm font-medium ${view === "overview" ? "bg-slate-950 text-white" : "bg-white"}`}>Overview</button>
-          <button onClick={() => setView("connections")} className={`flex-1 rounded-xl px-4 py-2 text-sm font-medium ${view === "connections" ? "bg-slate-950 text-white" : "bg-white"}`}>Connections</button>
+          {["owner","admin"].includes(session.organization.role) && <button onClick={() => setView("connections")} className={`flex-1 rounded-xl px-4 py-2 text-sm font-medium ${view === "connections" ? "bg-slate-950 text-white" : "bg-white"}`}>Connections</button>}
+          {["owner","admin"].includes(session.organization.role) && <button onClick={() => setView("team")} className={`flex-1 rounded-xl px-4 py-2 text-sm font-medium ${view === "team" ? "bg-slate-950 text-white" : "bg-white"}`}>Team</button>}
         </div>
 
         {view === "overview" ? (
@@ -671,7 +841,7 @@ export default function App() {
             <section className="mt-8">
               <div className="mb-5 flex items-end justify-between gap-4">
                 <div><p className="text-xs font-semibold uppercase tracking-[0.16em] text-cyan-700">Your ecosystem</p><h2 className="mt-1 text-2xl font-semibold tracking-tight">Run the business from one starting point</h2></div>
-                <button onClick={() => setView("connections")} className="hidden items-center gap-2 text-sm font-semibold text-slate-600 hover:text-slate-950 sm:flex"><Settings2 size={16} /> Manage connections</button>
+                {["owner","admin"].includes(session.organization.role) && <button onClick={() => setView("connections")} className="hidden items-center gap-2 text-sm font-semibold text-slate-600 hover:text-slate-950 sm:flex"><Settings2 size={16} /> Manage connections</button>}
               </div>
               <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
                 {(["tiquet","ffpro","marketing","academy"] as const).map(product => <div key={product}><ProductCard product={product} result={dashboard?.products?.[product]} /></div>)}
@@ -690,12 +860,14 @@ export default function App() {
               </div>
               <div className="rounded-3xl border border-slate-200 bg-white p-6">
                 <div className="flex items-center gap-3"><BookOpenCheck className="text-cyan-700" size={21}/><h2 className="font-semibold">What comes next</h2></div>
-                <p className="mt-4 text-sm leading-6 text-slate-500">V79 Marketing now uses Hub-managed access and the shared organisation identity. FFPRO and Tiquet will move to the same launch model as the platform identity layer is standardised.</p>
+                <p className="mt-4 text-sm leading-6 text-slate-500">Hub now manages access to Tiquet, FFPRO and Marketing. Use Team to assign operational and marketing access while finance remains owner-only.</p>
               </div>
             </section>
           </>
-        ) : (
+        ) : view === "connections" ? (
           <Connections integrations={integrations} onChanged={async () => { await loadAll(); }} />
+        ) : (
+          <TeamAccess session={session} />
         )}
       </main>
 

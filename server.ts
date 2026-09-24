@@ -168,6 +168,36 @@ function migrateLaunchTicketsForHubApps() {
 }
 migrateLaunchTicketsForHubApps();
 
+db.exec(`
+CREATE TABLE IF NOT EXISTS member_product_access (
+  user_id TEXT NOT NULL,
+  organization_id TEXT NOT NULL,
+  product TEXT NOT NULL CHECK(product IN ('tiquet','marketing')),
+  enabled INTEGER NOT NULL DEFAULT 1,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(user_id, organization_id, product),
+  FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY(organization_id) REFERENCES organizations(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS team_invitations (
+  id TEXT PRIMARY KEY,
+  organization_id TEXT NOT NULL,
+  email TEXT NOT NULL,
+  role TEXT NOT NULL CHECK(role IN ('admin','member')),
+  products_json TEXT NOT NULL DEFAULT '[]',
+  token_hash TEXT NOT NULL UNIQUE,
+  expires_at INTEGER NOT NULL,
+  invited_by TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','accepted','revoked','expired')),
+  created_at TEXT NOT NULL,
+  accepted_at TEXT,
+  FOREIGN KEY(organization_id) REFERENCES organizations(id) ON DELETE CASCADE,
+  FOREIGN KEY(invited_by) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_team_invitations_org_status ON team_invitations(organization_id,status,expires_at);
+CREATE INDEX IF NOT EXISTS idx_team_invitations_email ON team_invitations(email);
+`);
+
 function clean(value: unknown) {
   return typeof value === "string" ? value.trim().replace(/^['"]|['"]$/g, "") : "";
 }
@@ -298,6 +328,7 @@ setInterval(() => {
   db.prepare("DELETE FROM sessions WHERE expires_at <= ?").run(now);
   for (const [key,value] of loginAttempts) if(value.resetAt<now) loginAttempts.delete(key);
   db.prepare("DELETE FROM app_launch_tickets WHERE expires_at <= ?").run(now);
+  db.prepare("UPDATE team_invitations SET status='expired' WHERE status='pending' AND expires_at <= ?").run(now);
 }, 60_000).unref();
 
 function bootstrapOwner() {
@@ -355,8 +386,7 @@ function subscriptionFor(organizationId: string) {
   return db.prepare("SELECT plan,status,trial_ends_at AS trialEndsAt,current_period_end AS currentPeriodEnd,updated_at AS updatedAt FROM subscriptions WHERE organization_id=?").get(organizationId) as any;
 }
 
-function productEntitled(organizationId: string, product: string) {
-  if (product === "academy") return true;
+function subscriptionUsable(organizationId: string) {
   const subscription = subscriptionFor(organizationId);
   if (!subscription || !["active","trialing"].includes(subscription.status)) return false;
   if (subscription.status === "trialing") {
@@ -367,8 +397,59 @@ function productEntitled(organizationId: string, product: string) {
     const periodEnd = new Date(subscription.currentPeriodEnd).getTime();
     if (Number.isFinite(periodEnd) && periodEnd <= Date.now()) return false;
   }
+  return true;
+}
+
+function productEntitled(organizationId: string, product: string) {
+  if (product === "academy") return true;
+  if (!subscriptionUsable(organizationId)) return false;
+  const subscription = subscriptionFor(organizationId);
   const plan = PLAN_CATALOG[subscription.plan as PlanName];
   return Boolean(plan?.products.includes(product as any));
+}
+
+function planSeatLimit(organizationId: string) {
+  const subscription = subscriptionFor(organizationId);
+  const plan = subscription && PLAN_CATALOG[subscription.plan as PlanName];
+  return Number(plan?.includedUsers || 1);
+}
+
+function seatUsage(organizationId: string) {
+  const members = Number((db.prepare("SELECT COUNT(*) AS count FROM memberships WHERE organization_id=?").get(organizationId) as any)?.count || 0);
+  const pendingInvites = Number((db.prepare("SELECT COUNT(*) AS count FROM team_invitations WHERE organization_id=? AND status='pending' AND expires_at>?").get(organizationId,Date.now()) as any)?.count || 0);
+  return { members, pendingInvites, used: members + pendingInvites, limit: planSeatLimit(organizationId) };
+}
+
+function memberProducts(userId: string, organizationId: string) {
+  return (db.prepare("SELECT product FROM member_product_access WHERE user_id=? AND organization_id=? AND enabled=1 ORDER BY product").all(userId,organizationId) as any[])
+    .map(row => String(row.product));
+}
+
+function memberCanAccessProduct(userId: string, organizationId: string, role: string, product: string) {
+  // Academy learner accounts remain independent of Hub. A linked learner summary
+  // is business administration data, so only the Hub owner/admin can see it.
+  if (product === "academy") return ["owner","admin"].includes(role);
+  if (!productEntitled(organizationId, product)) return false;
+  if (role === "owner") return true;
+  if (product === "ffpro") return false;
+  return Boolean(db.prepare("SELECT 1 FROM member_product_access WHERE user_id=? AND organization_id=? AND product=? AND enabled=1").get(userId,organizationId,product));
+}
+
+function assignMemberProducts(userId: string, organizationId: string, requested: unknown) {
+  const allowed = new Set(["tiquet","marketing"]);
+  const products = Array.isArray(requested)
+    ? [...new Set(requested.map(v=>clean(v).toLowerCase()).filter(v=>allowed.has(v) && productEntitled(organizationId,v)))]
+    : [];
+  const now = new Date().toISOString();
+  const tx = db.transaction(() => {
+    db.prepare("DELETE FROM member_product_access WHERE user_id=? AND organization_id=?").run(userId,organizationId);
+    for (const product of products) {
+      db.prepare("INSERT INTO member_product_access(user_id,organization_id,product,enabled,updated_at) VALUES(?,?,?,?,?)")
+        .run(userId,organizationId,product,1,now);
+    }
+  });
+  tx();
+  return products;
 }
 
 function ensureManagedIntegrations(organizationId: string) {
@@ -642,6 +723,175 @@ app.put("/api/auth/password", requireAuth, (req,res)=>{
   res.json({success:true});
 });
 
+app.get("/api/team/invitations/:token", (req,res)=>{
+  const token=clean(req.params.token);
+  if(!/^[A-Za-z0-9_-]{32,180}$/.test(token)) return res.status(404).json({error:"Invite not found."});
+  const invite=db.prepare(`
+    SELECT i.id,i.email,i.role,i.products_json AS productsJson,i.expires_at AS expiresAt,i.status,
+      o.name AS organizationName
+    FROM team_invitations i JOIN organizations o ON o.id=i.organization_id
+    WHERE i.token_hash=?
+  `).get(hashToken(token)) as any;
+  if(!invite || invite.status!=="pending" || invite.expiresAt<=Date.now()) return res.status(404).json({error:"This invitation is invalid or has expired."});
+  let products:string[]=[];
+  try { products=JSON.parse(invite.productsJson || "[]"); } catch {}
+  res.json({
+    email:invite.email,
+    role:invite.role,
+    products,
+    organizationName:invite.organizationName,
+    expiresAt:new Date(invite.expiresAt).toISOString(),
+  });
+});
+
+app.post("/api/team/invitations/:token/accept", loginLimited, (req,res)=>{
+  const token=clean(req.params.token);
+  const name=clean(req.body?.name);
+  const password=String(req.body?.password || "");
+  if(!/^[A-Za-z0-9_-]{32,180}$/.test(token)) return res.status(404).json({error:"Invite not found."});
+  if(name.length<2 || name.length>120) return res.status(400).json({error:"Enter your name."});
+  if(password.length<16 || password.length>256) return res.status(400).json({error:"Use a password of 16–256 characters."});
+
+  const invite=db.prepare("SELECT * FROM team_invitations WHERE token_hash=?").get(hashToken(token)) as any;
+  if(!invite || invite.status!=="pending" || invite.expires_at<=Date.now()) return res.status(404).json({error:"This invitation is invalid or has expired."});
+  if(!subscriptionUsable(invite.organization_id)) return res.status(403).json({error:"This V79 workspace does not currently have an active trial or subscription for additional team seats."});
+  const usage=seatUsage(invite.organization_id);
+  if(usage.members>=usage.limit) return res.status(409).json({error:"This V79 plan has no available team seats."});
+  const existing=db.prepare("SELECT u.id,m.organization_id AS organizationId FROM users u LEFT JOIN memberships m ON m.user_id=u.id WHERE u.email=? LIMIT 1").get(invite.email) as any;
+  if(existing?.organizationId) return res.status(409).json({error:"This email already belongs to a V79 Hub workspace. Ask the workspace owner for help."});
+
+  const userId=existing?.id || crypto.randomUUID();
+  const salt=crypto.randomBytes(16).toString("hex"), now=new Date().toISOString();
+  let products:string[]=[];
+  try { products=JSON.parse(invite.products_json || "[]"); } catch {}
+  const tx=db.transaction(()=>{
+    if(!existing) {
+      db.prepare("INSERT INTO users(id,email,name,password_salt,password_hash,created_at) VALUES(?,?,?,?,?,?)")
+        .run(userId,invite.email,name,salt,passwordDigest(password,salt),now);
+    } else {
+      db.prepare("UPDATE users SET name=?,password_salt=?,password_hash=? WHERE id=?")
+        .run(name,salt,passwordDigest(password,salt),userId);
+    }
+    db.prepare("INSERT INTO memberships(user_id,organization_id,role,created_at) VALUES(?,?,?,?)")
+      .run(userId,invite.organization_id,invite.role,now);
+    db.prepare("UPDATE team_invitations SET status='accepted',accepted_at=? WHERE id=?").run(now,invite.id);
+  });
+  tx();
+  assignMemberProducts(userId,invite.organization_id,products);
+
+  const sessionToken=crypto.randomBytes(32).toString("base64url");
+  db.prepare("DELETE FROM sessions WHERE user_id=?").run(userId);
+  db.prepare("INSERT INTO sessions(token_hash,user_id,expires_at,created_at) VALUES(?,?,?,?)")
+    .run(hashToken(sessionToken),userId,Date.now()+SESSION_TTL_MS,now);
+  setSessionCookie(res,sessionToken);
+  const m=membership(userId);
+  res.status(201).json({
+    user:{id:userId,email:invite.email,name},
+    organization:{id:m.organizationId,name:m.organizationName,slug:m.slug,role:m.role},
+    subscription:subscriptionFor(m.organizationId) || null,
+  });
+});
+
+app.get("/api/team", requireAuth, requireAdmin, (req,res)=>{
+  const m=(req as any).hubMembership;
+  db.prepare("UPDATE team_invitations SET status='expired' WHERE organization_id=? AND status='pending' AND expires_at<=?").run(m.organizationId,Date.now());
+  const members=(db.prepare(`
+    SELECT u.id,u.email,u.name,m.role,m.created_at AS joinedAt
+    FROM memberships m JOIN users u ON u.id=m.user_id
+    WHERE m.organization_id=?
+    ORDER BY CASE m.role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END,u.name
+  `).all(m.organizationId) as any[]).map(row=>({
+    ...row,
+    products:row.role==="owner"
+      ? ["ffpro","tiquet",...(productEntitled(m.organizationId,"marketing")?["marketing"]:[])]
+      : memberProducts(row.id,m.organizationId),
+  }));
+  const invitations=(db.prepare(`
+    SELECT id,email,role,products_json AS productsJson,expires_at AS expiresAt,created_at AS createdAt
+    FROM team_invitations
+    WHERE organization_id=? AND status='pending' AND expires_at>?
+    ORDER BY created_at DESC
+  `).all(m.organizationId,Date.now()) as any[]).map(row=>{
+    let products:string[]=[]; try{products=JSON.parse(row.productsJson||"[]");}catch{}
+    return {...row,products,expiresAt:new Date(row.expiresAt).toISOString()};
+  });
+  res.json({
+    seats:seatUsage(m.organizationId),
+    assignableProducts:["tiquet",...(productEntitled(m.organizationId,"marketing")?["marketing"]:[])],
+    financeAccess:"owner_only",
+    members,
+    invitations,
+  });
+});
+
+app.post("/api/team/invitations", requireAuth, requireAdmin, (req,res)=>{
+  const actor=(req as any).hubUser, m=(req as any).hubMembership;
+  const email=clean(req.body?.email).toLowerCase();
+  const role=clean(req.body?.role).toLowerCase() || "member";
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({error:"Enter a valid email address."});
+  if(!["admin","member"].includes(role)) return res.status(400).json({error:"Choose a valid team role."});
+  if(role==="admin" && m.role!=="owner") return res.status(403).json({error:"Only the organisation owner can invite another administrator."});
+  if(db.prepare("SELECT 1 FROM users u JOIN memberships mm ON mm.user_id=u.id WHERE mm.organization_id=? AND u.email=?").get(m.organizationId,email)) return res.status(409).json({error:"That person is already a member of this workspace."});
+  const existingHubUser=db.prepare("SELECT u.id,o.name AS organizationName FROM users u LEFT JOIN memberships mm ON mm.user_id=u.id LEFT JOIN organizations o ON o.id=mm.organization_id WHERE u.email=? LIMIT 1").get(email) as any;
+  if(existingHubUser) return res.status(409).json({error:existingHubUser.organizationName ? `That email already belongs to another V79 Hub workspace (${existingHubUser.organizationName}).` : "That email already belongs to a V79 Hub account."});
+  if(db.prepare("SELECT 1 FROM team_invitations WHERE organization_id=? AND email=? AND status='pending' AND expires_at>?").get(m.organizationId,email,Date.now())) return res.status(409).json({error:"A current invitation already exists for this email."});
+  if(!subscriptionUsable(m.organizationId)) return res.status(403).json({error:"An active trial or subscription is required before adding team seats."});
+  const usage=seatUsage(m.organizationId);
+  if(usage.used>=usage.limit) return res.status(409).json({error:`Your plan includes ${usage.limit} Hub user seat${usage.limit===1?"":"s"}. Revoke an invite, remove a member or change plan before inviting another user.`});
+
+  const products=(Array.isArray(req.body?.products)?req.body.products:[])
+    .map((v:any)=>clean(v).toLowerCase())
+    .filter((v:string,i:number,a:string[])=>["tiquet","marketing"].includes(v)&&a.indexOf(v)===i&&productEntitled(m.organizationId,v));
+  const inviteToken=crypto.randomBytes(32).toString("base64url");
+  const id=crypto.randomUUID(), now=new Date().toISOString(), expiresAt=Date.now()+7*24*60*60_000;
+  db.prepare(`INSERT INTO team_invitations(id,organization_id,email,role,products_json,token_hash,expires_at,invited_by,status,created_at)
+    VALUES(?,?,?,?,?,?,?,?, 'pending', ?)`)
+    .run(id,m.organizationId,email,role,JSON.stringify(products),hashToken(inviteToken),expiresAt,actor.id,now);
+  const inviteUrl=new URL(canonicalOrigin(req));
+  inviteUrl.searchParams.set("invite",inviteToken);
+  res.status(201).json({id,email,role,products,expiresAt:new Date(expiresAt).toISOString(),inviteUrl:inviteUrl.toString(),seats:seatUsage(m.organizationId)});
+});
+
+app.delete("/api/team/invitations/:id", requireAuth, requireAdmin, (req,res)=>{
+  const m=(req as any).hubMembership;
+  const result=db.prepare("UPDATE team_invitations SET status='revoked' WHERE id=? AND organization_id=? AND status='pending'").run(clean(req.params.id),m.organizationId);
+  if(!result.changes) return res.status(404).json({error:"Pending invitation not found."});
+  res.json({success:true,seats:seatUsage(m.organizationId)});
+});
+
+app.patch("/api/team/members/:userId", requireAuth, requireAdmin, (req,res)=>{
+  const actor=(req as any).hubUser, m=(req as any).hubMembership;
+  const userId=clean(req.params.userId);
+  const target=db.prepare("SELECT role FROM memberships WHERE user_id=? AND organization_id=?").get(userId,m.organizationId) as any;
+  if(!target) return res.status(404).json({error:"Team member not found."});
+  if(target.role==="owner") return res.status(403).json({error:"The organisation owner access cannot be changed here."});
+  const role=clean(req.body?.role).toLowerCase() || target.role;
+  if(!["admin","member"].includes(role)) return res.status(400).json({error:"Choose a valid team role."});
+  if((target.role==="admin" || role==="admin") && m.role!=="owner") return res.status(403).json({error:"Only the organisation owner can change administrator access."});
+  if(actor.id===userId && role!==target.role) return res.status(400).json({error:"You cannot change your own Hub role."});
+  db.prepare("UPDATE memberships SET role=? WHERE user_id=? AND organization_id=?").run(role,userId,m.organizationId);
+  const products=assignMemberProducts(userId,m.organizationId,req.body?.products);
+  db.prepare("DELETE FROM sessions WHERE user_id=?").run(userId);
+  res.json({success:true,role,products});
+});
+
+app.delete("/api/team/members/:userId", requireAuth, requireAdmin, (req,res)=>{
+  const actor=(req as any).hubUser, m=(req as any).hubMembership;
+  const userId=clean(req.params.userId);
+  const target=db.prepare("SELECT role FROM memberships WHERE user_id=? AND organization_id=?").get(userId,m.organizationId) as any;
+  if(!target) return res.status(404).json({error:"Team member not found."});
+  if(target.role==="owner") return res.status(403).json({error:"The organisation owner cannot be removed."});
+  if(actor.id===userId) return res.status(400).json({error:"You cannot remove yourself from the workspace."});
+  if(target.role==="admin" && m.role!=="owner") return res.status(403).json({error:"Only the organisation owner can remove an administrator."});
+  const tx=db.transaction(()=>{
+    db.prepare("DELETE FROM sessions WHERE user_id=?").run(userId);
+    db.prepare("DELETE FROM memberships WHERE user_id=? AND organization_id=?").run(userId,m.organizationId);
+    db.prepare("DELETE FROM users WHERE id=? AND NOT EXISTS(SELECT 1 FROM memberships WHERE user_id=?)").run(userId,userId);
+  });
+  tx();
+  res.json({success:true,seats:seatUsage(m.organizationId)});
+});
+
 const launchProductForSource: Record<string,"ffpro"|"tiquet"|"marketing"> = {
   "v79-ffpro":"ffpro",
   "v79-tiquet":"tiquet",
@@ -665,6 +915,12 @@ app.get("/api/apps/:product/launch", requireAuth, (req,res)=>{
       error:`${productConfig[product].name} is not included in the current V79 subscription.`,
       code:"ENTITLEMENT_REQUIRED",
       subscription:subscriptionFor(m.organizationId) || null,
+    });
+  }
+  if (!memberCanAccessProduct(user.id,m.organizationId,m.role,product)) {
+    return res.status(403).json({
+      error:`${productConfig[product].name} has not been assigned to your Hub account.`,
+      code:"PRODUCT_ACCESS_REQUIRED",
     });
   }
   if (product==="ffpro" && m.role!=="owner") {
@@ -731,6 +987,10 @@ app.post("/api/platform/session/consume", (req:any,res)=>{
     db.prepare("DELETE FROM app_launch_tickets WHERE token_hash=?").run(tokenHash);
     return res.status(403).json({error:`${productConfig[product].name} is not included in this subscription.`});
   }
+  if(!memberCanAccessProduct(row.userId,row.organizationId,row.role,product)) {
+    db.prepare("DELETE FROM app_launch_tickets WHERE token_hash=?").run(tokenHash);
+    return res.status(403).json({error:`${productConfig[product].name} has not been assigned to this Hub user.`});
+  }
   if(product==="ffpro" && row.role!=="owner") {
     db.prepare("DELETE FROM app_launch_tickets WHERE token_hash=?").run(tokenHash);
     return res.status(403).json({error:"FFPRO finance access requires the organisation owner role."});
@@ -743,7 +1003,10 @@ app.post("/api/platform/session/consume", (req:any,res)=>{
     organization:{id:row.organizationId,name:row.organizationName,slug:row.slug},
     role:row.role,
     plan:subscription?.plan || null,
-    entitlement:{product,enabled:true},
+    entitlement:{product,enabled:true,access:row.role==="owner"?"owner":row.role},
+    assignedProducts:row.role==="owner"
+      ? ["ffpro","tiquet",...(productEntitled(row.organizationId,"marketing")?["marketing"]:[])]
+      : memberProducts(row.userId,row.organizationId),
   });
 });
 
@@ -752,16 +1015,22 @@ app.get("/api/integrations", requireAuth, (req,res)=>{
   ensureManagedIntegrations(m.organizationId);
   const rows=db.prepare("SELECT product,external_subject_id AS externalSubjectId,enabled,updated_at AS updatedAt FROM integrations WHERE organization_id=?").all(m.organizationId) as any[];
   const byProduct=Object.fromEntries(rows.map(row=>[row.product,row]));
-  res.json((Object.keys(productConfig) as Product[]).map(product=>({
-    product,
-    name:productConfig[product].name,
-    linked:Boolean(byProduct[product]?.enabled),
-    externalSubjectId:byProduct[product]?.externalSubjectId || "",
-    openUrl:productConfig[product].openUrl || "",
-    entitled:productEntitled(m.organizationId,product),
-    managedByHub:["ffpro","tiquet","marketing"].includes(product),
-    updatedAt:byProduct[product]?.updatedAt || null,
-  })));
+  const integrationUser=(req as any).hubUser;
+  const isAdministrator=["owner","admin"].includes(m.role);
+  res.json((Object.keys(productConfig) as Product[]).map(product=>{
+    const accessible=memberCanAccessProduct(integrationUser.id,m.organizationId,m.role,product);
+    return {
+      product,
+      name:productConfig[product].name,
+      linked:Boolean(byProduct[product]?.enabled),
+      externalSubjectId:isAdministrator ? (byProduct[product]?.externalSubjectId || "") : "",
+      openUrl:accessible ? (productConfig[product].openUrl || "") : "",
+      entitled:productEntitled(m.organizationId,product),
+      accessible,
+      managedByHub:["ffpro","tiquet","marketing"].includes(product),
+      updatedAt:isAdministrator ? (byProduct[product]?.updatedAt || null) : null,
+    };
+  }));
 });
 app.put("/api/integrations/:product", requireAuth, requireAdmin, (req,res)=>{
   const product=req.params.product as Product;
@@ -787,14 +1056,24 @@ app.get("/api/platform/dashboard", requireAuth, async (req,res)=>{
   const rows=db.prepare("SELECT product,external_subject_id AS externalSubjectId FROM integrations WHERE organization_id=? AND enabled=1").all(m.organizationId) as any[];
   const integrations=Object.fromEntries(rows.map(row=>[row.product,row.externalSubjectId]));
   const products:any={};
+  const dashboardUser=(req as any).hubUser;
   await Promise.all((Object.keys(productConfig) as Product[]).map(async product=>{
     const subject=integrations[product];
-    products[product]=subject ? await fetchSummary(product,subject) : {status:"unlinked"};
+    const accessible=memberCanAccessProduct(dashboardUser.id,m.organizationId,m.role,product);
+    products[product]=accessible
+      ? (subject ? await fetchSummary(product,subject) : {status:"unlinked"})
+      : {status:"restricted",error:"This app has not been assigned to your Hub account."};
     products[product].name=productConfig[product].name;
-    products[product].openUrl=productConfig[product].openUrl || "";
+    products[product].openUrl=accessible ? (productConfig[product].openUrl || "") : "";
     products[product].entitled=productEntitled(m.organizationId,product);
+    products[product].accessible=accessible;
   }));
-  const events=(db.prepare("SELECT id,type,source,occurred_at AS occurredAt,payload_json AS payloadJson FROM events WHERE organization_id=? ORDER BY occurred_at DESC LIMIT 20").all(m.organizationId) as any[])
+  const events=(db.prepare("SELECT id,type,source,occurred_at AS occurredAt,payload_json AS payloadJson FROM events WHERE organization_id=? ORDER BY occurred_at DESC LIMIT 50").all(m.organizationId) as any[])
+    .filter((event:any)=>{
+      const eventProduct=EVENT_SOURCE_PRODUCTS[event.source];
+      return !eventProduct || memberCanAccessProduct(dashboardUser.id,m.organizationId,m.role,eventProduct);
+    })
+    .slice(0,20)
     .map(event => {
       let details:any={};
       try { details=JSON.parse(event.payloadJson || "{}"); } catch {}
@@ -803,6 +1082,7 @@ app.get("/api/platform/dashboard", requireAuth, async (req,res)=>{
   res.json({
     organization:{id:m.organizationId,name:m.organizationName,slug:m.slug},
     subscription:subscriptionFor(m.organizationId) || null,
+    seats:seatUsage(m.organizationId),
     products,
     events
   });
