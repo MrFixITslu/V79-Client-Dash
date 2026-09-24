@@ -479,12 +479,22 @@ function resolveEventOrganization(source: string, organizationRef: string) {
   }
   const product = EVENT_SOURCE_PRODUCTS[source];
   if (!product) return null;
-  return db.prepare(`
+  const linked = db.prepare(`
     SELECT o.id,o.name,o.slug
     FROM integrations i JOIN organizations o ON o.id=i.organization_id
     WHERE i.product=? AND i.external_subject_id=? AND i.enabled=1
     LIMIT 1
   `).get(product, organizationRef) as any;
+  if (linked) return linked;
+
+  // Hub-managed apps use the stable Hub organisation id after first launch.
+  // The source is authenticated with its own event secret, so this fallback
+  // is safe only for products whose identity is controlled by Hub.
+  if (["ffpro","tiquet","marketing"].includes(product)) {
+    const organization = db.prepare("SELECT id,name,slug FROM organizations WHERE id=?").get(organizationRef) as any;
+    if (organization && productEntitled(organization.id, product)) return organization;
+  }
+  return null;
 }
 
 app.post("/api/platform/events", (req: any, res) => {
