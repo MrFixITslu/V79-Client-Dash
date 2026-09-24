@@ -1021,8 +1021,8 @@ app.post("/api/auth/register", loginLimited, async (req,res)=>{
   tx();
 
   const verificationToken=createAccountToken(userId,"verify_email",VERIFY_EMAIL_TTL_MS);
-  const verifyUrl=new URL("/api/auth/verify-email",canonicalOrigin(req));
-  verifyUrl.searchParams.set("token",verificationToken);
+  const verifyUrl=new URL("/",canonicalOrigin(req));
+  verifyUrl.searchParams.set("verify",verificationToken);
   const delivery=await sendTransactionalEmail({
     to:email,
     subject:"Verify your V79 Hub email",
@@ -1045,35 +1045,26 @@ app.post("/api/auth/register", loginLimited, async (req,res)=>{
   });
 });
 
-app.get("/api/auth/verify-email", (req,res)=>{
-  const token=clean(req.query.token);
-  const back=new URL("/",canonicalOrigin(req));
-  if(!/^[A-Za-z0-9_-]{32,180}$/.test(token)) {
-    back.searchParams.set("verification","invalid");
-    return res.redirect(302,back.toString());
-  }
+app.post("/api/auth/verify-email", loginLimited, (req,res)=>{
+  const token=clean(req.body?.token);
+  if(!/^[A-Za-z0-9_-]{32,180}$/.test(token)) return res.status(400).json({error:"This email verification link is invalid or expired."});
+  const tokenHash=hashToken(token);
   const row=db.prepare(`
     SELECT t.token_hash AS tokenHash,t.user_id AS userId,t.expires_at AS expiresAt,t.used_at AS usedAt,
-      u.email_verified_at AS verifiedAt
+      u.email,u.name,u.email_verified_at AS verifiedAt
     FROM account_tokens t JOIN users u ON u.id=t.user_id
     WHERE t.token_hash=? AND t.purpose='verify_email'
-  `).get(hashToken(token)) as any;
-  if(!row || row.usedAt || row.expiresAt<=Date.now()) {
-    back.searchParams.set("verification","invalid");
-    return res.redirect(302,back.toString());
-  }
+  `).get(tokenHash) as any;
+  if(!row || row.usedAt || row.expiresAt<=Date.now()) return res.status(400).json({error:"This email verification link is invalid or expired."});
 
   const now=new Date().toISOString();
   const m=membership(row.userId);
-  if(!m) {
-    back.searchParams.set("verification","invalid");
-    return res.redirect(302,back.toString());
-  }
+  if(!m) return res.status(400).json({error:"This email verification link is invalid or expired."});
   const trialEndsAt=TRIAL_DAYS>0 ? new Date(Date.now()+TRIAL_DAYS*24*60*60_000).toISOString() : now;
   const tx=db.transaction(()=>{
     db.prepare("UPDATE users SET email_verified_at=COALESCE(email_verified_at,?) WHERE id=?").run(now,row.userId);
-    db.prepare("UPDATE account_tokens SET used_at=? WHERE token_hash=?").run(now,row.tokenHash);
-    db.prepare("DELETE FROM account_tokens WHERE user_id=? AND purpose='verify_email' AND token_hash<>?").run(row.userId,row.tokenHash);
+    db.prepare("UPDATE account_tokens SET used_at=? WHERE token_hash=?").run(now,tokenHash);
+    db.prepare("DELETE FROM account_tokens WHERE user_id=? AND purpose='verify_email' AND token_hash<>?").run(row.userId,tokenHash);
     const subscription=subscriptionFor(m.organizationId);
     if(subscription?.status==="trialing" && !subscription.trialEndsAt) {
       db.prepare("UPDATE subscriptions SET trial_ends_at=?,updated_at=? WHERE organization_id=?").run(trialEndsAt,now,m.organizationId);
@@ -1087,8 +1078,12 @@ app.get("/api/auth/verify-email", (req,res)=>{
   db.prepare("INSERT INTO sessions(token_hash,user_id,expires_at,created_at) VALUES(?,?,?,?)")
     .run(hashToken(sessionToken),row.userId,Date.now()+SESSION_TTL_MS,now);
   setSessionCookie(res,sessionToken);
-  back.searchParams.set("verification","success");
-  res.redirect(302,back.toString());
+  res.json({
+    user:{id:row.userId,email:row.email,name:row.name,emailVerified:true},
+    organization:{id:m.organizationId,name:m.organizationName,slug:m.slug,role:m.role},
+    subscription:subscriptionFor(m.organizationId) || null,
+    message:"Email verified. Your V79 workspace and trial are now active.",
+  });
 });
 
 app.post("/api/auth/resend-verification", loginLimited, async (req,res)=>{
@@ -1098,8 +1093,8 @@ app.post("/api/auth/resend-verification", loginLimited, async (req,res)=>{
   const user=db.prepare("SELECT id,name,email,email_verified_at AS verifiedAt FROM users WHERE email=?").get(email) as any;
   if(!user || user.verifiedAt) return res.status(202).json(generic);
   const token=createAccountToken(user.id,"verify_email",VERIFY_EMAIL_TTL_MS);
-  const verifyUrl=new URL("/api/auth/verify-email",canonicalOrigin(req));
-  verifyUrl.searchParams.set("token",token);
+  const verifyUrl=new URL("/",canonicalOrigin(req));
+  verifyUrl.searchParams.set("verify",token);
   await sendTransactionalEmail({
     to:user.email,
     subject:"Verify your V79 Hub email",
