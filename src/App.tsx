@@ -61,6 +61,26 @@ type TeamPayload = {
   invitations:TeamInvitation[];
 };
 
+type BillingOrder = {
+  id:string;
+  plan:"start"|"business"|"advantage";
+  billingCycle:"monthly"|"annual";
+  amountXcd:number;
+  currency:string;
+  provider:string;
+  status:"pending"|"checkout_ready"|"paid"|"failed"|"cancelled";
+  providerTransactionId?:string|null;
+  createdAt:string;
+  paidAt?:string|null;
+};
+type BillingPayload = {
+  subscription:Subscription|null;
+  seats:{members:number;pendingInvites:number;used:number;limit:number};
+  provider:{id:string;name:string;configured:boolean;environment?:string|null;currency?:string|null;countryCode?:string|null;hostedCheckout:boolean;cardDataStoredByV79:boolean};
+  plans:Array<{id:"start"|"business"|"advantage";name:string;monthlyXcd:number;annualXcd:number;includedUsers:number;products:string[]}>;
+  orders:BillingOrder[];
+};
+
 const productMeta = {
   tiquet: {
     label: "V79 Tiquet",
@@ -590,6 +610,110 @@ function MemberAccessRow({member,team,currentUserId,owner,busy,onSave,onRemove}:
   </div>;
 }
 
+function Billing() {
+  const [data,setData]=useState<BillingPayload|null>(null);
+  const [cycle,setCycle]=useState<"monthly"|"annual">("monthly");
+  const [busy,setBusy]=useState("");
+  const [message,setMessage]=useState("");
+
+  const load=useCallback(async()=>{
+    const response=await fetch("/api/billing");
+    const body=await response.json().catch(()=>({}));
+    if(!response.ok){setMessage(body.error||"Could not load billing.");return;}
+    setData(body);
+  },[]);
+  useEffect(()=>{load();},[load]);
+
+  async function checkout(plan:string){
+    setBusy(plan);setMessage("");
+    try{
+      const response=await fetch("/api/billing/checkout",{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({plan,billingCycle:cycle}),
+      });
+      const body=await response.json().catch(()=>({}));
+      if(!response.ok) throw new Error(body.error||"Could not create a secure checkout.");
+      if(!body.checkoutUrl) throw new Error("The payment gateway did not return a checkout page.");
+      window.location.assign(body.checkoutUrl);
+    }catch(error:any){
+      setMessage(error.message||"Could not create a secure checkout.");
+      setBusy("");
+      await load();
+    }
+  }
+
+  if(!data) return <div className="grid min-h-56 place-items-center"><RefreshCw className="animate-spin text-slate-400"/></div>;
+  const current=data.subscription;
+  const paidPeriodActive=current?.status==="active" && current.currentPeriodEnd && new Date(current.currentPeriodEnd).getTime()>Date.now();
+
+  return <section>
+    <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
+      <div>
+        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-cyan-700">Subscription & payments</p>
+        <h2 className="mt-1 text-2xl font-semibold tracking-tight">V79 Billing</h2>
+        <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">Choose the V79 plan that fits the business. Checkout is hosted by the configured payment provider; V79 Hub does not collect or store card numbers.</p>
+      </div>
+      <div className="flex rounded-xl bg-slate-100 p-1">
+        <button onClick={()=>setCycle("monthly")} className={`rounded-lg px-4 py-2 text-sm font-semibold ${cycle==="monthly"?"bg-white shadow-sm":"text-slate-500"}`}>Monthly</button>
+        <button onClick={()=>setCycle("annual")} className={`rounded-lg px-4 py-2 text-sm font-semibold ${cycle==="annual"?"bg-white shadow-sm":"text-slate-500"}`}>Annual</button>
+      </div>
+    </div>
+
+    {message && <div role="alert" className="mb-5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">{message}</div>}
+
+    <div className="grid gap-5 lg:grid-cols-[1.1fr_.9fr]">
+      <div className="rounded-3xl border border-slate-200 bg-white p-6">
+        <div className="flex items-center gap-3"><div className="rounded-xl bg-cyan-50 p-2.5 text-cyan-700"><CircleDollarSign size={20}/></div><div><h3 className="font-semibold">Current access</h3><p className="text-xs text-slate-400">Subscription and team-seat status</p></div></div>
+        <div className="mt-5 grid gap-3 sm:grid-cols-3">
+          <div className="rounded-2xl bg-slate-50 p-4"><div className="text-xs uppercase tracking-wide text-slate-400">Plan</div><div className="mt-1 text-lg font-semibold capitalize">{current?.plan||"—"}</div></div>
+          <div className="rounded-2xl bg-slate-50 p-4"><div className="text-xs uppercase tracking-wide text-slate-400">Status</div><div className="mt-1 text-lg font-semibold capitalize">{current?.status?.replace("_"," ")||"—"}</div></div>
+          <div className="rounded-2xl bg-slate-50 p-4"><div className="text-xs uppercase tracking-wide text-slate-400">Seats</div><div className="mt-1 text-lg font-semibold">{data.seats.used}/{data.seats.limit}</div></div>
+        </div>
+        <div className="mt-4 text-sm text-slate-500">
+          {current?.status==="trialing" && current.trialEndsAt ? <>Trial ends {new Date(current.trialEndsAt).toLocaleDateString()}.</> :
+           current?.currentPeriodEnd ? <>Paid access through {new Date(current.currentPeriodEnd).toLocaleDateString()}.</> :
+           <>No fixed paid renewal date is recorded.</>}
+        </div>
+      </div>
+
+      <div className="rounded-3xl border border-slate-200 bg-white p-6">
+        <div className="flex items-center gap-3"><ShieldCheck className="text-cyan-700" size={21}/><div><h3 className="font-semibold">Payment gateway</h3><p className="text-xs text-slate-400">Hosted checkout; no card storage in V79</p></div></div>
+        <div className="mt-5 flex items-center justify-between rounded-2xl bg-slate-50 p-4">
+          <div><div className="font-semibold">{data.provider.name}</div><div className="mt-1 text-xs text-slate-400">{data.provider.configured ? `${data.provider.environment} · ${data.provider.currency} · ${data.provider.countryCode}` : "Merchant gateway configuration required"}</div></div>
+          <span className={`rounded-full px-3 py-1 text-xs font-semibold ${data.provider.configured?"bg-emerald-50 text-emerald-700":"bg-amber-50 text-amber-700"}`}>{data.provider.configured?"Ready":"Disabled"}</span>
+        </div>
+        <p className="mt-4 text-xs leading-5 text-slate-500">{data.provider.configured ? "When you continue, you leave V79 for the provider's secure hosted payment page. V79 verifies the provider transaction before activating access." : "Online payment is intentionally disabled until a verified merchant account, API key, Saint Lucia endpoint, country code and XCD configuration are supplied."}</p>
+      </div>
+    </div>
+
+    <div className="mt-6 grid gap-5 lg:grid-cols-3">
+      {data.plans.map(plan=>{
+        const amount=cycle==="annual"?plan.annualXcd:plan.monthlyXcd;
+        const seatConflict=data.seats.used>plan.includedUsers;
+        const midPeriodChange=Boolean(paidPeriodActive && current?.plan!==plan.id);
+        const disabled=!data.provider.configured || seatConflict || midPeriodChange || Boolean(busy);
+        const currentPlan=current?.plan===plan.id;
+        return <article key={plan.id} className={`rounded-3xl border bg-white p-6 ${currentPlan?"border-cyan-300 ring-2 ring-cyan-100":"border-slate-200"}`}>
+          <div className="flex items-start justify-between gap-3"><div><div className="text-xs font-semibold uppercase tracking-[.16em] text-cyan-700">{plan.name}</div><div className="mt-3 text-3xl font-semibold">EC${amount.toLocaleString()}</div><div className="text-xs text-slate-400">{cycle==="annual"?"per year":"per month"}</div></div>{currentPlan&&<span className="rounded-full bg-cyan-50 px-2.5 py-1 text-[10px] font-semibold uppercase text-cyan-700">Current</span>}</div>
+          <div className="mt-5 space-y-2 text-sm text-slate-600"><div className="flex gap-2"><CheckCircle2 size={16} className="mt-0.5 text-emerald-600"/><span>{plan.includedUsers} Hub users</span></div>{plan.products.map(product=><div key={product} className="flex gap-2"><CheckCircle2 size={16} className="mt-0.5 text-emerald-600"/><span>{productMeta[product as "ffpro"|"tiquet"|"marketing"].label}</span></div>)}</div>
+          {cycle==="annual"&&<div className="mt-4 rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-500">Annual price saves EC${(plan.monthlyXcd*12-plan.annualXcd).toLocaleString()} versus 12 monthly payments.</div>}
+          {seatConflict&&<div className="mt-4 text-xs font-medium text-rose-700">Reduce used/reserved seats to {plan.includedUsers} before selecting this plan.</div>}
+          {midPeriodChange&&<div className="mt-4 text-xs font-medium text-amber-700">Mid-period plan changes are handled by V79 support in this release.</div>}
+          <button disabled={disabled} onClick={()=>checkout(plan.id)} className="mt-5 w-full rounded-xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-35">{busy===plan.id?"Opening secure checkout…":!data.provider.configured?"Payment setup pending":currentPlan&&current?.status==="active"?"Renew plan":"Pay & activate"}</button>
+        </article>;
+      })}
+    </div>
+
+    <div className="mt-8 rounded-3xl border border-slate-200 bg-white p-6">
+      <h3 className="font-semibold">Payment history</h3>
+      <p className="mt-1 text-xs text-slate-400">V79 stores order status and provider transaction references, never full card details.</p>
+      {data.orders.length===0 ? <div className="mt-5 rounded-2xl bg-slate-50 p-5 text-sm text-slate-500">No billing orders yet.</div> :
+      <div className="mt-4 overflow-x-auto"><table className="w-full min-w-[650px] text-left text-sm"><thead><tr className="border-b border-slate-200 text-xs uppercase tracking-wide text-slate-400"><th className="py-3 pr-4">Date</th><th className="py-3 pr-4">Plan</th><th className="py-3 pr-4">Cycle</th><th className="py-3 pr-4">Amount</th><th className="py-3 pr-4">Status</th><th className="py-3">Provider ref</th></tr></thead><tbody>{data.orders.map(order=><tr key={order.id} className="border-b border-slate-100"><td className="py-3 pr-4">{new Date(order.createdAt).toLocaleDateString()}</td><td className="py-3 pr-4 capitalize">{order.plan}</td><td className="py-3 pr-4 capitalize">{order.billingCycle}</td><td className="py-3 pr-4">EC${order.amountXcd.toLocaleString()}</td><td className="py-3 pr-4 capitalize">{order.status.replace("_"," ")}</td><td className="py-3 font-mono text-xs text-slate-500">{order.providerTransactionId||"—"}</td></tr>)}</tbody></table></div>}
+    </div>
+  </section>;
+}
+
 function eventTitle(type: string) {
   const labels: Record<string,string> = {
     "lead.created": "New website lead",
@@ -725,11 +849,12 @@ export default function App() {
   const [session, setSession] = useState<Session | null | undefined>(undefined);
   const [dashboard, setDashboard] = useState<DashboardPayload | null>(null);
   const [integrations, setIntegrations] = useState<Integration[]>([]);
-  const [view, setView] = useState<"overview" | "connections" | "team">("overview");
+  const [view, setView] = useState<"overview" | "connections" | "team" | "billing">("overview");
   const [refreshing, setRefreshing] = useState(false);
   const [notice, setNotice] = useState("");
   const returnTarget = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("return") : null;
   const inviteToken = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("invite") : null;
+  const billingResult = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("billing") : null;
   const managedReturnTarget = returnTarget && ["ffpro","tiquet","marketing"].includes(returnTarget) ? returnTarget as Integration["product"] : null;
 
   const loadAll = useCallback(async () => {
@@ -772,6 +897,20 @@ export default function App() {
     window.location.assign(`/api/apps/${managedReturnTarget}/launch`);
   }, [session, managedReturnTarget, dashboard]);
 
+  useEffect(() => {
+    if(!billingResult) return;
+    const messages:Record<string,string>={
+      success:"Payment verified. Your V79 subscription has been activated or renewed.",
+      failed:"Payment was not completed. Your V79 access was not changed.",
+      verification_failed:"The payment return could not be verified. No subscription change was made; contact V79 Digital if you were charged.",
+    };
+    setNotice(messages[billingResult] || "Billing status updated.");
+    const url=new URL(window.location.href);
+    url.searchParams.delete("billing");
+    window.history.replaceState(null,"",url.pathname+url.search+url.hash);
+    if(session) loadAll();
+  },[billingResult,session,loadAll]);
+
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
     setSession(null); setDashboard(null); setIntegrations([]);
@@ -798,6 +937,7 @@ export default function App() {
             <button onClick={() => setView("overview")} className={`rounded-lg px-4 py-2 text-sm font-medium ${view === "overview" ? "bg-white shadow-sm" : "text-slate-500"}`}>Overview</button>
             {["owner","admin"].includes(session.organization.role) && <button onClick={() => setView("connections")} className={`rounded-lg px-4 py-2 text-sm font-medium ${view === "connections" ? "bg-white shadow-sm" : "text-slate-500"}`}>Connections</button>}
             {["owner","admin"].includes(session.organization.role) && <button onClick={() => setView("team")} className={`rounded-lg px-4 py-2 text-sm font-medium ${view === "team" ? "bg-white shadow-sm" : "text-slate-500"}`}>Team</button>}
+            {session.organization.role==="owner" && <button onClick={() => setView("billing")} className={`rounded-lg px-4 py-2 text-sm font-medium ${view === "billing" ? "bg-white shadow-sm" : "text-slate-500"}`}>Billing</button>}
           </nav>
           <div className="flex items-center gap-2">
             <button onClick={loadAll} disabled={refreshing} aria-label="Refresh dashboard" className="rounded-xl border border-slate-200 p-2.5 text-slate-500 hover:bg-slate-50"><RefreshCw size={18} className={refreshing ? "animate-spin" : ""} /></button>
@@ -813,10 +953,11 @@ export default function App() {
             <button onClick={() => setNotice("")} className="font-semibold text-amber-800">Dismiss</button>
           </div>
         )}
-        <div className="mb-6 flex gap-2 sm:hidden">
-          <button onClick={() => setView("overview")} className={`flex-1 rounded-xl px-4 py-2 text-sm font-medium ${view === "overview" ? "bg-slate-950 text-white" : "bg-white"}`}>Overview</button>
-          {["owner","admin"].includes(session.organization.role) && <button onClick={() => setView("connections")} className={`flex-1 rounded-xl px-4 py-2 text-sm font-medium ${view === "connections" ? "bg-slate-950 text-white" : "bg-white"}`}>Connections</button>}
-          {["owner","admin"].includes(session.organization.role) && <button onClick={() => setView("team")} className={`flex-1 rounded-xl px-4 py-2 text-sm font-medium ${view === "team" ? "bg-slate-950 text-white" : "bg-white"}`}>Team</button>}
+        <div className="mb-6 grid grid-cols-2 gap-2 sm:hidden">
+          <button onClick={() => setView("overview")} className={`rounded-xl px-4 py-2 text-sm font-medium ${view === "overview" ? "bg-slate-950 text-white" : "bg-white"}`}>Overview</button>
+          {["owner","admin"].includes(session.organization.role) && <button onClick={() => setView("connections")} className={`rounded-xl px-4 py-2 text-sm font-medium ${view === "connections" ? "bg-slate-950 text-white" : "bg-white"}`}>Connections</button>}
+          {["owner","admin"].includes(session.organization.role) && <button onClick={() => setView("team")} className={`rounded-xl px-4 py-2 text-sm font-medium ${view === "team" ? "bg-slate-950 text-white" : "bg-white"}`}>Team</button>}
+          {session.organization.role==="owner" && <button onClick={() => setView("billing")} className={`rounded-xl px-4 py-2 text-sm font-medium ${view === "billing" ? "bg-slate-950 text-white" : "bg-white"}`}>Billing</button>}
         </div>
 
         {view === "overview" ? (
@@ -866,8 +1007,10 @@ export default function App() {
           </>
         ) : view === "connections" ? (
           <Connections integrations={integrations} onChanged={async () => { await loadAll(); }} />
-        ) : (
+        ) : view === "team" ? (
           <TeamAccess session={session} />
+        ) : (
+          <Billing />
         )}
       </main>
 
