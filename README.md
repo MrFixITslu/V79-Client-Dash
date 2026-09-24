@@ -6,14 +6,18 @@ V79 Hub is the control plane for the V79 Digital ecosystem. It gives one organis
 
 Phase 1 is intentionally read-only across product boundaries.
 
-- **V79 Hub** owns organisation membership and product-account mappings.
+- **V79 Hub** owns organisation membership and business-app access. Academy summaries use the signed-in member's verified email.
 - **V79 Tiquet** owns clients, jobs, service operations and its workspace.
 - **FFPRO** owns financial transactions, budgets, goals and forecasts.
 - **V79 Academy** owns learners, courses, assessments and certificates.
-- Product summaries are requested server-to-server with an HMAC-SHA256 signature and a five-minute replay window.
+- Product summaries are requested server-to-server with an HMAC-SHA256 signature and a five-minute timestamp window. Product APIs must still enforce their own subject authorization.
 - The Hub never receives raw FFPRO transaction descriptions, Tiquet ticket content or Academy assessment answers.
 
 The next platform phases can add single sign-on, universal organisation IDs, a durable event outbox and controlled cross-product actions after these contracts are proven.
+
+## Current readiness boundary
+
+The Hub validates identity, membership, subscription and app launch before it redirects a customer. A complete deployed journey also depends on each product consuming the signed launch ticket and applying the Hub organisation ID consistently. Verify live FFPRO, Tiquet, Marketing and Academy endpoints, mail delivery, reverse proxy, backups and restoration on the target server before inviting paying customers. Hosted payment configuration is unchanged by the current workflow pass.
 
 ## First deployment
 
@@ -33,12 +37,9 @@ The next platform phases can add single sign-on, universal organisation IDs, a d
    docker compose up -d --build
    ```
 7. In Nginx Proxy Manager, proxy `hub.v79sl.com` to `v79-hub:3040`, enable Web Exploit protection and SSL.
-8. Sign in, open **Connections**, and enter the matching product identifiers:
-   - Tiquet: workspace/account ID
-   - FFPRO: user UUID
-   - Academy: learner UUID or learner email
+8. Sign in and check **Connections**. Tiquet, FFPRO and Marketing use the Hub organisation ID. Academy is independently accessible and the Hub requests only the signed-in member's own verified email for a learner summary. No administrator-entered learner identifier is accepted.
 
-The mappings are stored only in the Hub database at `data/v79-hub.db`.
+Existing Academy mappings remain in the database for migration purposes but are ignored when requesting learner summaries or showing the Connections screen. Historic Academy organisation events are excluded from the shared timeline until a verified learner-to-organisation consent flow exists. The Hub database is stored at `data/v79-hub.db`.
 
 ## Product service URLs
 
@@ -59,6 +60,8 @@ npm test
 npm run build
 docker build -t v79-hub:test .
 ```
+
+The workflow test starts a temporary Hub with its own database and covers owner login, an invitation, member permissions, a single-use Tiquet launch ticket, and isolation of Academy learner identifiers. It does not replace acceptance testing against deployed FFPRO, Tiquet, Marketing, Academy, email, or a payment provider.
 
 The Hub database and SQLite WAL files are ignored by Git and must be included in server backups.
 
