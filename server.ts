@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer as createViteServer } from "vite";
 import { signPlatformRequest, verifyPlatformRequest } from "./server/platform-contract.mjs";
+import { addBillingPeriod, normalizeMoney, verifyWipayResponse } from "./server/billing-contract.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -196,6 +197,24 @@ CREATE TABLE IF NOT EXISTS team_invitations (
 );
 CREATE INDEX IF NOT EXISTS idx_team_invitations_org_status ON team_invitations(organization_id,status,expires_at);
 CREATE INDEX IF NOT EXISTS idx_team_invitations_email ON team_invitations(email);
+CREATE TABLE IF NOT EXISTS billing_orders (
+  id TEXT PRIMARY KEY,
+  organization_id TEXT NOT NULL,
+  plan TEXT NOT NULL CHECK(plan IN ('start','business','advantage')),
+  billing_cycle TEXT NOT NULL CHECK(billing_cycle IN ('monthly','annual')),
+  amount_minor INTEGER NOT NULL,
+  currency TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  provider_transaction_id TEXT,
+  status TEXT NOT NULL CHECK(status IN ('pending','checkout_ready','paid','failed','cancelled')),
+  last_error TEXT,
+  created_at TEXT NOT NULL,
+  paid_at TEXT,
+  FOREIGN KEY(organization_id) REFERENCES organizations(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_billing_orders_org_created ON billing_orders(organization_id,created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_billing_orders_provider_transaction
+  ON billing_orders(provider_transaction_id) WHERE provider_transaction_id IS NOT NULL;
 `);
 
 function clean(value: unknown) {
@@ -292,6 +311,10 @@ function requireAuth(req: express.Request, res: express.Response, next: express.
 function requireAdmin(req: express.Request, res: express.Response, next: express.NextFunction) {
   const role = (req as any).hubMembership?.role;
   if (!["owner","admin"].includes(role)) return res.status(403).json({ error: "Organisation administrator access is required." });
+  next();
+}
+function requireOwner(req: express.Request, res: express.Response, next: express.NextFunction) {
+  if ((req as any).hubMembership?.role !== "owner") return res.status(403).json({ error: "Organisation owner access is required for billing." });
   next();
 }
 function canonicalOrigin(req: express.Request) {
@@ -464,6 +487,80 @@ function ensureManagedIntegrations(organizationId: string) {
   }
 }
 
+type BillingCycle = "monthly" | "annual";
+
+function billingAmount(plan: PlanName, cycle: BillingCycle) {
+  const catalog=PLAN_CATALOG[plan];
+  const xcd=cycle==="annual" ? catalog.annualXcd : catalog.monthlyXcd;
+  return { amountMinor: Math.round(xcd*100), amount: xcd.toFixed(2) };
+}
+
+function wipayConfig() {
+  const provider=clean(process.env.V79_BILLING_PROVIDER).toLowerCase() || "disabled";
+  const paymentUrl=clean(process.env.WIPAY_PAYMENT_URL);
+  const accountNumber=clean(process.env.WIPAY_ACCOUNT_NUMBER);
+  const apiKey=clean(process.env.WIPAY_API_KEY);
+  const countryCode=clean(process.env.WIPAY_COUNTRY_CODE).toUpperCase();
+  const currency=clean(process.env.WIPAY_CURRENCY).toUpperCase();
+  const environment=clean(process.env.WIPAY_ENVIRONMENT).toLowerCase() || "sandbox";
+  const extraHosts=clean(process.env.WIPAY_ALLOWED_HOSTS).split(",").map(v=>v.trim().toLowerCase()).filter(Boolean);
+  let url:URL|null=null;
+  try { if(paymentUrl) url=new URL(paymentUrl); } catch {}
+  const configured=provider==="wipay"
+    && Boolean(url)
+    && url!.protocol==="https:"
+    && accountNumber.length>0
+    && apiKey.length>=3
+    && /^[A-Z]{2}$/.test(countryCode)
+    && currency==="XCD"
+    && ["sandbox","live"].includes(environment);
+  return {provider,paymentUrl,accountNumber,apiKey,countryCode,currency,environment,extraHosts,url,configured};
+}
+
+function billingProviderPublic() {
+  const cfg=wipayConfig();
+  return {
+    id:cfg.provider,
+    name:cfg.provider==="wipay" ? "WiPay" : "Not configured",
+    configured:cfg.configured,
+    environment:cfg.provider==="wipay" ? cfg.environment : null,
+    currency:cfg.provider==="wipay" ? (cfg.currency || null) : null,
+    countryCode:cfg.provider==="wipay" ? (cfg.countryCode || null) : null,
+    hostedCheckout:true,
+    cardDataStoredByV79:false,
+  };
+}
+
+function trustedWipayCheckoutUrl(value:string,cfg:ReturnType<typeof wipayConfig>) {
+  try {
+    const target=new URL(value);
+    if(target.protocol!=="https:") return "";
+    const host=target.hostname.toLowerCase();
+    const configuredHost=cfg.url?.hostname.toLowerCase() || "";
+    const allowed=host===configuredHost || host==="wipayfinancial.com" || host.endsWith(".wipayfinancial.com") || cfg.extraHosts.includes(host);
+    return allowed ? target.toString() : "";
+  } catch { return ""; }
+}
+
+function billingReturnUrl(req:express.Request) {
+  return new URL("/api/billing/wipay/return",canonicalOrigin(req)).toString();
+}
+
+function billingOrderView(row:any) {
+  return {
+    id:row.id,
+    plan:row.plan,
+    billingCycle:row.billing_cycle,
+    amountXcd:Number(row.amount_minor||0)/100,
+    currency:row.currency,
+    provider:row.provider,
+    status:row.status,
+    providerTransactionId:row.provider_transaction_id || null,
+    createdAt:row.created_at,
+    paidAt:row.paid_at || null,
+  };
+}
+
 const productConfig = {
   ffpro: {
     name:"FFPRO",
@@ -632,6 +729,165 @@ app.get("/api/plans", (_req,res)=>{
     selfServiceSignup:SELF_SERVICE_SIGNUP,
     plans:Object.entries(PLAN_CATALOG).map(([id,plan])=>({id,...plan})),
   });
+});
+
+app.get("/api/billing", requireAuth, requireOwner, (req,res)=>{
+  const m=(req as any).hubMembership;
+  const orders=(db.prepare(`
+    SELECT id,plan,billing_cycle,amount_minor,currency,provider,provider_transaction_id,status,created_at,paid_at
+    FROM billing_orders WHERE organization_id=? ORDER BY created_at DESC LIMIT 20
+  `).all(m.organizationId) as any[]).map(billingOrderView);
+  res.json({
+    subscription:subscriptionFor(m.organizationId) || null,
+    seats:seatUsage(m.organizationId),
+    provider:billingProviderPublic(),
+    plans:Object.entries(PLAN_CATALOG).map(([id,plan])=>({id,...plan})),
+    orders,
+  });
+});
+
+app.post("/api/billing/checkout", requireAuth, requireOwner, async (req,res)=>{
+  const m=(req as any).hubMembership;
+  const plan=clean(req.body?.plan).toLowerCase();
+  const cycle=clean(req.body?.billingCycle).toLowerCase();
+  if(!validPlan(plan)) return res.status(400).json({error:"Choose a valid V79 plan."});
+  if(!["monthly","annual"].includes(cycle)) return res.status(400).json({error:"Choose monthly or annual billing."});
+  const billingCycle=cycle as BillingCycle;
+  const cfg=wipayConfig();
+  if(!cfg.configured) return res.status(503).json({
+    error:"Online billing is not configured yet. V79 will not collect card details until a verified payment gateway is enabled.",
+    code:"PAYMENT_PROVIDER_NOT_CONFIGURED",
+  });
+
+  const targetPlan=PLAN_CATALOG[plan];
+  const usage=seatUsage(m.organizationId);
+  if(usage.used>targetPlan.includedUsers) return res.status(409).json({
+    error:`V79 ${targetPlan.name.replace("V79 ","")} includes ${targetPlan.includedUsers} user seats, but this workspace currently uses or reserves ${usage.used}. Remove members or pending invitations before selecting this plan.`,
+    code:"SEAT_LIMIT_CONFLICT",
+  });
+
+  const current=subscriptionFor(m.organizationId);
+  if(current?.status==="active" && current.currentPeriodEnd && new Date(current.currentPeriodEnd).getTime()>Date.now() && current.plan!==plan) {
+    return res.status(409).json({
+      error:"Automated mid-period plan changes are not enabled yet. Keep the current plan until renewal or contact V79 Digital for a controlled plan change.",
+      code:"ACTIVE_PLAN_CHANGE_REQUIRES_SUPPORT",
+    });
+  }
+
+  const pricing=billingAmount(plan,billingCycle);
+  const orderId=`v79_${crypto.randomBytes(12).toString("hex")}`;
+  const now=new Date().toISOString();
+  db.prepare(`INSERT INTO billing_orders
+    (id,organization_id,plan,billing_cycle,amount_minor,currency,provider,status,created_at)
+    VALUES(?,?,?,?,?,'XCD','wipay','pending',?)`)
+    .run(orderId,m.organizationId,plan,billingCycle,pricing.amountMinor,now);
+
+  const fields=new URLSearchParams({
+    account_number:cfg.accountNumber,
+    country_code:cfg.countryCode,
+    currency:cfg.currency,
+    environment:cfg.environment,
+    fee_structure:"merchant_absorb",
+    method:"credit_card",
+    order_id:orderId,
+    origin:"V79-Hub",
+    response_url:billingReturnUrl(req),
+    total:pricing.amount,
+    avs:"1",
+    data:JSON.stringify({v:1,orderId}),
+  });
+
+  try {
+    const response=await fetch(cfg.paymentUrl,{
+      method:"POST",
+      headers:{"content-type":"application/x-www-form-urlencoded","accept":"application/json"},
+      body:fields.toString(),
+      redirect:"manual",
+      signal:AbortSignal.timeout(10_000),
+    });
+    let checkoutUrl="";
+    let providerTransactionId="";
+    if(response.status>=300 && response.status<400) {
+      checkoutUrl=trustedWipayCheckoutUrl(response.headers.get("location") || "",cfg);
+    } else {
+      const payload:any=await response.json().catch(()=>null);
+      checkoutUrl=trustedWipayCheckoutUrl(String(payload?.url || ""),cfg);
+      providerTransactionId=clean(payload?.transaction_id);
+    }
+
+    // Safe browser-return activation requires the provider transaction id to be
+    // bound to this order before the customer leaves V79.
+    if(!response.ok && !(response.status>=300 && response.status<400)) throw new Error(`WiPay returned HTTP ${response.status}`);
+    if(!checkoutUrl) throw new Error("WiPay did not return a trusted hosted checkout URL.");
+    if(!providerTransactionId) throw new Error("WiPay did not return a transaction identifier required for secure callback binding.");
+
+    db.prepare("UPDATE billing_orders SET status='checkout_ready',provider_transaction_id=?,last_error=NULL WHERE id=?")
+      .run(providerTransactionId,orderId);
+    res.json({checkoutUrl,order:billingOrderView(db.prepare("SELECT * FROM billing_orders WHERE id=?").get(orderId))});
+  } catch(error:any) {
+    const detail=String(error?.message || "Payment gateway unavailable").slice(0,240);
+    db.prepare("UPDATE billing_orders SET status='failed',last_error=? WHERE id=?").run(detail,orderId);
+    console.warn("[V79 Billing] WiPay checkout creation failed:",detail);
+    res.status(502).json({error:"The payment gateway did not create a secure checkout. No payment was taken. Please retry later.",code:"PAYMENT_GATEWAY_UNAVAILABLE"});
+  }
+});
+
+app.get("/api/billing/wipay/return", (req,res)=>{
+  const cfg=wipayConfig();
+  const status=clean(req.query.status).toLowerCase();
+  const orderId=clean(req.query.order_id);
+  const transactionId=clean(req.query.transaction_id);
+  const totalText=clean(req.query.total);
+  const responseHash=clean(req.query.hash);
+  const currency=clean(req.query.currency).toUpperCase();
+  const back=new URL("/",canonicalOrigin(req));
+
+  if(status!=="success") {
+    back.searchParams.set("billing","failed");
+    return res.redirect(302,back.toString());
+  }
+  const order=db.prepare("SELECT * FROM billing_orders WHERE id=? AND provider='wipay'").get(orderId) as any;
+  const total=normalizeMoney(totalText);
+  const expected=order ? Number(order.amount_minor||0)/100 : NaN;
+  const valid=cfg.configured
+    && order
+    && order.status!=="failed"
+    && order.provider_transaction_id
+    && transactionId===order.provider_transaction_id
+    && currency===order.currency
+    && total!==null
+    && total+0.0001>=expected
+    && verifyWipayResponse({transactionId,total:totalText,apiKey:cfg.apiKey,hash:responseHash});
+
+  if(!valid) {
+    console.warn("[V79 Billing] Rejected unverifiable WiPay return", {orderId,transactionId,status});
+    back.searchParams.set("billing","verification_failed");
+    return res.redirect(302,back.toString());
+  }
+
+  if(order.status!=="paid") {
+    const current=subscriptionFor(order.organization_id);
+    const currentEnd=current?.status==="active" && current?.plan===order.plan && current.currentPeriodEnd
+      ? new Date(current.currentPeriodEnd)
+      : new Date();
+    const base=Number.isFinite(currentEnd.getTime()) && currentEnd.getTime()>Date.now() ? currentEnd : new Date();
+    const periodEnd=addBillingPeriod(base,order.billing_cycle).toISOString();
+    const now=new Date().toISOString();
+    const tx=db.transaction(()=>{
+      db.prepare("UPDATE billing_orders SET status='paid',paid_at=?,last_error=NULL WHERE id=?").run(now,order.id);
+      db.prepare(`
+        INSERT INTO subscriptions(organization_id,plan,status,trial_ends_at,current_period_end,updated_at)
+        VALUES(?,?,'active',NULL,?,?)
+        ON CONFLICT(organization_id) DO UPDATE SET
+          plan=excluded.plan,status='active',trial_ends_at=NULL,current_period_end=excluded.current_period_end,updated_at=excluded.updated_at
+      `).run(order.organization_id,order.plan,periodEnd,now);
+    });
+    tx();
+    ensureManagedIntegrations(order.organization_id);
+  }
+
+  back.searchParams.set("billing","success");
+  res.redirect(302,back.toString());
 });
 
 app.post("/api/auth/register", loginLimited, (req,res)=>{
