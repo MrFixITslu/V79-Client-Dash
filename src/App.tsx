@@ -1,7 +1,7 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Activity, ArrowUpRight, BookOpenCheck, Building2, CircleDollarSign,
-  GraduationCap, Headphones, Link2, LogOut, Megaphone, RefreshCw, Settings2,
+  Activity, AlertTriangle, ArrowUpRight, BookOpenCheck, Building2, CheckCircle2, CircleDollarSign,
+  GraduationCap, Headphones, Lightbulb, Link2, LogOut, Megaphone, RefreshCw, Settings2,
   ShieldCheck, Sparkles, TicketCheck, Unplug, Users
 } from "lucide-react";
 
@@ -236,11 +236,11 @@ function ProductCard({ product, result }: { product: Integration["product"]; res
       {result?.error && <p className="mt-4 text-xs text-amber-700">{result.error}</p>}
       <div className="mt-6 flex items-center justify-between border-t border-slate-100 pt-5">
         <span className="text-xs text-slate-400">{summary?.generatedAt ? `Updated ${new Date(summary.generatedAt).toLocaleString()}` : "Connect to show live indicators"}</span>
-        {result?.openUrl ? (
-          <a href={result.openUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-sm font-semibold text-slate-800 hover:text-cyan-700">
+        {result?.openUrl && result?.entitled !== false ? (
+          <a href={result.openUrl} target={product === "marketing" ? "_self" : "_blank"} rel="noreferrer" className="inline-flex items-center gap-1 text-sm font-semibold text-slate-800 hover:text-cyan-700">
             Open <ArrowUpRight size={15} />
           </a>
-        ) : null}
+        ) : result?.entitled === false ? <span className="text-xs font-semibold text-amber-700">Plan upgrade required</span> : null}
       </div>
     </article>
   );
@@ -415,6 +415,65 @@ function eventDescription(event: DashboardPayload["events"][number]) {
   }
 }
 
+function ActionCentre({ dashboard }: { dashboard: DashboardPayload | null }) {
+  const actions = useMemo(() => {
+    if (!dashboard) return [] as Array<{ title:string; detail:string; product:Integration["product"]; priority:"attention"|"good"|"info" }>;
+    const result: Array<{ title:string; detail:string; product:Integration["product"]; priority:"attention"|"good"|"info" }> = [];
+    const ff:any = dashboard.products?.ffpro?.summary?.metrics || {};
+    const tq:any = dashboard.products?.tiquet?.summary?.metrics || {};
+    const mk:any = dashboard.products?.marketing?.summary?.metrics || {};
+    const ac:any = dashboard.products?.academy?.summary?.metrics || {};
+
+    if (dashboard.products?.ffpro?.status === "connected" && Number.isFinite(Number(ff.currentMonthNet))) {
+      if (Number(ff.currentMonthNet) < 0) result.push({title:"Review this month's cash position",detail:"FFPRO shows expenses above income for the current month. Review the drivers before committing new spend.",product:"ffpro",priority:"attention"});
+      else result.push({title:"Cash position is positive",detail:"Current-month FFPRO net is positive. Check the forecast before deciding how much is available to reinvest.",product:"ffpro",priority:"good"});
+    }
+    if (dashboard.products?.tiquet?.status === "connected") {
+      const openJobs = Object.entries(tq.jobsByStatus || {}).filter(([status]) => !["paid","completed","closed"].includes(String(status).toLowerCase())).reduce((sum,[,value])=>sum+Number(value||0),0);
+      if (openJobs > 0) result.push({title:`${openJobs} service job${openJobs===1?"":"s"} need progression`,detail:"Use Tiquet to check stalled work, customer follow-ups and the next operational action.",product:"tiquet",priority:"info"});
+    }
+    if (dashboard.products?.marketing?.status === "connected") {
+      if (Number(mk.activeCampaigns || 0) === 0) result.push({title:"No active marketing campaign",detail:"Create a focused campaign in V79 Marketing so growth activity is deliberate rather than occasional.",product:"marketing",priority:"attention"});
+      else if (Number(mk.scheduledPosts || 0) === 0) result.push({title:"Campaign active, but nothing is scheduled",detail:"Your campaign exists but there is no scheduled content. Build the next publishing queue.",product:"marketing",priority:"attention"});
+      else result.push({title:"Marketing activity is planned",detail:`${formatNumber(mk.activeCampaigns)} active campaign(s) and ${formatNumber(mk.scheduledPosts)} scheduled post(s) are visible.`,product:"marketing",priority:"good"});
+    }
+    if (dashboard.products?.academy?.status === "connected" && Number(ac.enrolledCourses || 0) > 0 && Number(ac.certificates || 0) === 0) {
+      result.push({title:"Training is in progress",detail:"Academy enrolment is active but no certificate is recorded yet. Continue the learning plan.",product:"academy",priority:"info"});
+    }
+    return result.slice(0,6);
+  }, [dashboard]);
+
+  if (!actions.length) return null;
+  return (
+    <section className="mt-8 rounded-3xl border border-slate-200 bg-white p-6">
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <div className="rounded-xl bg-cyan-50 p-2.5 text-cyan-700"><Lightbulb size={20}/></div>
+          <div><h2 className="font-semibold text-slate-950">Action centre</h2><p className="text-sm text-slate-500">Cross-app signals translated into practical next actions.</p></div>
+        </div>
+      </div>
+      <div className="mt-5 grid gap-3 md:grid-cols-2">
+        {actions.map((action,index) => {
+          const Icon = action.priority === "attention" ? AlertTriangle : action.priority === "good" ? CheckCircle2 : Activity;
+          const openUrl = dashboard?.products?.[action.product]?.openUrl;
+          return (
+            <div key={index} className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
+              <div className="flex items-start gap-3">
+                <Icon size={18} className={action.priority === "attention" ? "mt-0.5 text-amber-600" : action.priority === "good" ? "mt-0.5 text-emerald-600" : "mt-0.5 text-cyan-700"}/>
+                <div className="min-w-0 flex-1">
+                  <div className="font-medium text-slate-900">{action.title}</div>
+                  <p className="mt-1 text-sm leading-5 text-slate-500">{action.detail}</p>
+                  {openUrl && dashboard?.products?.[action.product]?.entitled !== false && <a href={openUrl} className="mt-3 inline-flex items-center gap-1 text-xs font-semibold text-cyan-800">Open {productMeta[action.product].label}<ArrowUpRight size={13}/></a>}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 function BusinessTimeline({ events }: { events: DashboardPayload["events"] }) {
   return (
     <section className="mt-8 rounded-3xl border border-slate-200 bg-white p-6">
@@ -542,7 +601,7 @@ export default function App() {
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div className="rounded-2xl border border-white/10 bg-white/[0.05] px-5 py-4"><div className="text-2xl font-semibold">{connected}/4</div><div className="text-xs text-slate-400">Apps connected</div></div>
-                  <div className="rounded-2xl border border-white/10 bg-white/[0.05] px-5 py-4"><div className="text-2xl font-semibold capitalize">{session.organization.role}</div><div className="text-xs text-slate-400">Your access</div></div>
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.05] px-5 py-4"><div className="text-2xl font-semibold capitalize">{dashboard?.subscription?.plan || "—"}</div><div className="text-xs text-slate-400">{dashboard?.subscription?.status ? `${dashboard.subscription.status} plan` : "Subscription"}</div></div>
                 </div>
               </div>
             </section>
@@ -557,6 +616,7 @@ export default function App() {
               </div>
             </section>
 
+            <ActionCentre dashboard={dashboard} />
             <BusinessTimeline events={dashboard?.events || []} />
 
             <section className="mt-8 grid gap-5 lg:grid-cols-[1.2fr_.8fr]">
