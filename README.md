@@ -182,20 +182,22 @@ V79_MAIL_FROM=V79 Digital <no-reply@v79sl.com>
 
 The `V79_MAIL_FROM` domain must be verified with the email provider before public signup is enabled. Keep `V79_SELF_SERVICE_SIGNUP=0` until a real verification email has been received successfully from the production Hub domain.
 
-### V79 POS beta accounts
+### Ecosystem beta access and production conversion
 
-V79 POS is tracked as a separate product. Set `V79_POS_ACCESS_MODE=beta` and `V79_POS_BETA_SIGNUP=1` to permit free POS beta registration. Public registration still requires `V79_SELF_SERVICE_SIGNUP=1` and working transactional verification email. Existing Hub organisation owners can use **Join free beta** on the POS card. New users can choose **V79 POS beta** on the create-account screen; that does not create a paid suite subscription. No payment details are requested and no billing order is created.
+Set `V79_ACCESS_MODE=beta` while testing. In this mode verified Hub accounts can use FFPRO, Tiquet and Marketing without a paid subscription or expiring trial. Academy stays public. Beta team access allows ten seats by default (`V79_BETA_SEAT_LIMIT`). New accounts create no paid subscription or billing order. Checkout is disabled server-side and the Billing page explains the free beta. Existing organisation IDs, user IDs and app data are retained.
 
-The Hub stores one `pos_access` row per organisation (`beta`, `paid`, or `suspended`). Beta membership is independent of the suite trial expiry. It preserves the same organisation and user IDs for eventual paid access. POS currently has no browser UI or working Hub launch exchange, so the card deliberately has no Open link. Do not advertise it as ready to take real sales until the POS migration, identity provisioning, UI, payment adapters, and device testing pass.
+Public registration still requires `V79_SELF_SERVICE_SIGNUP=1` and working transactional verification email; it must never sign in unverified accounts. Existing signed-in owners also receive beta access. Each downstream app must be deployed, configured for Hub launch, and tested separately before it can be called usable.
 
-Before a paid launch, change `V79_POS_ACCESS_MODE=production` and `V79_POS_BETA_SIGNUP=0`. In this mode beta-only accounts are denied POS entitlement, and free signup is closed. After verifying a commercial agreement or payment outside this script, a trusted operator can inspect and convert an existing account without deleting its data:
+V79 POS is included in the beta account state, with a `pos_access` record per organisation (`beta`, `paid`, or `suspended`). POS currently has no browser UI or working Hub launch exchange, so its card deliberately has no Open link. Do not advertise it as ready to take real sales until the POS migration, identity provisioning, UI, payment adapters, and device testing pass.
+
+After testing and commercial readiness, set `V79_ACCESS_MODE=production`. The existing paid subscription rules then apply to FFPRO, Tiquet and Marketing; beta-only accounts need to choose a paid plan, but retain their identity and data. POS beta-only entitlement is denied until an operator records a reviewed paid agreement or payment. An operator can dry-run and apply that conversion without deleting data:
 
 ```bash
 docker exec v79-hub node scripts/convert-pos-account.mjs --organization-id v79org_UUID --status paid --reason "contract or payment reference"
 docker exec v79-hub node scripts/convert-pos-account.mjs --organization-id v79org_UUID --status paid --reason "contract or payment reference" --apply
 ```
 
-The first command is a dry run. The applied change writes an audit record and does not charge the customer. `--status suspended` can pause access. Complete and test a POS launch integration before enabling an Open action in the Hub.
+The first command is a dry run. The applied change writes an audit record and does not charge the customer. `--status suspended` can pause POS access. Complete and test a POS launch integration before enabling an Open action in the Hub. Do not switch to production mode until every app's readiness and conversion flow has been reviewed.
 
 Trial and paid-period lifecycle is also persisted: an expired trial moves to `suspended`; an expired paid period moves to `past_due`. Payment can reactivate the subscription through the verified billing flow.
 

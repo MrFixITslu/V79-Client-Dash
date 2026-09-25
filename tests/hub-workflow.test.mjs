@@ -33,7 +33,7 @@ test('owner onboarding, team permissions, single-use launches and account isolat
       V79_HUB_ORGANIZATION_NAME: 'Test Business', V79_PLATFORM_SHARED_SECRET: secret,
       V79_TIQUET_LAUNCH_SECRET: secret, V79_TIQUET_PUBLIC_URL: 'https://tiquet.example.test',
       V79_BILLING_PROVIDER: 'disabled', V79_MAIL_PROVIDER: 'disabled', V79_SELF_SERVICE_SIGNUP: '0',
-      V79_POS_ACCESS_MODE: 'beta',
+      V79_ACCESS_MODE: 'beta',
       FFPRO_BASE_URL: '', TIQUET_BASE_URL: '', MARKETING_BASE_URL: '', ACADEMY_BASE_URL: '',
     },
     stdio: ['ignore', 'ignore', 'pipe'],
@@ -73,7 +73,13 @@ test('owner onboarding, team permissions, single-use launches and account isolat
   assert.equal(ownerDash.subscription.status, 'active');
   assert.equal(ownerDash.products.academy.status, 'not_configured');
   assert.equal(ownerDash.seats.used, 1);
-  assert.equal(ownerDash.products.pos.entitled, false);
+  assert.equal(ownerDash.accessMode, 'beta');
+  assert.equal(ownerDash.products.pos.entitled, true);
+  assert.equal(ownerDash.products.ffpro.entitled, true);
+  assert.equal(ownerDash.products.tiquet.entitled, true);
+  assert.equal(ownerDash.products.marketing.entitled, true);
+  assert.equal(ownerDash.seats.limit, 10);
+  assert.equal((await request('/api/billing/checkout', { cookie: ownerCookie, method: 'POST', body: { plan: 'business', billingCycle: 'monthly' } })).status, 409);
   assert.equal(ownerDash.products.pos.openUrl, '');
   const betaJoin = await request('/api/pos/beta/join', { cookie: ownerCookie, method: 'POST' });
   assert.equal(betaJoin.status, 200);
@@ -108,7 +114,10 @@ test('owner onboarding, team permissions, single-use launches and account isolat
   const headers = { 'x-v79-service-id': 'v79-tiquet', 'x-v79-timestamp': timestamp, 'x-v79-signature': signPlatformRequest({ method: 'POST', pathname: '/api/platform/session/consume', timestamp, body, secret }) };
   const consume = await request('/api/platform/session/consume', { method: 'POST', body: { product: 'tiquet', ticket: launchTicket }, headers });
   assert.equal(consume.status, 200);
-  assert.equal((await consume.json()).user.email, 'worker@example.test');
+  const consumed=await consume.json();
+  assert.equal(consumed.user.email, 'worker@example.test');
+  assert.equal(consumed.plan, 'beta');
+  assert.equal(consumed.accessMode, 'beta');
   assert.equal((await request('/api/platform/session/consume', { method: 'POST', body: { product: 'tiquet', ticket: launchTicket }, headers })).status, 401);
   const memberDash = await (await request('/api/platform/dashboard', { cookie: memberCookie })).json();
   assert.equal(memberDash.products.ffpro.status, 'restricted');
@@ -127,7 +136,7 @@ test('owner onboarding, team permissions, single-use launches and account isolat
     cwd:project,
     env:{...process.env,NODE_ENV:'production',PORT:String(productionPort),APP_URL:productionOrigin,DATA_DIR:dataDir,
       V79_HUB_ADMIN_EMAIL:'owner@example.test',V79_HUB_ADMIN_PASSWORD:'a-valid-test-password-123',
-      V79_POS_ACCESS_MODE:'production',V79_BILLING_PROVIDER:'disabled',V79_MAIL_PROVIDER:'disabled',
+      V79_ACCESS_MODE:'production',V79_BILLING_PROVIDER:'disabled',V79_MAIL_PROVIDER:'disabled',
       FFPRO_BASE_URL:'',TIQUET_BASE_URL:'',MARKETING_BASE_URL:'',ACADEMY_BASE_URL:''},
     stdio:'ignore',
   });
@@ -141,6 +150,7 @@ test('owner onboarding, team permissions, single-use launches and account isolat
   const productionRequest=(route,options={})=>fetch(productionOrigin+route,{...options,headers:{Cookie:ownerCookie,...options.headers}});
   let productionDashboard=await (await productionRequest('/api/platform/dashboard')).json();
   assert.equal(productionDashboard.products.pos.entitled,false);
+  assert.equal(productionDashboard.accessMode,'production');
   assert.equal(productionDashboard.products.pos.betaSignupOpen,false);
   assert.equal((await productionRequest('/api/pos/beta/join',{method:'POST'})).status,403);
   execFileSync(process.execPath,[...conversionArgs,'--apply'],{cwd:project,env:{...process.env,DATA_DIR:dataDir}});

@@ -49,6 +49,7 @@ type Subscription = {
 
 type DashboardPayload = {
   organization: { id: string; name: string; slug: string };
+  accessMode?: "beta" | "production";
   subscription?: Subscription | null;
   seats?: { members:number; pendingInvites:number; used:number; limit:number };
   products: Record<Integration["product"], ProductResult>;
@@ -83,6 +84,7 @@ type BillingOrder = {
   paidAt?:string|null;
 };
 type BillingPayload = {
+  accessMode?: "beta" | "production";
   subscription:Subscription|null;
   seats:{members:number;pendingInvites:number;used:number;limit:number};
   provider:{id:string;name:string;configured:boolean;environment?:string|null;currency?:string|null;countryCode?:string|null;hostedCheckout:boolean;cardDataStoredByV79:boolean};
@@ -118,7 +120,7 @@ const productMeta = {
   pos: {
     label: "V79 POS",
     eyebrow: "Commerce",
-    description: "Sales, stock, purchasing and store operations. Register for free beta testing while the browser app is prepared.",
+    description: "Sales, stock, purchasing and store operations. Included in the ecosystem beta; browser testing is still being prepared.",
     icon: ShoppingCart,
   },
 } as const;
@@ -160,7 +162,6 @@ function Login({ onLogin }: { onLogin: (session: Session) => void }) {
   const [name, setName] = useState("");
   const [organizationName, setOrganizationName] = useState("");
   const [plan, setPlan] = useState<"start"|"business"|"advantage">("business");
-  const [signupIntent, setSignupIntent] = useState<"suite"|"pos_beta">("suite");
   const [planData, setPlanData] = useState<any>(null);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -182,7 +183,7 @@ function Login({ onLogin }: { onLogin: (session: Session) => void }) {
         "/api/auth/mfa/verify";
       const payload =
         mode==="login" ? {email,password} :
-        mode==="register" ? {email,password,name,organizationName,plan,signupIntent} :
+        mode==="register" ? {email,password,name,organizationName,plan} :
         mode==="mfa" ? {challengeToken,code:mfaCode} :
         {email};
       const response=await fetch(endpoint,{
@@ -238,7 +239,7 @@ function Login({ onLogin }: { onLogin: (session: Session) => void }) {
     "Confirm it’s you";
   const help =
     mode==="login" ? "Sign in with your verified V79 Hub credentials." :
-    mode==="register" ? signupIntent === "pos_beta" ? "Register your POS beta workspace for free. Verify your email to secure the account." : `Verify your email first; then your ${planData?.trialDays ?? 14}-day trial begins.` :
+    mode==="register" ? planData?.accessMode === "beta" ? "Create a free beta workspace for the V79 ecosystem. Verify your email to secure the account." : `Verify your email first; then your ${planData?.trialDays ?? 14}-day trial begins.` :
     mode==="forgot" ? "Enter your email. If it belongs to a verified Hub account, we will send a 30-minute reset link." :
     mode==="verify" ? "Enter the account email to send a fresh 24-hour verification link." :
     "Enter the six-digit code from your authenticator app, or use one of your one-time recovery codes.";
@@ -254,7 +255,7 @@ function Login({ onLogin }: { onLogin: (session: Session) => void }) {
             One business.<br /><span className="text-cyan-300">One V79 experience.</span>
           </h1>
           <p className="mt-6 max-w-xl text-lg leading-8 text-slate-300">
-            V79 Hub connects finance, service operations, marketing and business learning into one control centre while each specialist app protects its own data.
+            V79 Hub connects finance, service operations, marketing, commerce and business learning into one control centre while each specialist app protects its own data.
           </p>
           <div className="mt-10 grid gap-4 sm:grid-cols-3">
             {[
@@ -300,11 +301,7 @@ function Login({ onLogin }: { onLogin: (session: Session) => void }) {
                     <input autoComplete="organization" required minLength={2} value={organizationName} onChange={e=>setOrganizationName(e.target.value)} className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900/80 px-4 py-3 outline-none ring-cyan-300 focus:ring-2"/>
                   </label>
                 </div>
-                {planData?.posBetaSignup && <div className="mt-5 grid gap-2 sm:grid-cols-2" role="group" aria-label="Choose workspace access">
-                  <button type="button" onClick={()=>setSignupIntent("pos_beta")} className={`rounded-2xl border p-4 text-left text-sm ${signupIntent === "pos_beta" ? "border-cyan-300 bg-cyan-300/10" : "border-white/10"}`}><strong>V79 POS beta</strong><span className="mt-1 block text-xs text-slate-400">Free to register for testing. No payment details.</span></button>
-                  <button type="button" onClick={()=>setSignupIntent("suite")} className={`rounded-2xl border p-4 text-left text-sm ${signupIntent === "suite" ? "border-cyan-300 bg-cyan-300/10" : "border-white/10"}`}><strong>V79 suite trial</strong><span className="mt-1 block text-xs text-slate-400">Choose a plan for finance and operations.</span></button>
-                </div>}
-                {signupIntent === "suite" && <div className="mt-5 grid gap-2">
+                {planData?.accessMode === "beta" ? <div className="mt-5 rounded-2xl border border-cyan-300/30 bg-cyan-300/10 p-4 text-sm text-cyan-50"><strong>Free ecosystem beta</strong><span className="mt-1 block text-xs text-slate-300">FFPRO, Tiquet and Marketing are available for testing after verification. Academy is public. POS browser access is still being built.</span></div> : <div className="mt-5 grid gap-2">
                   {plans.map((item:any)=>(
                     <button key={item.id} type="button" onClick={()=>setPlan(item.id)} className={"rounded-2xl border p-4 text-left transition " + (plan===item.id ? "border-cyan-300 bg-cyan-300/10" : "border-white/10 bg-slate-900/40 hover:border-white/20")}>
                       <div className="flex items-center justify-between gap-4">
@@ -357,7 +354,7 @@ function Login({ onLogin }: { onLogin: (session: Session) => void }) {
             {(mode==="forgot"||mode==="verify"||mode==="mfa") && (
               <button type="button" onClick={()=>{setMode("login");setChallengeToken("");setMfaCode("");setError("");setMessage("");}} className="mt-4 w-full text-center text-xs text-slate-400 hover:text-slate-300">Back to sign in</button>
             )}
-            {mode==="register" && <p className="mt-4 text-center text-[11px] leading-5 text-slate-500">{signupIntent === "pos_beta" ? "Beta registration is free. Access to the POS browser app will open after its testing release. A paid conversion later requires a separate agreement; no automatic charge." : "Your trial starts only after email verification. No payment is taken by this form."}</p>}
+            {mode==="register" && <p className="mt-4 text-center text-[11px] leading-5 text-slate-500">{planData?.accessMode === "beta" ? "Beta testing is free. Existing accounts and data stay in place when paid access opens later; there is no automatic charge." : "Your trial starts only after email verification. No payment is taken by this form."}</p>}
           </form>
           <p className="mt-6 text-center text-xs text-slate-500">From Idea to Advantage</p>
         </section>
@@ -396,7 +393,7 @@ function VerifyEmail({ token, onVerified }: { token:string; onVerified:(session:
       <section className="w-full rounded-3xl border border-white/10 bg-white/[0.06] p-7 shadow-2xl">
         <div className="text-sm font-semibold uppercase tracking-[.18em] text-cyan-300">V79 Hub security</div>
         <h1 className="mt-2 text-3xl font-semibold">Confirm your email</h1>
-        <p className="mt-3 text-sm leading-6 text-slate-400">Press the button below to verify this address and start the V79 trial. Opening this page alone does not activate the workspace.</p>
+        <p className="mt-3 text-sm leading-6 text-slate-400">Press the button below to verify this address and activate your V79 workspace. Opening this page alone does not activate it.</p>
         {error && <div role="alert" className="mt-5 rounded-xl border border-rose-400/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-100">{error}</div>}
         <button onClick={verify} disabled={busy} className="mt-6 w-full rounded-xl bg-cyan-300 px-4 py-3 font-semibold text-slate-950 disabled:opacity-50">{busy?"Verifying…":"Confirm email & activate workspace"}</button>
         <button onClick={()=>window.location.assign("/")} className="mt-3 w-full text-center text-xs text-slate-400 hover:text-slate-300">Back to sign in</button>
@@ -454,7 +451,7 @@ function ResetPassword({ token }: { token:string }) {
   </main>;
 }
 
-function ProductCard({ product, result, role, onNavigate, onJoinPos }: { product: Integration["product"]; result?: ProductResult; role: string; onNavigate: (view: "connections" | "team" | "billing") => void; onJoinPos?: () => void }) {
+function ProductCard({ product, result, role, onNavigate, accessMode }: { product: Integration["product"]; result?: ProductResult; role: string; onNavigate: (view: "connections" | "team" | "billing") => void; accessMode?: "beta" | "production" }) {
   const meta = productMeta[product];
   const Icon = meta.icon;
   const summary = result?.summary;
@@ -489,7 +486,7 @@ function ProductCard({ product, result, role, onNavigate, onJoinPos }: { product
     <p className="mt-4 text-xs leading-5 text-slate-600">{result?.error}</p>
     <div className="mt-6 flex items-center justify-between border-t border-slate-100 pt-5">
       <span className="text-xs font-medium text-slate-500">{result?.accessStatus === "paid" ? "Paid access recorded" : result?.accessStatus === "beta" ? "Free beta registered" : result?.betaSignupOpen ? "No payment required to register" : "Registration unavailable"}</span>
-      {result?.betaSignupOpen && !result?.accessStatus && role === "owner" && <button type="button" onClick={onJoinPos} className="text-sm font-semibold text-violet-700 hover:underline">Join free beta</button>}
+      {result?.accessStatus === "beta" && <span className="text-xs font-semibold text-violet-700">Included in beta</span>}
     </div>
   </article>;
 
@@ -503,13 +500,13 @@ function ProductCard({ product, result, role, onNavigate, onJoinPos }: { product
             <h3 className="mt-1 text-xl font-semibold text-slate-950">{meta.label}</h3>
           </div>
         </div>
-        <span className={`rounded-full px-3 py-1 text-xs font-semibold ${
+        <div className="flex flex-col items-end gap-1">{accessMode === "beta" && <span className="text-[10px] font-semibold uppercase tracking-wide text-cyan-700">Beta</span>}<span className={`rounded-full px-3 py-1 text-xs font-semibold ${
           result?.status === "connected" ? "bg-emerald-50 text-emerald-700" :
           result?.status === "ready" ? "bg-cyan-50 text-cyan-700" :
           result?.status === "unlinked" ? "bg-slate-100 text-slate-600" :
           result?.status === "restricted" ? "bg-slate-100 text-slate-500" :
           "bg-amber-50 text-amber-700"
-        }`}>{statusLabel(result?.status)}</span>
+        }`}>{statusLabel(result?.status)}</span></div>
       </div>
       <p className="mt-5 min-h-12 text-sm leading-6 text-slate-500">{meta.description}</p>
       {(result?.status === "connected" || result?.status === "degraded") && <div className="mt-6 grid grid-cols-3 gap-2">
@@ -920,6 +917,8 @@ function Billing() {
   const current=data.subscription;
   const paidPeriodActive=current?.status==="active" && current.currentPeriodEnd && new Date(current.currentPeriodEnd).getTime()>Date.now();
 
+  if(data.accessMode === "beta") return <section className="rounded-3xl border border-cyan-200 bg-white p-7"><p className="text-xs font-semibold uppercase tracking-[.16em] text-cyan-700">Ecosystem beta</p><h2 className="mt-2 text-2xl font-semibold">Free access during testing</h2><p className="mt-3 max-w-2xl text-sm leading-6 text-slate-600">FFPRO, Tiquet and Marketing are available to your organisation without a payment or trial deadline while beta mode is active. Academy remains public. POS browser access will open when its testing release is ready.</p><p className="mt-4 text-sm leading-6 text-slate-600">When V79 moves to production, your account, organisation and app data stay in place. You will choose paid access before billing begins; no automatic charge is made.</p><div className="mt-5 rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">Team seats: <strong>{data.seats.used}/{data.seats.limit}</strong>{current ? ` · Existing ${current.plan} subscription record retained` : " · No paid subscription"}</div></section>;
+
   return <section>
     <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
       <div>
@@ -1119,7 +1118,7 @@ function BusinessTimeline({ events }: { events: DashboardPayload["events"] }) {
 }
 
 function GettingStarted({ dashboard, role, onNavigate }: { dashboard: DashboardPayload; role: string; onNavigate: (view: "connections" | "team" | "billing") => void }) {
-  if (role === "owner" && !dashboard.subscription && dashboard.products?.pos?.accessStatus === "beta") return <section className="mt-8 rounded-3xl border border-violet-200 bg-violet-50 p-6"><h2 className="text-lg font-semibold text-slate-950">Your POS beta registration is active</h2><p className="mt-2 text-sm leading-6 text-slate-600">Your organisation and account are saved. The browser app is being prepared for testing. Your account ID can carry forward when you choose paid access later.</p></section>;
+  if (dashboard.accessMode === "beta") return <section className="mt-8 rounded-3xl border border-cyan-200 bg-cyan-50 p-6"><h2 className="text-lg font-semibold text-slate-950">Your free V79 beta workspace</h2><p className="mt-2 text-sm leading-6 text-slate-600">Test the available apps and tell us where the workflow needs improvement. POS is listed for the ecosystem, but its browser app is still in development. Your account and data can carry forward to paid access later.</p></section>;
   if (role !== "owner") return null;
   const steps = [
     { complete: Boolean(dashboard.subscription && ["trialing", "active"].includes(dashboard.subscription.status)), title: "Activate your workspace", detail: "Review your trial or subscription status.", action: () => onNavigate("billing"), label: "View plan" },
@@ -1196,7 +1195,7 @@ export default function App() {
     }
     const product = dashboard.products?.[managedReturnTarget];
     if (product?.entitled === false) {
-      setNotice(`${productMeta[managedReturnTarget].label} is not included in your current V79 subscription.`);
+      setNotice(`${productMeta[managedReturnTarget].label} is not available to your account.`);
       return;
     }
     if (product?.accessible === false) {
@@ -1225,15 +1224,6 @@ export default function App() {
     setSession(null); setDashboard(null); setIntegrations([]);
   }
 
-  async function joinPosBeta() {
-    try {
-      const response=await fetch("/api/pos/beta/join",{method:"POST"});
-      const body=await response.json().catch(()=>({}));
-      if(!response.ok) throw new Error(body.error || "POS beta registration failed.");
-      setNotice("Your organisation is registered for the free V79 POS beta. We will open the app after its testing release; no payment has been taken.");
-      await loadAll();
-    } catch(error:any) { setNotice(error.message || "POS beta registration failed."); }
-  }
 
   if (verifyToken) return <VerifyEmail token={verifyToken} onVerified={setSession} />;
   if (resetToken) return <ResetPassword token={resetToken} />;
@@ -1313,8 +1303,8 @@ export default function App() {
                   </p>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
-                  <div className="rounded-2xl border border-white/10 bg-white/[0.05] px-5 py-4"><div className="text-2xl font-semibold">{connected}/{entitled}</div><div className="text-xs text-slate-400">Live subscribed apps</div></div>
-                  <div className="rounded-2xl border border-white/10 bg-white/[0.05] px-5 py-4"><div className="text-2xl font-semibold capitalize">{dashboard?.subscription?.plan || "—"}</div><div className="text-xs text-slate-400">{dashboard?.subscription?.status === "trialing" && dashboard.subscription.trialEndsAt ? `Trial to ${new Date(dashboard.subscription.trialEndsAt).toLocaleDateString()}` : dashboard?.subscription?.status ? `${dashboard.subscription.status} plan` : "Subscription"}</div></div>
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.05] px-5 py-4"><div className="text-2xl font-semibold">{connected}/{entitled}</div><div className="text-xs text-slate-400">Live business apps</div></div>
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.05] px-5 py-4"><div className="text-2xl font-semibold capitalize">{dashboard?.accessMode === "beta" ? "Free beta" : dashboard?.subscription?.plan || "—"}</div><div className="text-xs text-slate-400">{dashboard?.accessMode === "beta" ? "Testing access · no charge" : dashboard?.subscription?.status === "trialing" && dashboard.subscription.trialEndsAt ? `Trial to ${new Date(dashboard.subscription.trialEndsAt).toLocaleDateString()}` : dashboard?.subscription?.status ? `${dashboard.subscription.status} plan` : "Subscription"}</div></div>
                 </div>
               </div>
             </section>
@@ -1327,7 +1317,7 @@ export default function App() {
                 {["owner","admin"].includes(session.organization.role) && <button onClick={() => setView("connections")} className="hidden items-center gap-2 text-sm font-semibold text-slate-600 hover:text-slate-950 sm:flex"><Settings2 size={16} /> Manage connections</button>}
               </div>
               <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
-                {(["tiquet","ffpro","marketing","academy","pos"] as const).map(product => <div key={product}><ProductCard product={product} result={dashboard?.products?.[product]} role={session.organization.role} onNavigate={navigate} onJoinPos={joinPosBeta} /></div>)}
+                {(["tiquet","ffpro","marketing","academy","pos"] as const).map(product => <div key={product}><ProductCard product={product} result={dashboard?.products?.[product]} role={session.organization.role} onNavigate={navigate} accessMode={dashboard?.accessMode} /></div>)}
               </div>
             </section>
 
