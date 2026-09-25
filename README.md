@@ -26,7 +26,7 @@ The Hub validates identity, membership, subscription and app launch before it re
    ```bash
    openssl rand -hex 32
    ```
-3. Put that exact `V79_PLATFORM_SHARED_SECRET` value in the Hub, FFPRO, Tiquet, Marketing and Academy environments.
+3. Put that exact `V79_PLATFORM_SHARED_SECRET` value in the Hub, FFPRO, Tiquet, Marketing, Academy and POS environments.
 4. Set `V79_HUB_ADMIN_EMAIL` and a unique `V79_HUB_ADMIN_PASSWORD` of at least 16 characters.
 5. Confirm the shared Docker network exists:
    ```bash
@@ -188,7 +188,7 @@ Set `V79_ACCESS_MODE=beta` while testing. In this mode verified Hub accounts can
 
 Public registration still requires `V79_SELF_SERVICE_SIGNUP=1` and working transactional verification email; it must never sign in unverified accounts. Existing signed-in owners also receive beta access. Each downstream app must be deployed, configured for Hub launch, and tested separately before it can be called usable.
 
-V79 POS is included in the beta account state, with a `pos_access` record per organisation (`beta`, `paid`, or `suspended`). POS currently has no browser UI or working Hub launch exchange, so its card deliberately has no Open link. Do not advertise it as ready to take real sales until the POS migration, identity provisioning, UI, payment adapters, and device testing pass.
+V79 POS is included in the beta account state, with a `pos_access` record per organisation (`beta`, `paid`, or `suspended`). Set `POS_BASE_URL=http://v79-commerce-api:8080` on the shared Docker network and put the existing `V79_PLATFORM_SHARED_SECRET` in POS's server environment. The POS card can then show a signed, organisation-scoped summary. The owner can select **Connect POS workspace** to provision their Hub identity and first location/register over the signed service channel. Hub issues five-minute Ed25519 JWTs for the POS API through `POST /api/apps/pos/token`; the public key is published at `/.well-known/jwks.json`. The signing private key is saved in the Hub `data` volume and must be included in backups. POS checks both the signed token and its own tenant membership. The browser register, device workflow and payment adapters are still being built, so the card deliberately has no Open link. Do not advertise it as ready to take real sales until UI, payment and device testing pass.
 
 After testing and commercial readiness, set `V79_ACCESS_MODE=production`. The existing paid subscription rules then apply to FFPRO, Tiquet and Marketing; beta-only accounts need to choose a paid plan, but retain their identity and data. POS beta-only entitlement is denied until an operator records a reviewed paid agreement or payment. An operator can dry-run and apply that conversion without deleting data:
 

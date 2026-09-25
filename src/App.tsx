@@ -451,7 +451,7 @@ function ResetPassword({ token }: { token:string }) {
   </main>;
 }
 
-function ProductCard({ product, result, role, onNavigate, accessMode }: { product: Integration["product"]; result?: ProductResult; role: string; onNavigate: (view: "connections" | "team" | "billing") => void; accessMode?: "beta" | "production" }) {
+function ProductCard({ product, result, role, onNavigate, onProvisionPos, accessMode }: { product: Integration["product"]; result?: ProductResult; role: string; onNavigate: (view: "connections" | "team" | "billing") => void; onProvisionPos?: () => Promise<void>; accessMode?: "beta" | "production" }) {
   const meta = productMeta[product];
   const Icon = meta.icon;
   const summary = result?.summary;
@@ -483,10 +483,11 @@ function ProductCard({ product, result, role, onNavigate, accessMode }: { produc
   if(product === "pos") return <article data-product="pos" className="v79-product-card rounded-3xl border border-slate-200 bg-white p-6">
     <div className="flex items-start justify-between gap-4"><div className="flex gap-4"><div className="v79-product-icon rounded-2xl bg-slate-950 p-3"><Icon size={24}/></div><div><p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">{meta.eyebrow}</p><h3 className="mt-1 text-xl font-semibold text-slate-950">{meta.label}</h3></div></div><span className="rounded-full bg-violet-50 px-3 py-1 text-xs font-semibold text-violet-700">In development</span></div>
     <p className="mt-5 min-h-12 text-sm leading-6 text-slate-500">{meta.description}</p>
-    <p className="mt-4 text-xs leading-5 text-slate-600">{result?.error}</p>
+    {result?.status === "connected" && <div className="mt-4 grid grid-cols-3 gap-2">{[["Products",metrics.products],["Locations",metrics.locations],["Sales",metrics.sales]].map(([label,value])=><div key={String(label)} className="rounded-2xl bg-slate-50 p-3"><div className="text-xs text-slate-500">{label}</div><div className="mt-1 text-lg font-semibold">{formatNumber(value)}</div></div>)}</div>}
+    <p className="mt-4 text-xs leading-5 text-slate-600">{result?.status === "connected" ? "POS workspace connected. The browser register is still in development." : result?.error}</p>
     <div className="mt-6 flex items-center justify-between border-t border-slate-100 pt-5">
       <span className="text-xs font-medium text-slate-500">{result?.accessStatus === "paid" ? "Paid access recorded" : result?.accessStatus === "beta" ? "Free beta registered" : result?.betaSignupOpen ? "No payment required to register" : "Registration unavailable"}</span>
-      {result?.accessStatus === "beta" && <span className="text-xs font-semibold text-violet-700">Included in beta</span>}
+      {result?.status !== "connected" && result?.entitled && role === "owner" && onProvisionPos ? <button type="button" onClick={() => void onProvisionPos()} className="text-xs font-semibold text-cyan-800 underline">Connect POS workspace</button> : result?.accessStatus === "beta" && <span className="text-xs font-semibold text-violet-700">Included in beta</span>}
     </div>
   </article>;
 
@@ -1173,6 +1174,16 @@ export default function App() {
     } finally { setRefreshing(false); }
   }, []);
 
+  const provisionPos = useCallback(async () => {
+    try {
+      const response=await fetch("/api/apps/pos/token",{method:"POST"});
+      if(!response.ok) throw new Error((await response.json().catch(()=>({}))).error || "POS is not available yet.");
+      // The short-lived API token is intentionally not stored in the browser.
+      setNotice("POS workspace connected. The browser register is still being built.");
+      await loadAll();
+    } catch(error:any) { setNotice(error?.message || "POS connection failed."); }
+  },[loadAll]);
+
   useEffect(() => {
     fetch("/api/auth/me").then(async response => {
       if (!response.ok) return setSession(null);
@@ -1317,7 +1328,7 @@ export default function App() {
                 {["owner","admin"].includes(session.organization.role) && <button onClick={() => setView("connections")} className="hidden items-center gap-2 text-sm font-semibold text-slate-600 hover:text-slate-950 sm:flex"><Settings2 size={16} /> Manage connections</button>}
               </div>
               <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
-                {(["tiquet","ffpro","marketing","academy","pos"] as const).map(product => <div key={product}><ProductCard product={product} result={dashboard?.products?.[product]} role={session.organization.role} onNavigate={navigate} accessMode={dashboard?.accessMode} /></div>)}
+                {(["tiquet","ffpro","marketing","academy","pos"] as const).map(product => <div key={product}><ProductCard product={product} result={dashboard?.products?.[product]} role={session.organization.role} onNavigate={navigate} onProvisionPos={provisionPos} accessMode={dashboard?.accessMode} /></div>)}
               </div>
             </section>
 
