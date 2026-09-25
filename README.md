@@ -182,6 +182,21 @@ V79_MAIL_FROM=V79 Digital <no-reply@v79sl.com>
 
 The `V79_MAIL_FROM` domain must be verified with the email provider before public signup is enabled. Keep `V79_SELF_SERVICE_SIGNUP=0` until a real verification email has been received successfully from the production Hub domain.
 
+### V79 POS beta accounts
+
+V79 POS is tracked as a separate product. Set `V79_POS_ACCESS_MODE=beta` and `V79_POS_BETA_SIGNUP=1` to permit free POS beta registration. Public registration still requires `V79_SELF_SERVICE_SIGNUP=1` and working transactional verification email. Existing Hub organisation owners can use **Join free beta** on the POS card. New users can choose **V79 POS beta** on the create-account screen; that does not create a paid suite subscription. No payment details are requested and no billing order is created.
+
+The Hub stores one `pos_access` row per organisation (`beta`, `paid`, or `suspended`). Beta membership is independent of the suite trial expiry. It preserves the same organisation and user IDs for eventual paid access. POS currently has no browser UI or working Hub launch exchange, so the card deliberately has no Open link. Do not advertise it as ready to take real sales until the POS migration, identity provisioning, UI, payment adapters, and device testing pass.
+
+Before a paid launch, change `V79_POS_ACCESS_MODE=production` and `V79_POS_BETA_SIGNUP=0`. In this mode beta-only accounts are denied POS entitlement, and free signup is closed. After verifying a commercial agreement or payment outside this script, a trusted operator can inspect and convert an existing account without deleting its data:
+
+```bash
+docker exec v79-hub node scripts/convert-pos-account.mjs --organization-id v79org_UUID --status paid --reason "contract or payment reference"
+docker exec v79-hub node scripts/convert-pos-account.mjs --organization-id v79org_UUID --status paid --reason "contract or payment reference" --apply
+```
+
+The first command is a dry run. The applied change writes an audit record and does not charge the customer. `--status suspended` can pause access. Complete and test a POS launch integration before enabling an Open action in the Hub.
+
 Trial and paid-period lifecycle is also persisted: an expired trial moves to `suspended`; an expired paid period moves to `past_due`. Payment can reactivate the subscription through the verified billing flow.
 
 
