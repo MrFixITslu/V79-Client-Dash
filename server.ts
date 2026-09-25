@@ -343,8 +343,12 @@ const PLAN_CATALOG = {
 type PlanName = keyof typeof PLAN_CATALOG;
 const TRIAL_DAYS = Math.min(30, Math.max(0, Number(process.env.V79_TRIAL_DAYS || 14)));
 const SELF_SERVICE_SIGNUP = process.env.V79_SELF_SERVICE_SIGNUP === "1";
-const POS_ACCESS_MODE = process.env.V79_POS_ACCESS_MODE === "beta" ? "beta" : "production";
-const POS_BETA_SIGNUP = POS_ACCESS_MODE === "beta" && process.env.V79_POS_BETA_SIGNUP !== "0";
+// One switch governs the whole ecosystem. In beta, access is free and no
+// subscription or trial clock is required; production uses paid entitlements.
+const ACCESS_MODE = process.env.V79_ACCESS_MODE === "production" ? "production" : "beta";
+const POS_BETA_SIGNUP = ACCESS_MODE === "beta";
+const configuredBetaSeats=Number(process.env.V79_BETA_SEAT_LIMIT || 10);
+const BETA_SEAT_LIMIT = Number.isInteger(configuredBetaSeats) ? Math.min(100,Math.max(1,configuredBetaSeats)) : 10;
 const VERIFY_EMAIL_TTL_MS = 24 * 60 * 60_000;
 const PASSWORD_RESET_TTL_MS = 30 * 60_000;
 
@@ -759,9 +763,15 @@ function subscriptionUsable(organizationId: string) {
 function productEntitled(organizationId: string, product: string) {
   if (product === "academy") return true;
   if (product === "pos") {
+    if(ACCESS_MODE === "beta") {
+      const now=new Date().toISOString();
+      db.prepare("INSERT INTO pos_access(organization_id,status,enrolled_at,updated_at) VALUES(?,'beta',?,?) ON CONFLICT(organization_id) DO NOTHING")
+        .run(organizationId,now,now);
+    }
     const row = db.prepare("SELECT status FROM pos_access WHERE organization_id=?").get(organizationId) as any;
-    return row?.status === "paid" || (POS_ACCESS_MODE === "beta" && row?.status === "beta");
+    return row?.status === "paid" || (ACCESS_MODE === "beta" && row?.status === "beta");
   }
+  if(ACCESS_MODE === "beta") return true;
   if (!subscriptionUsable(organizationId)) return false;
   const subscription = subscriptionFor(organizationId);
   const plan = PLAN_CATALOG[subscription.plan as PlanName];
@@ -769,6 +779,7 @@ function productEntitled(organizationId: string, product: string) {
 }
 
 function planSeatLimit(organizationId: string) {
+  if(ACCESS_MODE === "beta") return BETA_SEAT_LIMIT;
   const subscription = subscriptionFor(organizationId);
   const plan = subscription && PLAN_CATALOG[subscription.plan as PlanName];
   return Number(plan?.includedUsers || 1);
@@ -1117,6 +1128,7 @@ app.get("/api/plans", (_req,res)=>{
     signupConfigured:SELF_SERVICE_SIGNUP,
     emailDeliveryConfigured:mail.configured,
     posBetaSignup:POS_BETA_SIGNUP,
+    accessMode:ACCESS_MODE,
     plans:Object.entries(PLAN_CATALOG).map(([id,plan])=>({id,...plan})),
   });
 });
@@ -1129,6 +1141,7 @@ app.get("/api/billing", requireAuth, requireOwner, (req,res)=>{
   `).all(m.organizationId) as any[]).map(billingOrderView);
   res.json({
     subscription:subscriptionFor(m.organizationId) || null,
+    accessMode:ACCESS_MODE,
     seats:seatUsage(m.organizationId),
     provider:billingProviderPublic(),
     plans:Object.entries(PLAN_CATALOG).map(([id,plan])=>({id,...plan})),
@@ -1137,6 +1150,7 @@ app.get("/api/billing", requireAuth, requireOwner, (req,res)=>{
 });
 
 app.post("/api/billing/checkout", requireAuth, requireOwner, async (req,res)=>{
+  if(ACCESS_MODE === "beta") return res.status(409).json({error:"All V79 apps are free during beta testing. Checkout is closed until production mode.",code:"BETA_CHECKOUT_DISABLED"});
   const m=(req as any).hubMembership;
   const plan=clean(req.body?.plan).toLowerCase();
   const cycle=clean(req.body?.billingCycle).toLowerCase();
@@ -1291,14 +1305,13 @@ app.post("/api/auth/register", loginLimited, async (req,res)=>{
   const name=clean(req.body?.name);
   const organizationName=clean(req.body?.organizationName);
   const plan=clean(req.body?.plan).toLowerCase();
-  const posBeta=clean(req.body?.signupIntent)==="pos_beta";
+  const betaSignup=ACCESS_MODE === "beta";
 
   if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({error:"Enter a valid email address."});
   if(password.length<16 || password.length>256) return res.status(400).json({error:"Use a password of 16–256 characters."});
   if(name.length<2 || name.length>120) return res.status(400).json({error:"Enter your name."});
   if(organizationName.length<2 || organizationName.length>160) return res.status(400).json({error:"Enter your business or organisation name."});
-  if(posBeta && !POS_BETA_SIGNUP) return res.status(403).json({error:"Free POS beta registration is closed."});
-  if(!posBeta && !validPlan(plan)) return res.status(400).json({error:"Choose a valid V79 plan."});
+  if(!betaSignup && !validPlan(plan)) return res.status(400).json({error:"Choose a valid V79 plan."});
   if(db.prepare("SELECT 1 FROM users WHERE email=?").get(email)) return res.status(409).json({error:"An account with this email already exists."});
 
   const userId=crypto.randomUUID();
@@ -1315,14 +1328,14 @@ app.post("/api/auth/register", loginLimited, async (req,res)=>{
       .run(orgId,organizationName,slug,now);
     db.prepare("INSERT INTO memberships(user_id,organization_id,role,created_at) VALUES(?,?,?,?)")
       .run(userId,orgId,"owner",now);
-    // POS-only accounts are not subscribed to the paid suite. They may add a
-    // subscription later without changing the organisation or user IDs.
-    if(!posBeta) db.prepare("INSERT INTO subscriptions(organization_id,plan,status,trial_ends_at,current_period_end,updated_at) VALUES(?,?, 'trialing',NULL,NULL,?)")
+    // Beta accounts retain the same identity and data when a paid subscription
+    // is later activated in production mode.
+    if(!betaSignup) db.prepare("INSERT INTO subscriptions(organization_id,plan,status,trial_ends_at,current_period_end,updated_at) VALUES(?,?, 'trialing',NULL,NULL,?)")
       .run(orgId,plan,now);
-    if(posBeta) db.prepare("INSERT INTO pos_access(organization_id,status,enrolled_at,updated_at) VALUES(?,'beta',?,?)").run(orgId,now,now);
+    if(betaSignup) db.prepare("INSERT INTO pos_access(organization_id,status,enrolled_at,updated_at) VALUES(?,'beta',?,?)").run(orgId,now,now);
   });
   tx();
-  recordAudit(req,"workspace.registered",{organizationId:orgId,actorUserId:userId,targetType:"organization",targetId:orgId,details:{plan:posBeta ? "pos_beta" : plan}});
+  recordAudit(req,"workspace.registered",{organizationId:orgId,actorUserId:userId,targetType:"organization",targetId:orgId,details:{plan:betaSignup ? "ecosystem_beta" : plan}});
 
   const verificationToken=createAccountToken(userId,"verify_email",VERIFY_EMAIL_TTL_MS);
   const verifyUrl=new URL("/",canonicalOrigin(req));
@@ -1332,7 +1345,7 @@ app.post("/api/auth/register", loginLimited, async (req,res)=>{
     subject:"Verify your V79 Hub email",
     html:brandedAccountEmail(
       "Verify your email",
-      posBeta ? `Hi ${name}. Confirm this email address to register your V79 POS beta workspace. No payment is required for beta testing.` : `Hi ${name}. Confirm this email address to activate your V79 workspace and start your ${TRIAL_DAYS}-day trial.`,
+      betaSignup ? `Hi ${name}. Confirm this email address to activate your free V79 beta workspace. No payment is required during testing.` : `Hi ${name}. Confirm this email address to activate your V79 workspace and start your ${TRIAL_DAYS}-day trial.`,
       "Verify email",
       verifyUrl.toString()
     ),
@@ -1387,7 +1400,7 @@ app.post("/api/auth/verify-email", loginLimited, (req,res)=>{
     user:{id:row.userId,email:row.email,name:row.name,emailVerified:true},
     organization:{id:m.organizationId,name:m.organizationName,slug:m.slug,role:m.role},
     subscription:subscriptionFor(m.organizationId) || null,
-    message:subscriptionFor(m.organizationId) ? "Email verified. Your V79 workspace and trial are now active." : "Email verified. Your free POS beta registration is active.",
+    message:ACCESS_MODE === "beta" ? "Email verified. Your free V79 beta workspace is active." : "Email verified. Your V79 workspace and trial are now active.",
   });
 });
 
@@ -1970,7 +1983,8 @@ app.post("/api/platform/session/consume", (req:any,res)=>{
     user:{id:row.userId,email:row.email,name:row.name},
     organization:{id:row.organizationId,name:row.organizationName,slug:row.slug},
     role:row.role,
-    plan:subscription?.plan || null,
+    plan:ACCESS_MODE === "beta" ? "beta" : subscription?.plan || null,
+    accessMode:ACCESS_MODE,
     entitlement:{product,enabled:true,access:row.role==="owner"?"owner":row.role},
     assignedProducts:row.role==="owner"
       ? ["ffpro","tiquet",...(productEntitled(row.organizationId,"marketing")?["marketing"]:[])]
@@ -2008,12 +2022,12 @@ app.post("/api/pos/beta/join", requireAuth, requireOwner, (req,res)=>{
     .run(m.organizationId,now,now);
   if(inserted.changes) recordAudit(req,"pos.beta_joined",{organizationId:m.organizationId,actorUserId:user.id,targetType:"product",targetId:"pos"});
   const row=db.prepare("SELECT status,enrolled_at AS enrolledAt FROM pos_access WHERE organization_id=?").get(m.organizationId);
-  res.json({access:row,mode:POS_ACCESS_MODE,launchReady:false});
+  res.json({access:row,mode:ACCESS_MODE,launchReady:false});
 });
 app.get("/api/pos/access", requireAuth, (req,res)=>{
   const m=(req as any).hubMembership;
   const row=db.prepare("SELECT status,enrolled_at AS enrolledAt FROM pos_access WHERE organization_id=?").get(m.organizationId) as any;
-  res.json({access:row || null,mode:POS_ACCESS_MODE,betaSignupOpen:POS_BETA_SIGNUP,entitled:productEntitled(m.organizationId,"pos"),launchReady:false});
+  res.json({access:row || null,mode:ACCESS_MODE,betaSignupOpen:POS_BETA_SIGNUP,entitled:productEntitled(m.organizationId,"pos"),launchReady:false});
 });
 app.put("/api/integrations/:product", requireAuth, requireAdmin, (req,res)=>{
   const product=req.params.product as Product;
@@ -2036,7 +2050,7 @@ app.get("/api/platform/dashboard", requireAuth, async (req,res)=>{
     const accessible=memberCanAccessProduct(dashboardUser.id,m.organizationId,m.role,product);
     products[product]=product === "pos"
       ? {status:productEntitled(m.organizationId,"pos") ? "ready" : "unlinked",
-         error:POS_ACCESS_MODE === "production"
+         error:ACCESS_MODE === "production"
            ? "Paid POS access is managed separately. Contact V79 Digital about conversion."
            : productEntitled(m.organizationId,"pos")
              ? "Beta place reserved. The browser app is being prepared for testing."
@@ -2050,7 +2064,7 @@ app.get("/api/platform/dashboard", requireAuth, async (req,res)=>{
     products[product].accessible=accessible;
     if(product === "pos") {
       products[product].betaSignupOpen=POS_BETA_SIGNUP;
-      products[product].accessMode=POS_ACCESS_MODE;
+      products[product].accessMode=ACCESS_MODE;
       products[product].accessStatus=(db.prepare("SELECT status FROM pos_access WHERE organization_id=?").get(m.organizationId) as any)?.status || null;
       products[product].launchReady=false;
     }
@@ -2071,6 +2085,7 @@ app.get("/api/platform/dashboard", requireAuth, async (req,res)=>{
     });
   res.json({
     organization:{id:m.organizationId,name:m.organizationName,slug:m.slug},
+    accessMode:ACCESS_MODE,
     subscription:subscriptionFor(m.organizationId) || null,
     seats:seatUsage(m.organizationId),
     products,
