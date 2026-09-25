@@ -465,10 +465,10 @@ function ProductCard({ product, result, role, onNavigate }: { product: Integrati
   }, [metrics, product]);
 
   return (
-    <article className="group rounded-3xl border border-slate-200 bg-white p-6 shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg">
+    <article data-product={product} className="v79-product-card group rounded-3xl border border-slate-200 bg-white p-6 transition hover:-translate-y-0.5 hover:shadow-lg">
       <div className="flex items-start justify-between gap-4">
         <div className="flex gap-4">
-          <div className="rounded-2xl bg-slate-950 p-3 text-cyan-300"><Icon size={24} /></div>
+          <div className="v79-product-icon rounded-2xl bg-slate-950 p-3"><Icon size={24} /></div>
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">{meta.eyebrow}</p>
             <h3 className="mt-1 text-xl font-semibold text-slate-950">{meta.label}</h3>
@@ -495,8 +495,8 @@ function ProductCard({ product, result, role, onNavigate }: { product: Integrati
       <div className="mt-6 flex items-center justify-between border-t border-slate-100 pt-5">
         <span className="text-xs text-slate-500">{result?.status === "degraded" ? "Last verified snapshot" : summary?.generatedAt ? `Updated ${new Date(summary.generatedAt).toLocaleString()}` : ""}</span>
         {result?.openUrl && result?.entitled !== false && result?.accessible !== false ? (
-          <a href={result.openUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-sm font-semibold text-slate-800 hover:text-cyan-700">
-            Open <ArrowUpRight size={15} />
+          <a href={result.openUrl} target="_blank" rel="noopener noreferrer" className="v79-product-link inline-flex items-center gap-1 text-sm font-semibold hover:underline">
+            Open <span className="sr-only">{meta.label} in a new tab</span><ArrowUpRight size={15} aria-hidden="true" />
           </a>
         ) : result?.entitled === false ? role === "owner" ? <button type="button" onClick={() => onNavigate("billing")} className="text-sm font-semibold text-amber-700">View plan</button> : <span className="text-xs text-amber-700">Ask the owner about plans</span>
           : result?.accessible === false ? ["owner","admin"].includes(role) ? <button type="button" onClick={() => onNavigate("team")} className="text-sm font-semibold text-slate-700">View team access</button> : <span className="text-xs text-slate-600">Ask your Hub admin for access</span>
