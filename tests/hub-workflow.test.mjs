@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { createServer } from 'node:net';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
@@ -32,6 +33,7 @@ test('owner onboarding, team permissions, single-use launches and account isolat
       V79_HUB_ORGANIZATION_NAME: 'Test Business', V79_PLATFORM_SHARED_SECRET: secret,
       V79_TIQUET_LAUNCH_SECRET: secret, V79_TIQUET_PUBLIC_URL: 'https://tiquet.example.test',
       V79_BILLING_PROVIDER: 'disabled', V79_MAIL_PROVIDER: 'disabled', V79_SELF_SERVICE_SIGNUP: '0',
+      V79_POS_ACCESS_MODE: 'beta',
       FFPRO_BASE_URL: '', TIQUET_BASE_URL: '', MARKETING_BASE_URL: '', ACADEMY_BASE_URL: '',
     },
     stdio: ['ignore', 'ignore', 'pipe'],
@@ -71,6 +73,18 @@ test('owner onboarding, team permissions, single-use launches and account isolat
   assert.equal(ownerDash.subscription.status, 'active');
   assert.equal(ownerDash.products.academy.status, 'not_configured');
   assert.equal(ownerDash.seats.used, 1);
+  assert.equal(ownerDash.products.pos.entitled, false);
+  assert.equal(ownerDash.products.pos.openUrl, '');
+  const betaJoin = await request('/api/pos/beta/join', { cookie: ownerCookie, method: 'POST' });
+  assert.equal(betaJoin.status, 200);
+  assert.equal((await betaJoin.json()).access.status, 'beta');
+  assert.equal((await request('/api/pos/beta/join', { cookie: ownerCookie, method: 'POST' })).status, 200);
+  const posDashboard = await (await request('/api/platform/dashboard', { cookie: ownerCookie })).json();
+  assert.equal(posDashboard.products.pos.entitled, true);
+  assert.equal(posDashboard.products.pos.accessStatus, 'beta');
+  assert.equal(posDashboard.products.pos.launchReady, false);
+  assert.equal(posDashboard.products.pos.openUrl, '');
+  assert.equal((await request('/api/apps/pos/launch', { cookie: ownerCookie, redirect: 'manual' })).status, 404);
   assert.equal((await request('/api/integrations/academy', { cookie: ownerCookie, method: 'PUT', body: { externalSubjectId: 'someone-else@example.test' } })).status, 409);
 
   const invitationResponse = await request('/api/team/invitations', { cookie: ownerCookie, method: 'POST', body: { email: 'worker@example.test', role: 'member', products: ['tiquet'] } });
@@ -84,6 +98,7 @@ test('owner onboarding, team permissions, single-use launches and account isolat
   assert.equal((await request(`/api/team/invitations/${token}/accept`, { method: 'POST', body: { name: 'Team Member', password: 'another-valid-password-123' } })).status, 404);
   assert.equal((await request('/api/billing', { cookie: memberCookie })).status, 403);
   assert.equal((await request('/api/team', { cookie: memberCookie })).status, 403);
+  assert.equal((await request('/api/pos/beta/join', { cookie: memberCookie, method: 'POST' })).status, 403);
   assert.equal((await request('/api/apps/ffpro/launch', { cookie: memberCookie, redirect: 'manual' })).status, 403);
   const launch = await request('/api/apps/tiquet/launch', { cookie: memberCookie, redirect: 'manual' });
   assert.equal(launch.status, 302);
@@ -98,4 +113,39 @@ test('owner onboarding, team permissions, single-use launches and account isolat
   const memberDash = await (await request('/api/platform/dashboard', { cookie: memberCookie })).json();
   assert.equal(memberDash.products.ffpro.status, 'restricted');
   assert.equal(memberDash.products.tiquet.accessible, true);
+  assert.equal(memberDash.products.pos.accessible, false);
+
+  const orgId=ownerDash.organization.id;
+  const conversionArgs=['scripts/convert-pos-account.mjs','--organization-id',orgId,'--status','paid','--reason','Reviewed contract test reference'];
+  const dryRun=execFileSync(process.execPath,conversionArgs,{cwd:project,env:{...process.env,DATA_DIR:dataDir},encoding:'utf8'});
+  assert.match(dryRun,/Dry run only/);
+  assert.equal((await request('/api/pos/access', { cookie: ownerCookie }).then(r=>r.json())).access.status,'beta');
+
+  const productionPort=await freePort();
+  const productionOrigin=`http://127.0.0.1:${productionPort}`;
+  const productionChild=spawn(process.execPath,['--import','tsx','server.ts'],{
+    cwd:project,
+    env:{...process.env,NODE_ENV:'production',PORT:String(productionPort),APP_URL:productionOrigin,DATA_DIR:dataDir,
+      V79_HUB_ADMIN_EMAIL:'owner@example.test',V79_HUB_ADMIN_PASSWORD:'a-valid-test-password-123',
+      V79_POS_ACCESS_MODE:'production',V79_BILLING_PROVIDER:'disabled',V79_MAIL_PROVIDER:'disabled',
+      FFPRO_BASE_URL:'',TIQUET_BASE_URL:'',MARKETING_BASE_URL:'',ACADEMY_BASE_URL:''},
+    stdio:'ignore',
+  });
+  t.after(()=>productionChild.kill());
+  let productionReady=false;
+  for(let i=0;i<70;i++) {
+    try { if((await fetch(productionOrigin+'/api/health')).ok) { productionReady=true; break; } } catch {}
+    await new Promise(resolve=>setTimeout(resolve,150));
+  }
+  assert.ok(productionReady,'Production mode Hub did not start');
+  const productionRequest=(route,options={})=>fetch(productionOrigin+route,{...options,headers:{Cookie:ownerCookie,...options.headers}});
+  let productionDashboard=await (await productionRequest('/api/platform/dashboard')).json();
+  assert.equal(productionDashboard.products.pos.entitled,false);
+  assert.equal(productionDashboard.products.pos.betaSignupOpen,false);
+  assert.equal((await productionRequest('/api/pos/beta/join',{method:'POST'})).status,403);
+  execFileSync(process.execPath,[...conversionArgs,'--apply'],{cwd:project,env:{...process.env,DATA_DIR:dataDir}});
+  productionDashboard=await (await productionRequest('/api/platform/dashboard')).json();
+  assert.equal(productionDashboard.products.pos.entitled,true);
+  assert.equal(productionDashboard.products.pos.accessStatus,'paid');
+  assert.equal(productionDashboard.products.pos.openUrl,'');
 });

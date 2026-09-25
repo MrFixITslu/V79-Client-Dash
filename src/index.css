@@ -32,6 +32,7 @@
 .v79-product-card[data-product="ffpro"] { --product-accent: #0f766e; }
 .v79-product-card[data-product="marketing"] { --product-accent: #b45309; }
 .v79-product-card[data-product="academy"] { --product-accent: #4338ca; }
+.v79-product-card[data-product="pos"] { --product-accent: #6d28d9; }
 .v79-product-card .v79-product-icon { color: var(--product-accent, var(--v79-accent)); }
 .v79-product-card .v79-product-link { color: var(--product-accent, var(--v79-accent)); min-height: 44px; }
 @media (prefers-reduced-motion: reduce) {

@@ -2,7 +2,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import {
   Activity, AlertTriangle, ArrowUpRight, Building2, CheckCircle2, CircleDollarSign,
   GraduationCap, Headphones, Lightbulb, LogOut, Megaphone, RefreshCw, Settings2,
-  ShieldCheck, Sparkles, TicketCheck, Users
+  ShieldCheck, Sparkles, TicketCheck, Users, ShoppingCart
 } from "lucide-react";
 
 type Session = {
@@ -11,7 +11,7 @@ type Session = {
 };
 
 type Integration = {
-  product: "ffpro" | "tiquet" | "academy" | "marketing";
+  product: "ffpro" | "tiquet" | "academy" | "marketing" | "pos";
   name: string;
   linked: boolean;
   externalSubjectId: string;
@@ -19,6 +19,10 @@ type Integration = {
   updatedAt: string | null;
   entitled?: boolean;
   accessible?: boolean;
+  betaSignupOpen?: boolean;
+  accessMode?: "beta" | "production";
+  accessStatus?: "beta" | "paid" | "suspended" | null;
+  launchReady?: boolean;
   managedByHub?: boolean;
 };
 
@@ -30,6 +34,10 @@ type ProductResult = {
   error?: string;
   entitled?: boolean;
   accessible?: boolean;
+  betaSignupOpen?: boolean;
+  accessMode?: "beta" | "production";
+  accessStatus?: "beta" | "paid" | "suspended" | null;
+  launchReady?: boolean;
 };
 
 type Subscription = {
@@ -107,6 +115,12 @@ const productMeta = {
     description: "Campaigns, customer pipeline, content, brand intelligence and marketing analytics.",
     icon: Megaphone,
   },
+  pos: {
+    label: "V79 POS",
+    eyebrow: "Commerce",
+    description: "Sales, stock, purchasing and store operations. Register for free beta testing while the browser app is prepared.",
+    icon: ShoppingCart,
+  },
 } as const;
 
 function formatNumber(value: unknown) {
@@ -146,6 +160,7 @@ function Login({ onLogin }: { onLogin: (session: Session) => void }) {
   const [name, setName] = useState("");
   const [organizationName, setOrganizationName] = useState("");
   const [plan, setPlan] = useState<"start"|"business"|"advantage">("business");
+  const [signupIntent, setSignupIntent] = useState<"suite"|"pos_beta">("suite");
   const [planData, setPlanData] = useState<any>(null);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -167,7 +182,7 @@ function Login({ onLogin }: { onLogin: (session: Session) => void }) {
         "/api/auth/mfa/verify";
       const payload =
         mode==="login" ? {email,password} :
-        mode==="register" ? {email,password,name,organizationName,plan} :
+        mode==="register" ? {email,password,name,organizationName,plan,signupIntent} :
         mode==="mfa" ? {challengeToken,code:mfaCode} :
         {email};
       const response=await fetch(endpoint,{
@@ -223,7 +238,7 @@ function Login({ onLogin }: { onLogin: (session: Session) => void }) {
     "Confirm it’s you";
   const help =
     mode==="login" ? "Sign in with your verified V79 Hub credentials." :
-    mode==="register" ? `Verify your email first; then your ${planData?.trialDays ?? 14}-day trial begins.` :
+    mode==="register" ? signupIntent === "pos_beta" ? "Register your POS beta workspace for free. Verify your email to secure the account." : `Verify your email first; then your ${planData?.trialDays ?? 14}-day trial begins.` :
     mode==="forgot" ? "Enter your email. If it belongs to a verified Hub account, we will send a 30-minute reset link." :
     mode==="verify" ? "Enter the account email to send a fresh 24-hour verification link." :
     "Enter the six-digit code from your authenticator app, or use one of your one-time recovery codes.";
@@ -285,7 +300,11 @@ function Login({ onLogin }: { onLogin: (session: Session) => void }) {
                     <input autoComplete="organization" required minLength={2} value={organizationName} onChange={e=>setOrganizationName(e.target.value)} className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900/80 px-4 py-3 outline-none ring-cyan-300 focus:ring-2"/>
                   </label>
                 </div>
-                <div className="mt-5 grid gap-2">
+                {planData?.posBetaSignup && <div className="mt-5 grid gap-2 sm:grid-cols-2" role="group" aria-label="Choose workspace access">
+                  <button type="button" onClick={()=>setSignupIntent("pos_beta")} className={`rounded-2xl border p-4 text-left text-sm ${signupIntent === "pos_beta" ? "border-cyan-300 bg-cyan-300/10" : "border-white/10"}`}><strong>V79 POS beta</strong><span className="mt-1 block text-xs text-slate-400">Free to register for testing. No payment details.</span></button>
+                  <button type="button" onClick={()=>setSignupIntent("suite")} className={`rounded-2xl border p-4 text-left text-sm ${signupIntent === "suite" ? "border-cyan-300 bg-cyan-300/10" : "border-white/10"}`}><strong>V79 suite trial</strong><span className="mt-1 block text-xs text-slate-400">Choose a plan for finance and operations.</span></button>
+                </div>}
+                {signupIntent === "suite" && <div className="mt-5 grid gap-2">
                   {plans.map((item:any)=>(
                     <button key={item.id} type="button" onClick={()=>setPlan(item.id)} className={"rounded-2xl border p-4 text-left transition " + (plan===item.id ? "border-cyan-300 bg-cyan-300/10" : "border-white/10 bg-slate-900/40 hover:border-white/20")}>
                       <div className="flex items-center justify-between gap-4">
@@ -294,7 +313,7 @@ function Login({ onLogin }: { onLogin: (session: Session) => void }) {
                       </div>
                     </button>
                   ))}
-                </div>
+                </div>}
               </>
             )}
 
@@ -338,7 +357,7 @@ function Login({ onLogin }: { onLogin: (session: Session) => void }) {
             {(mode==="forgot"||mode==="verify"||mode==="mfa") && (
               <button type="button" onClick={()=>{setMode("login");setChallengeToken("");setMfaCode("");setError("");setMessage("");}} className="mt-4 w-full text-center text-xs text-slate-400 hover:text-slate-300">Back to sign in</button>
             )}
-            {mode==="register" && <p className="mt-4 text-center text-[11px] leading-5 text-slate-500">Your trial starts only after email verification. No payment is taken by this form.</p>}
+            {mode==="register" && <p className="mt-4 text-center text-[11px] leading-5 text-slate-500">{signupIntent === "pos_beta" ? "Beta registration is free. Access to the POS browser app will open after its testing release. A paid conversion later requires a separate agreement; no automatic charge." : "Your trial starts only after email verification. No payment is taken by this form."}</p>}
           </form>
           <p className="mt-6 text-center text-xs text-slate-500">From Idea to Advantage</p>
         </section>
@@ -435,7 +454,7 @@ function ResetPassword({ token }: { token:string }) {
   </main>;
 }
 
-function ProductCard({ product, result, role, onNavigate }: { product: Integration["product"]; result?: ProductResult; role: string; onNavigate: (view: "connections" | "team" | "billing") => void }) {
+function ProductCard({ product, result, role, onNavigate, onJoinPos }: { product: Integration["product"]; result?: ProductResult; role: string; onNavigate: (view: "connections" | "team" | "billing") => void; onJoinPos?: () => void }) {
   const meta = productMeta[product];
   const Icon = meta.icon;
   const summary = result?.summary;
@@ -463,6 +482,16 @@ function ProductCard({ product, result, role, onNavigate }: { product: Integrati
       ["Certificates", formatNumber(metrics.certificates)],
     ];
   }, [metrics, product]);
+
+  if(product === "pos") return <article data-product="pos" className="v79-product-card rounded-3xl border border-slate-200 bg-white p-6">
+    <div className="flex items-start justify-between gap-4"><div className="flex gap-4"><div className="v79-product-icon rounded-2xl bg-slate-950 p-3"><Icon size={24}/></div><div><p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">{meta.eyebrow}</p><h3 className="mt-1 text-xl font-semibold text-slate-950">{meta.label}</h3></div></div><span className="rounded-full bg-violet-50 px-3 py-1 text-xs font-semibold text-violet-700">In development</span></div>
+    <p className="mt-5 min-h-12 text-sm leading-6 text-slate-500">{meta.description}</p>
+    <p className="mt-4 text-xs leading-5 text-slate-600">{result?.error}</p>
+    <div className="mt-6 flex items-center justify-between border-t border-slate-100 pt-5">
+      <span className="text-xs font-medium text-slate-500">{result?.accessStatus === "paid" ? "Paid access recorded" : result?.accessStatus === "beta" ? "Free beta registered" : result?.betaSignupOpen ? "No payment required to register" : "Registration unavailable"}</span>
+      {result?.betaSignupOpen && !result?.accessStatus && role === "owner" && <button type="button" onClick={onJoinPos} className="text-sm font-semibold text-violet-700 hover:underline">Join free beta</button>}
+    </div>
+  </article>;
 
   return (
     <article data-product={product} className="v79-product-card group rounded-3xl border border-slate-200 bg-white p-6 transition hover:-translate-y-0.5 hover:shadow-lg">
@@ -694,7 +723,7 @@ function Connections({ integrations }: { integrations: Integration[] }) {
               <div className="grid gap-4 lg:grid-cols-[1fr_1.5fr_auto] lg:items-end">
                 <div className="flex items-center gap-3">
                   <div className="rounded-xl bg-slate-950 p-2.5 text-cyan-300"><Icon size={20} /></div>
-                  <div><div className="font-semibold text-slate-950">{meta.label}</div><div className="text-xs text-slate-500">{item.product === "academy" ? "Personal learning by verified email" : item.entitled === false ? "Not included in this plan" : item.linked ? "Managed by V79 Hub" : "Waiting for subscription"}</div></div>
+                  <div><div className="font-semibold text-slate-950">{meta.label}</div><div className="text-xs text-slate-500">{item.product === "pos" ? item.entitled ? "Access recorded; app release pending" : "App release pending" : item.product === "academy" ? "Personal learning by verified email" : item.entitled === false ? "Not included in this plan" : item.linked ? "Managed by V79 Hub" : "Waiting for subscription"}</div></div>
                 </div>
                 <p className="text-sm text-slate-600">{meta.description}</p>
                 <div>{item.openUrl && item.accessible !== false && <a href={item.openUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-sm font-semibold text-cyan-800">Open app <ArrowUpRight size={15}/></a>}</div>
@@ -1090,6 +1119,7 @@ function BusinessTimeline({ events }: { events: DashboardPayload["events"] }) {
 }
 
 function GettingStarted({ dashboard, role, onNavigate }: { dashboard: DashboardPayload; role: string; onNavigate: (view: "connections" | "team" | "billing") => void }) {
+  if (role === "owner" && !dashboard.subscription && dashboard.products?.pos?.accessStatus === "beta") return <section className="mt-8 rounded-3xl border border-violet-200 bg-violet-50 p-6"><h2 className="text-lg font-semibold text-slate-950">Your POS beta registration is active</h2><p className="mt-2 text-sm leading-6 text-slate-600">Your organisation and account are saved. The browser app is being prepared for testing. Your account ID can carry forward when you choose paid access later.</p></section>;
   if (role !== "owner") return null;
   const steps = [
     { complete: Boolean(dashboard.subscription && ["trialing", "active"].includes(dashboard.subscription.status)), title: "Activate your workspace", detail: "Review your trial or subscription status.", action: () => onNavigate("billing"), label: "View plan" },
@@ -1195,6 +1225,16 @@ export default function App() {
     setSession(null); setDashboard(null); setIntegrations([]);
   }
 
+  async function joinPosBeta() {
+    try {
+      const response=await fetch("/api/pos/beta/join",{method:"POST"});
+      const body=await response.json().catch(()=>({}));
+      if(!response.ok) throw new Error(body.error || "POS beta registration failed.");
+      setNotice("Your organisation is registered for the free V79 POS beta. We will open the app after its testing release; no payment has been taken.");
+      await loadAll();
+    } catch(error:any) { setNotice(error.message || "POS beta registration failed."); }
+  }
+
   if (verifyToken) return <VerifyEmail token={verifyToken} onVerified={setSession} />;
   if (resetToken) return <ResetPassword token={resetToken} />;
   if (inviteToken) return <InviteAccept token={inviteToken} onAccepted={setSession} />;
@@ -1286,8 +1326,8 @@ export default function App() {
                 <div><p className="text-xs font-semibold uppercase tracking-[0.16em] text-cyan-700">Your ecosystem</p><h2 className="mt-1 text-2xl font-semibold tracking-tight">Run the business from one starting point</h2></div>
                 {["owner","admin"].includes(session.organization.role) && <button onClick={() => setView("connections")} className="hidden items-center gap-2 text-sm font-semibold text-slate-600 hover:text-slate-950 sm:flex"><Settings2 size={16} /> Manage connections</button>}
               </div>
-              <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
-                {(["tiquet","ffpro","marketing","academy"] as const).map(product => <div key={product}><ProductCard product={product} result={dashboard?.products?.[product]} role={session.organization.role} onNavigate={navigate} /></div>)}
+              <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
+                {(["tiquet","ffpro","marketing","academy","pos"] as const).map(product => <div key={product}><ProductCard product={product} result={dashboard?.products?.[product]} role={session.organization.role} onNavigate={navigate} onJoinPos={joinPosBeta} /></div>)}
               </div>
             </section>
 
