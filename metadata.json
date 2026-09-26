@@ -1,5 +1,6 @@
 {
-  "name": "V79 INV",
-  "description": "A clean and professional inventory management application.",
-  "requestFramePermissions": []
+  "name": "VISION79 HUB",
+  "description": "Vision 79 Hub - From Idea to Advantage. Central business command centre, managed identity, and connected applications portal.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
