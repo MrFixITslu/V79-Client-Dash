@@ -129,15 +129,13 @@ export default function App() {
       if (ffpRes.ok) setFFPRORecords(await ffpRes.json());
       if (mktRes.ok) setMarketingCampaigns(await mktRes.json());
 
-      // If user is admin, fetch user accounts
-      if (user?.role === "admin") {
-        const usersRes = await fetch("/api/users");
-        if (usersRes.ok) setUsers(await usersRes.json());
-      }
+      // Fetch user accounts for team roster
+      const usersRes = await fetch("/api/users");
+      if (usersRes.ok) setUsers(await usersRes.json());
     } catch (err) {
       console.error("Error fetching hub state:", err);
     }
-  }, [user?.role]);
+  }, [user]);
 
   useEffect(() => {
     if (user) {
@@ -618,6 +616,9 @@ export default function App() {
             users={users}
             currentUser={user}
             onNavigate={setCurrentView}
+            onAddUser={handleAddUser}
+            onUpdateUser={handleUpdateUser}
+            onDeleteUser={handleDeleteUser}
           />
         )}
 

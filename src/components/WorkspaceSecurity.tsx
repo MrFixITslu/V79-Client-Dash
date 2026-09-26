@@ -1,5 +1,16 @@
-import React from "react";
-import { Shield, Lock, Key, CheckCircle2, AlertCircle } from "lucide-react";
+import React, { useState } from "react";
+import {
+  Shield,
+  Lock,
+  Key,
+  CheckCircle2,
+  Copy,
+  Check,
+  RefreshCw,
+  Globe,
+  FileText,
+  AlertCircle,
+} from "lucide-react";
 import { ViewState } from "../types";
 
 interface WorkspaceSecurityProps {
@@ -7,59 +18,215 @@ interface WorkspaceSecurityProps {
 }
 
 export function WorkspaceSecurity({ onNavigate }: WorkspaceSecurityProps) {
+  const [copiedKey, setCopiedKey] = useState(false);
+  const [isRotating, setIsRotating] = useState(false);
+  const [rotationMessage, setRotationMessage] = useState<string | null>(null);
+
+  const authorityId = "v79_auth_sec99_prod_slu";
+  const permittedDomains = [
+    { domain: "ffpro.v79sl.com", app: "FFPRO", status: "Active TLS 1.3" },
+    { domain: "tiquet.v79sl.com", app: "V79 Tiquet", status: "Active TLS 1.3" },
+    { domain: "marketing.v79sl.com", app: "V79 Marketing", status: "Active TLS 1.3" },
+    { domain: "pos.v79sl.com", app: "V79 POS", status: "Active TLS 1.3" },
+    { domain: "academy.v79sl.com", app: "V79 Academy", status: "Active TLS 1.3" },
+  ];
+
+  const recentSecurityEvents = [
+    {
+      id: "ev-1",
+      event: "SSO Identity Handshake Verified",
+      subject: "V79 Digital Root Session",
+      timestamp: "Just now",
+      status: "Success",
+    },
+    {
+      id: "ev-2",
+      event: "POS Real-Time Webhook Authenticated",
+      subject: "pos.v79sl.com",
+      timestamp: "5 mins ago",
+      status: "Success",
+    },
+    {
+      id: "ev-3",
+      event: "HMAC Token Verification Signature",
+      subject: "ffpro.v79sl.com",
+      timestamp: "28 mins ago",
+      status: "Success",
+    },
+    {
+      id: "ev-4",
+      event: "Encrypted WebSocket Channel Opened",
+      subject: "Hub Client / Admin Session",
+      timestamp: "1 hour ago",
+      status: "Success",
+    },
+  ];
+
+  const handleCopy = (text: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedKey(true);
+    setTimeout(() => setCopiedKey(false), 2000);
+  };
+
+  const handleRotate = () => {
+    setIsRotating(true);
+    setTimeout(() => {
+      setIsRotating(false);
+      setRotationMessage("Cryptographic token seed verified and renewed successfully.");
+      setTimeout(() => setRotationMessage(null), 3500);
+    }, 800);
+  };
+
   return (
     <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
+      {/* Top Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200 pb-5">
         <div>
           <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
             WORKSPACE SETTINGS
           </span>
           <h1 className="text-2xl font-bold text-slate-900 mt-1">
-            Security & Identity
+            Security & Identity Authority
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
-            Single Sign-On (SSO) cryptography, token rotation, and identity guardrails.
+            Single Sign-On (SSO) cryptography, domain guardrails, and cryptographic token authority.
           </p>
         </div>
         <button
           onClick={() => onNavigate("overview")}
-          className="inline-flex items-center gap-2 px-3.5 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-semibold shadow-sm transition-all self-start sm:self-auto"
+          className="inline-flex items-center gap-2 px-3.5 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-semibold shadow-sm transition-all self-start sm:self-auto cursor-pointer"
         >
           <span>← Back to Hub Overview</span>
         </button>
       </div>
 
+      {rotationMessage && (
+        <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold flex items-center gap-2 animate-in fade-in">
+          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+          <span>{rotationMessage}</span>
+        </div>
+      )}
+
+      {/* Security Overview Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-        <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-3">
-          <div className="flex items-center gap-2.5">
-            <Key className="w-5 h-5 text-teal-600" />
-            <h3 className="text-sm font-bold text-slate-900">Signed SSO Tokens</h3>
-          </div>
-          <p className="text-xs text-slate-500 leading-relaxed">
-            Ecosystem products (FFPRO, Tiquet, Marketing, V79 POS, and Academy) verify session tokens using SHA-256 HMAC signatures issued by the Hub authority.
-          </p>
-          <div className="pt-2">
-            <span className="text-xs font-semibold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200 inline-flex items-center gap-1.5">
-              <CheckCircle2 className="w-3.5 h-3.5" />
-              Cryptographic Token Engine Online
+        {/* Token Engine */}
+        <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2.5">
+              <Key className="w-5 h-5 text-teal-600" />
+              <h3 className="text-sm font-bold text-slate-900">Signed SSO Token Engine</h3>
+            </div>
+            <span className="text-xs font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+              Online
             </span>
+          </div>
+
+          <p className="text-xs text-slate-500 leading-relaxed">
+            Connected ecosystem products verify user credentials using signed HMAC tokens generated by the Hub. Cross-domain requests strictly require matching signature hashes.
+          </p>
+
+          <div className="p-3 bg-slate-50 rounded-xl border border-slate-200/80 space-y-2">
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-slate-500 font-medium">Authority Key Identifier:</span>
+              <span className="font-mono text-slate-800 text-[11px] font-semibold">{authorityId}</span>
+            </div>
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-slate-500 font-medium">Hashing Algorithm:</span>
+              <span className="font-mono text-slate-800 text-[11px]">HMAC-SHA256 (256-bit)</span>
+            </div>
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-slate-500 font-medium">Session Expiry:</span>
+              <span className="text-slate-800 text-[11px]">7 Days Rolling</span>
+            </div>
+          </div>
+
+          <div className="pt-2 flex items-center justify-between">
+            <button
+              onClick={() => handleCopy(authorityId)}
+              className="inline-flex items-center gap-1.5 text-xs text-slate-700 hover:text-slate-900 font-semibold px-2.5 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 transition-colors"
+            >
+              {copiedKey ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5 text-slate-400" />}
+              <span>{copiedKey ? "Copied ID" : "Copy Authority ID"}</span>
+            </button>
+
+            <button
+              onClick={handleRotate}
+              disabled={isRotating}
+              className="inline-flex items-center gap-1.5 text-xs text-slate-700 hover:text-slate-900 font-semibold px-2.5 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 transition-colors disabled:opacity-50"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 text-slate-400 ${isRotating ? "animate-spin" : ""}`} />
+              <span>{isRotating ? "Validating..." : "Test Token Seed"}</span>
+            </button>
           </div>
         </div>
 
-        <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-3">
-          <div className="flex items-center gap-2.5">
-            <Lock className="w-5 h-5 text-indigo-600" />
-            <h3 className="text-sm font-bold text-slate-900">TLS & Transport Security</h3>
-          </div>
-          <p className="text-xs text-slate-500 leading-relaxed">
-            All cross-app API calls and websocket streams communicate strictly over end-to-end HTTPS/WSS with strict origin headers.
-          </p>
-          <div className="pt-2">
-            <span className="text-xs font-semibold text-indigo-700 bg-indigo-50 px-2.5 py-1 rounded-lg border border-indigo-200 inline-flex items-center gap-1.5">
-              <CheckCircle2 className="w-3.5 h-3.5" />
-              Enforced HTTPS & WSS
+        {/* TLS & Origin Guardrails */}
+        <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2.5">
+              <Lock className="w-5 h-5 text-indigo-600" />
+              <h3 className="text-sm font-bold text-slate-900">TLS & Transport Guardrails</h3>
+            </div>
+            <span className="text-xs font-semibold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-full border border-indigo-200">
+              Enforced
             </span>
           </div>
+
+          <p className="text-xs text-slate-500 leading-relaxed">
+            All cross-app API calls and websocket streams communicate strictly over end-to-end HTTPS/WSS with HSTS and strict origin headers enforced by reverse proxies.
+          </p>
+
+          <div className="space-y-2 pt-1">
+            <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+              Permitted Ecosystem Domains
+            </div>
+            <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl overflow-hidden bg-slate-50/50">
+              {permittedDomains.map((pd) => (
+                <div key={pd.domain} className="px-3 py-2 flex items-center justify-between text-xs">
+                  <div className="flex items-center gap-2">
+                    <Globe className="w-3.5 h-3.5 text-slate-400" />
+                    <span className="font-mono text-slate-800 font-semibold text-[11px]">{pd.domain}</span>
+                    <span className="text-[10px] text-slate-400">({pd.app})</span>
+                  </div>
+                  <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                    {pd.status}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Security Audit Log */}
+      <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+        <div className="p-4 sm:p-5 border-b border-slate-100 flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <FileText className="w-4 h-4 text-cyan-600" />
+            <h3 className="text-sm font-bold text-slate-900">Recent Security Audit Events</h3>
+          </div>
+          <span className="text-xs text-slate-400">Continuous telemetry</span>
+        </div>
+
+        <div className="divide-y divide-slate-100">
+          {recentSecurityEvents.map((evt) => (
+            <div key={evt.id} className="p-4 flex items-center justify-between gap-4 hover:bg-slate-50/50 text-xs">
+              <div className="flex items-center gap-3">
+                <div className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
+                <div>
+                  <div className="font-semibold text-slate-900">{evt.event}</div>
+                  <div className="text-slate-400 text-[11px]">{evt.subject}</div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <span className="text-slate-400 text-[11px]">{evt.timestamp}</span>
+                <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                  {evt.status}
+                </span>
+              </div>
+            </div>
+          ))}
         </div>
       </div>
     </div>

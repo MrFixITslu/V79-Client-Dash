@@ -62,10 +62,7 @@ export function AppSwitcher({
   };
 
   const getLaunchUrl = (app: EcosystemApp) => {
-    const sep = app.appUrl.includes("?") ? "&" : "?";
-    return authToken && app.ssoSupported
-      ? `${app.appUrl}${sep}sso_token=${encodeURIComponent(authToken)}&org=v79_digital`
-      : app.appUrl;
+    return app.appUrl;
   };
 
   return (

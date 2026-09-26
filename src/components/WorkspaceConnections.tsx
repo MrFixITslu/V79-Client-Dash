@@ -120,11 +120,7 @@ export function WorkspaceConnections({ apps, onNavigate, authToken }: WorkspaceC
               </div>
 
               <a
-                href={
-                  authToken && app.ssoSupported
-                    ? `${app.appUrl}${app.appUrl.includes("?") ? "&" : "?"}sso_token=${encodeURIComponent(authToken)}&org=v79_digital`
-                    : app.appUrl
-                }
+                href={app.appUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-1 text-slate-700 hover:text-cyan-700 font-semibold"

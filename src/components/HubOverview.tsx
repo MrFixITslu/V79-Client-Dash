@@ -44,12 +44,7 @@ export function HubOverview({
   );
 
   const getLaunchUrl = (app: EcosystemApp | undefined, fallback: string) => {
-    const base = app?.appUrl || fallback;
-    if (authToken && app?.ssoSupported) {
-      const sep = base.includes("?") ? "&" : "?";
-      return `${base}${sep}sso_token=${encodeURIComponent(authToken)}&org=v79_digital`;
-    }
-    return base;
+    return app?.appUrl || fallback;
   };
 
   return (
