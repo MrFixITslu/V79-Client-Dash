@@ -54,6 +54,7 @@ test('owner onboarding, team permissions, single-use launches and account isolat
       V79_ACCESS_MODE: 'beta',
       FFPRO_BASE_URL: '', TIQUET_BASE_URL: '', MARKETING_BASE_URL: '', ACADEMY_BASE_URL: '',
       POS_BASE_URL: posOrigin,
+      POS_PUBLIC_URL: 'https://pos.example.test',
     },
     stdio: ['ignore', 'ignore', 'pipe'],
   });
@@ -73,7 +74,7 @@ test('owner onboarding, team permissions, single-use launches and account isolat
       method, redirect,
       headers: { ...(cookie ? { Cookie: cookie } : {}), ...(method !== 'GET' ? { Origin: origin, 'Content-Type': 'application/json' } : {}), ...headers },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    });
+    }).catch(error => { throw new Error(`${method} ${route} failed; Hub stderr: ${errors}`, { cause: error }); });
   }
   let healthy = false;
   for (let attempt = 0; attempt < 70; attempt++) {
@@ -99,7 +100,7 @@ test('owner onboarding, team permissions, single-use launches and account isolat
   assert.equal(ownerDash.products.marketing.entitled, true);
   assert.equal(ownerDash.seats.limit, 10);
   assert.equal((await request('/api/billing/checkout', { cookie: ownerCookie, method: 'POST', body: { plan: 'business', billingCycle: 'monthly' } })).status, 409);
-  assert.equal(ownerDash.products.pos.openUrl, '');
+  assert.equal(ownerDash.products.pos.openUrl, '/api/apps/pos/launch');
   const jwks=await (await request('/.well-known/jwks.json')).json();
   assert.equal(jwks.keys[0].alg,'EdDSA');
   const posTokenResponse=await request('/api/apps/pos/token',{cookie:ownerCookie,method:'POST'});
@@ -118,9 +119,24 @@ test('owner onboarding, team permissions, single-use launches and account isolat
   assert.equal(posDashboard.products.pos.entitled, true);
   assert.equal(posDashboard.products.pos.status,'connected');
   assert.equal(posDashboard.products.pos.accessStatus, 'beta');
-  assert.equal(posDashboard.products.pos.launchReady, false);
-  assert.equal(posDashboard.products.pos.openUrl, '');
-  assert.equal((await request('/api/apps/pos/launch', { cookie: ownerCookie, redirect: 'manual' })).status, 404);
+  assert.equal(posDashboard.products.pos.launchReady, true);
+  assert.equal(posDashboard.products.pos.openUrl, '/api/apps/pos/launch');
+  const posLaunch = await request('/api/apps/pos/launch', { cookie: ownerCookie, redirect: 'manual' });
+  assert.equal(posLaunch.status, 302);
+  const posLocation = new URL(posLaunch.headers.get('location'));
+  assert.equal(posLocation.origin, 'https://pos.example.test');
+  assert.equal(posLocation.search, '');
+  const posTicket = new URLSearchParams(posLocation.hash.slice(1)).get('ticket');
+  assert.ok(posTicket);
+  const consumeBody = JSON.stringify({product:'pos',ticket:posTicket});
+  const posTimestamp = String(Date.now());
+  const posHeaders = {'x-v79-service-id':'v79-pos','x-v79-timestamp':posTimestamp,'x-v79-signature':signPlatformRequest({method:'POST',pathname:'/api/platform/session/consume',timestamp:posTimestamp,body:consumeBody,secret})};
+  const posConsume = await request('/api/platform/session/consume',{method:'POST',body:{product:'pos',ticket:posTicket},headers:posHeaders});
+  assert.equal(posConsume.status,200);
+  const consumedPos = await posConsume.json();
+  assert.equal(consumedPos.tenantId,provisionedId);
+  assert.equal(JSON.parse(Buffer.from(consumedPos.token.split('.')[1],'base64url')).aud,'v79-commerce');
+  assert.equal((await request('/api/platform/session/consume',{method:'POST',body:{product:'pos',ticket:posTicket},headers:posHeaders})).status,401);
   assert.equal((await request('/api/integrations/academy', { cookie: ownerCookie, method: 'PUT', body: { externalSubjectId: 'someone-else@example.test' } })).status, 409);
 
   const invitationResponse = await request('/api/team/invitations', { cookie: ownerCookie, method: 'POST', body: { email: 'worker@example.test', role: 'member', products: ['tiquet'] } });

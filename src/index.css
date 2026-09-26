@@ -1,1 +1,41 @@
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Public+Sans:wght@400;500;600;700&display=swap');
 @import "tailwindcss";
+
+@theme {
+  --font-sans: "Public Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Outfit", ui-sans-serif, system-ui, sans-serif;
+}
+
+:root {
+  --v79-canvas: #f6f8fc;
+  --v79-ink: #0f172a;
+  --v79-muted: #475569;
+  --v79-border: #e2e8f0;
+  --v79-nav: #0b1220;
+  --v79-accent: #0e7490;
+}
+
+@layer base {
+  html { background: var(--v79-canvas); }
+  body { @apply m-0 min-w-[320px] antialiased text-slate-900; font-family: var(--font-sans); }
+  h1, h2, h3, h4 { font-family: var(--font-display); }
+  button, input { font: inherit; }
+  button { cursor: pointer; }
+  button:disabled { cursor: not-allowed; }
+  :where(button, a, input, select, textarea, [tabindex]):focus-visible { outline: 3px solid var(--v79-accent); outline-offset: 3px; }
+}
+
+.v79-product-card {
+  border-top: 3px solid var(--product-accent, var(--v79-accent));
+  box-shadow: 0 2px 12px rgb(15 23 42 / 5%);
+}
+.v79-product-card[data-product="ffpro"] { --product-accent: #0f766e; }
+.v79-product-card[data-product="marketing"] { --product-accent: #b45309; }
+.v79-product-card[data-product="academy"] { --product-accent: #4338ca; }
+.v79-product-card[data-product="pos"] { --product-accent: #6d28d9; }
+.v79-product-card .v79-product-icon { color: var(--product-accent, var(--v79-accent)); }
+.v79-product-card .v79-product-link { color: var(--product-accent, var(--v79-accent)); min-height: 44px; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
+}
+@media (max-width: 640px) { input, select, textarea { font-size: 16px; } }
