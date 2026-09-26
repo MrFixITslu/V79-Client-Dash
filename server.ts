@@ -7,23 +7,32 @@ import { fileURLToPath } from "url";
 import fs from "fs";
 import crypto from "crypto";
 import { GoogleGenAI, Type } from "@google/genai";
+import { signPlatformRequest, verifyPlatformRequest } from "./server/platform-contract.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
 const server = createServer(app);
-const wss = new WebSocketServer({ server });
+const wss = new WebSocketServer({ noServer: true });
 
-app.use(express.json({ limit: "50mb" }));
+app.use(express.json({ limit: "2mb", verify: (req: any, _res, body) => { req.rawBody = Buffer.from(body); } }));
+app.disable("x-powered-by");
+app.use((req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  if (req.path.startsWith("/api/")) res.setHeader("Cache-Control", "no-store");
+  next();
+});
 
 // --- Persistent File Store ---
-const DATA_DIR = path.join(__dirname, "data");
+const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(__dirname, "data"));
 const STORE_FILE = path.join(DATA_DIR, "v79_store.json");
 
-if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-}
+process.umask(0o077);
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
 
 interface InventoryItem {
   id: string;
@@ -337,48 +346,7 @@ const defaultInventory: InventoryItem[] = [
   }
 ];
 
-const defaultUsers: StoredUser[] = [
-  {
-    id: "u-1",
-    username: "admin",
-    password: "password123",
-    fullName: "System Administrator",
-    role: "admin",
-    permissions: ["dashboard", "inventory", "pos", "invoices", "reports", "settings", "users"],
-    lastLogin: new Date().toISOString(),
-    createdAt: new Date().toISOString()
-  },
-  {
-    id: "u-2",
-    username: "manager",
-    password: "manager123",
-    fullName: "Operations Manager",
-    role: "manager",
-    permissions: ["dashboard", "inventory", "pos", "invoices", "reports", "settings"],
-    lastLogin: new Date().toISOString(),
-    createdAt: new Date().toISOString()
-  },
-  {
-    id: "u-3",
-    username: "staff",
-    password: "viewer123",
-    fullName: "Front Desk Cashier",
-    role: "staff",
-    permissions: ["dashboard", "inventory", "pos", "invoices", "reports"],
-    lastLogin: new Date().toISOString(),
-    createdAt: new Date().toISOString()
-  },
-  {
-    id: "u-4",
-    username: "viewer",
-    password: "viewer123",
-    fullName: "Guest Auditor",
-    role: "viewer",
-    permissions: ["dashboard", "inventory", "reports"],
-    lastLogin: new Date().toISOString(),
-    createdAt: new Date().toISOString()
-  }
-];
+const defaultUsers: StoredUser[] = [];
 
 const defaultTransactions: Transaction[] = [
   {
@@ -469,7 +437,7 @@ const defaultSettings: StoreSettings = {
   currency: "XCD",
   taxRate: 12.5,
   enableTax: true,
-  posApiKey: "v79_live_pos_key_sec99",
+  posApiKey: "",
   webhookUrl: "https://api.vision79.lc/webhooks/pos"
 };
 
@@ -911,18 +879,18 @@ function loadStore(): AppStore {
       return loadedStore;
     }
   } catch (err) {
-    console.error("Error reading store file, initializing fresh store:", err);
+    throw new Error(`Unable to read existing Hub data at ${STORE_FILE}; restore from backup instead of replacing it.`, { cause: err });
   }
 
   const initialStore: AppStore = {
-    inventory: defaultInventory,
+    inventory: process.env.NODE_ENV === "production" ? [] : defaultInventory,
     users: defaultUsers,
-    transactions: defaultTransactions,
+    transactions: process.env.NODE_ENV === "production" ? [] : defaultTransactions,
     settings: defaultSettings,
     ecosystemApps: defaultEcosystemApps,
-    tickets: defaultTickets,
-    ffproRecords: defaultFFPRORecords,
-    marketingCampaigns: defaultMarketingCampaigns
+    tickets: process.env.NODE_ENV === "production" ? [] : defaultTickets,
+    ffproRecords: process.env.NODE_ENV === "production" ? [] : defaultFFPRORecords,
+    marketingCampaigns: process.env.NODE_ENV === "production" ? [] : defaultMarketingCampaigns
   };
   saveStore(initialStore);
   return initialStore;
@@ -931,24 +899,145 @@ function loadStore(): AppStore {
 function saveStore(store: AppStore): void {
   try {
     const tempFile = STORE_FILE + ".tmp";
-    fs.writeFileSync(tempFile, JSON.stringify(store, null, 2), "utf-8");
+    fs.writeFileSync(tempFile, JSON.stringify(store, null, 2), { encoding: "utf-8", mode: 0o600 });
     fs.renameSync(tempFile, STORE_FILE);
+    fs.chmodSync(STORE_FILE, 0o600);
   } catch (err) {
-    console.error("Error saving store file:", err);
+    throw err;
   }
 }
 
 // In-Memory store synchronized with disk
 let store = loadStore();
 
+const knownDemoPasswords = new Set(["password123", "manager123", "viewer123"]);
+function hashPassword(password: string) {
+  const salt = crypto.randomBytes(16).toString("hex");
+  return `scrypt:${salt}:${crypto.scryptSync(password, salt, 64).toString("hex")}`;
+}
+function checkPassword(password: string, stored: string) {
+  if (!stored.startsWith("scrypt:")) return false;
+  const [, salt, digest] = stored.split(":");
+  if (!salt || !/^[a-f0-9]{128}$/.test(digest || "")) return false;
+  const actual = crypto.scryptSync(password, salt, 64);
+  return crypto.timingSafeEqual(actual, Buffer.from(digest, "hex"));
+}
+const adminPassword = process.env.V79_HUB_ADMIN_PASSWORD || "";
+if (process.env.NODE_ENV === "production" && (adminPassword.length < 16 || knownDemoPasswords.has(adminPassword))) {
+  throw new Error("Set V79_HUB_ADMIN_PASSWORD to a unique password of at least 16 characters before production startup.");
+}
+let usersChanged = false;
+for (const user of store.users) {
+  if (user.password.startsWith("scrypt:")) continue;
+  user.password = hashPassword(knownDemoPasswords.has(user.password) ? crypto.randomBytes(32).toString("hex") : user.password);
+  usersChanged = true;
+}
+if (adminPassword) {
+  const username = process.env.V79_HUB_ADMIN_USERNAME || "admin";
+  let admin = store.users.find(u => u.username.toLowerCase() === username.toLowerCase());
+  if (!admin) {
+    admin = { id: crypto.randomUUID(), username, password: "", fullName: "Hub Administrator", role: "admin", permissions: ["dashboard","inventory","pos","invoices","reports","settings","users"], createdAt: new Date().toISOString() };
+    store.users.push(admin);
+  }
+  // Only replace a password when initially bootstrapping; subsequent edits in
+  // the team UI must survive container recreation.
+  if (!admin.password || (usersChanged && admin.username === "admin" && admin.id === "u-1")) {
+    admin.password = hashPassword(adminPassword);
+    usersChanged = true;
+  }
+  admin.role = "admin";
+}
+if (usersChanged) saveStore(store);
+
 // In-Memory Active Auth Sessions: token -> userId
 const sessions = new Map<string, { userId: string; username: string; role: string; expiresAt: number }>();
+const loginAttempts = new Map<string, { count: number; until: number }>();
+
+function sessionFromToken(token: string) {
+  const session = sessions.get(token);
+  if (!session || session.expiresAt < Date.now()) {
+    sessions.delete(token);
+    return null;
+  }
+  const user = store.users.find(u => u.id === session.userId);
+  if (!user) return null;
+  session.role = user.role;
+  return session;
+}
+function cookieToken(header = "") {
+  return header.split(";").map(part => part.trim()).find(part => part.startsWith("v79_hub_session="))?.slice(16) || "";
+}
+function sessionCookie(value: string, maxAge: number) {
+  return `v79_hub_session=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${process.env.NODE_ENV === "production" ? "; Secure" : ""}`;
+}
+
+const posSecret = process.env.V79_PLATFORM_SHARED_SECRET || "";
+const posServiceUrl = process.env.POS_BASE_URL || "http://v79-commerce-api:8080";
+const posPublicUrl = process.env.POS_PUBLIC_URL || "https://pos.v79sl.com";
+const posIdentityPath = path.join(DATA_DIR, "pos-identity.json");
+const posIdentity = (() => {
+  if (fs.existsSync(posIdentityPath)) return JSON.parse(fs.readFileSync(posIdentityPath, "utf8")) as { organizationId: string; ownerUserId: string };
+  const owner = store.users.find(u => u.username === (process.env.V79_HUB_ADMIN_USERNAME || "admin") && u.role === "admin");
+  const identity = { organizationId: process.env.V79_POS_ORG_ID || crypto.randomUUID(), ownerUserId: owner?.id || "" };
+  fs.writeFileSync(posIdentityPath, JSON.stringify(identity), { mode: 0o600, flag: "wx" });
+  return identity;
+})();
+const posKeyPath = path.join(DATA_DIR, "pos-signing-ed25519.pem");
+if (!fs.existsSync(posKeyPath)) {
+  const pair = crypto.generateKeyPairSync("ed25519");
+  fs.writeFileSync(posKeyPath, pair.privateKey.export({ format: "pem", type: "pkcs8" }), { mode: 0o600, flag: "wx" });
+}
+const posPrivateKey = crypto.createPrivateKey(fs.readFileSync(posKeyPath));
+const posPublicKey = crypto.createPublicKey(posPrivateKey);
+const posKeyId = crypto.createHash("sha256").update(posPublicKey.export({ format: "der", type: "spki" })).digest("hex").slice(0, 20);
+const launchTickets = new Map<string, { userId: string; tenantId: string; expiresAt: number }>();
+function posUserId(userId: string) {
+  if (process.env.V79_POS_OWNER_USER_ID && userId === posIdentity.ownerUserId) return process.env.V79_POS_OWNER_USER_ID;
+  const hex = crypto.createHash("sha256").update(`${posIdentity.organizationId}:${userId}`).digest("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
+function posJwt(userId: string, tenantId: string) {
+  const now = Math.floor(Date.now() / 1000);
+  const header = Buffer.from(JSON.stringify({ alg: "EdDSA", typ: "JWT", kid: posKeyId })).toString("base64url");
+  const claims = Buffer.from(JSON.stringify({ iss: new URL(process.env.APP_URL || "https://hub.v79sl.com").origin, aud: "v79-commerce", sub: userId, tenant_id: tenantId, iat: now, nbf: now, exp: now + 300 })).toString("base64url");
+  const input = `${header}.${claims}`;
+  return `${input}.${crypto.sign(null, Buffer.from(input), posPrivateKey).toString("base64url")}`;
+}
+
+app.get("/.well-known/jwks.json", (_req, res) => {
+  res.setHeader("Cache-Control", "public, max-age=300");
+  res.json({ keys: [{ ...posPublicKey.export({ format: "jwk" }), kid: posKeyId, alg: "EdDSA", use: "sig" }] });
+});
+app.get("/api/health", (_req, res) => res.json({ status: "ok" }));
+app.post("/api/platform/session/consume", (req, res) => {
+  const body = (req as any).rawBody?.toString("utf8") || "";
+  if (req.get("x-v79-service-id") !== "v79-pos" || !verifyPlatformRequest({ method: "POST", pathname: "/api/platform/session/consume", timestamp: req.get("x-v79-timestamp") || "", signature: req.get("x-v79-signature") || "", body, secret: posSecret })) return res.status(401).json({ error: "Invalid service signature" });
+  const { product, ticket } = req.body || {};
+  if (product !== "pos" || typeof ticket !== "string") return res.status(400).json({ error: "Invalid ticket" });
+  const ticketHash = crypto.createHash("sha256").update(ticket).digest("hex");
+  const entry = launchTickets.get(ticketHash);
+  launchTickets.delete(ticketHash);
+  if (!entry || entry.expiresAt < Date.now() || entry.userId !== posIdentity.ownerUserId || !store.users.some(u => u.id === entry.userId && u.role === "admin")) return res.status(401).json({ error: "Ticket expired or revoked" });
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ token: posJwt(posUserId(entry.userId), entry.tenantId), tenantId: entry.tenantId });
+});
+server.on("upgrade", (request, socket, head) => {
+  const origin = process.env.APP_URL ? new URL(process.env.APP_URL).origin : `http://${request.headers.host}`;
+  const session = sessionFromToken(cookieToken(request.headers.cookie));
+  if (request.headers.origin !== origin || !session) { socket.destroy(); return; }
+  wss.handleUpgrade(request, socket, head, ws => {
+    (ws as any).userId = session.userId;
+    wss.emit("connection", ws, request);
+  });
+});
 
 // Broadcast helper for real-time WebSocket clients
 function broadcast(data: any, sender?: WebSocket) {
   const message = JSON.stringify(data);
   wss.clients.forEach((client) => {
-    if (client.readyState === WebSocket.OPEN && client !== sender) {
+    const session = [...sessions.values()].find(s => s.userId === (client as any).userId && s.expiresAt > Date.now());
+    if (client.readyState === WebSocket.OPEN && client !== sender && session &&
+        (!["USERS_UPDATED","TRANSACTION_CREATED","FFPRO_RECORDS_UPDATED"].includes(data.type) || session.role === "admin")) {
       client.send(message);
     }
   });
@@ -957,21 +1046,26 @@ function broadcast(data: any, sender?: WebSocket) {
 // Auth Middleware
 function requireAuth(req: Request, res: Response, next: () => void) {
   const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    return res.status(401).json({ error: "Authentication required" });
-  }
-
-  const token = authHeader.split(" ")[1];
-  const session = sessions.get(token);
-  if (!session || session.expiresAt < Date.now()) {
-    if (session) sessions.delete(token);
+  const bearer = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : "";
+  const token = bearer || cookieToken(req.headers.cookie);
+  const session = sessionFromToken(token);
+  if (!session) {
     return res.status(401).json({ error: "Session expired or invalid" });
   }
-
+  if (!bearer && !["GET", "HEAD", "OPTIONS"].includes(req.method)) {
+    const origin = process.env.APP_URL ? new URL(process.env.APP_URL).origin : `${req.protocol}://${req.get("host")}`;
+    if (req.get("origin") !== origin) return res.status(403).json({ error: "Invalid request origin" });
+  }
   // Extend session expiration on activity
-  session.expiresAt = Date.now() + 7 * 24 * 3600 * 1000;
+  session.expiresAt = Date.now() + 12 * 60 * 60 * 1000;
   (req as any).user = session;
   next();
+}
+function requireRole(...roles: StoredUser["role"][]) {
+  return (req: Request, res: Response, next: () => void) => {
+    if (!roles.includes((req as any).user.role)) return res.status(403).json({ error: "Permission denied" });
+    next();
+  };
 }
 
 function sanitizeUser(u: StoredUser) {
@@ -985,21 +1079,26 @@ function sanitizeUser(u: StoredUser) {
 
 app.post("/api/auth/login", (req, res) => {
   const { username, password } = req.body;
-  if (!username || !password) {
+  if (typeof username !== "string" || typeof password !== "string" || !username || !password) {
     return res.status(400).json({ error: "Username and password required" });
   }
+  const attemptKey = `${req.ip}:${username.trim().toLowerCase()}`;
+  const attempts = loginAttempts.get(attemptKey);
+  if (attempts && attempts.count >= 10 && attempts.until > Date.now()) return res.status(429).json({ error: "Too many login attempts. Try again later." });
 
   const foundUser = store.users.find(
-    (u) => u.username.toLowerCase() === username.trim().toLowerCase() && u.password === password
+    (u) => u.username.toLowerCase() === String(username).trim().toLowerCase() && checkPassword(password, u.password)
   );
 
   if (!foundUser) {
+    loginAttempts.set(attemptKey, { count: (attempts?.until && attempts.until > Date.now() ? attempts.count : 0) + 1, until: Date.now() + 15 * 60_000 });
     return res.status(401).json({ error: "Invalid username or password" });
   }
+  loginAttempts.delete(attemptKey);
 
   // Generate secure token
   const token = "v79_tok_" + crypto.randomBytes(24).toString("hex");
-  const expiresAt = Date.now() + 7 * 24 * 3600 * 1000; // 7 days
+  const expiresAt = Date.now() + 12 * 60 * 60 * 1000;
 
   sessions.set(token, {
     userId: foundUser.id,
@@ -1012,10 +1111,9 @@ app.post("/api/auth/login", (req, res) => {
   foundUser.lastLogin = new Date().toISOString();
   saveStore(store);
 
-  res.json({
-    token,
-    user: sanitizeUser(foundUser)
-  });
+  res.setHeader("Set-Cookie", sessionCookie(token, 12 * 60 * 60));
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ user: sanitizeUser(foundUser) });
 });
 
 app.get("/api/auth/me", requireAuth, (req, res) => {
@@ -1029,11 +1127,48 @@ app.get("/api/auth/me", requireAuth, (req, res) => {
 
 app.post("/api/auth/logout", requireAuth, (req, res) => {
   const authHeader = req.headers.authorization;
-  if (authHeader && authHeader.startsWith("Bearer ")) {
-    const token = authHeader.split(" ")[1];
-    sessions.delete(token);
-  }
+  sessions.delete(authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : cookieToken(req.headers.cookie));
+  res.setHeader("Set-Cookie", sessionCookie("", 0));
   res.json({ success: true });
+});
+
+app.use("/api", requireAuth);
+app.use("/api/users", requireRole("admin"));
+app.use("/api/settings", (req, res, next) => req.method === "GET" ? next() : requireRole("admin")(req, res, next));
+app.use("/api/inventory", (req, res, next) => ["GET", "HEAD"].includes(req.method) ? next() : requireRole("admin", "manager", "staff")(req, res, next));
+app.use("/api/pos", requireRole("admin", "manager", "staff"));
+app.use("/api/transactions", requireRole("admin"));
+app.use("/api/ecosystem/ffpro", requireRole("admin"));
+app.use("/api/ecosystem/apps", (req, res, next) => req.method === "GET" ? next() : requireRole("admin")(req, res, next));
+app.use("/api/ecosystem/tiquet", (req, res, next) => req.method === "GET" ? next() : requireRole("admin", "manager", "staff")(req, res, next));
+app.use("/api/ecosystem/marketing", (req, res, next) => req.method === "GET" ? next() : requireRole("admin", "manager")(req, res, next));
+app.use("/api/ai", requireRole("admin", "manager"));
+
+app.get("/api/apps/pos/launch", requireRole("admin"), async (req, res) => {
+  if (posSecret.length < 32) return res.status(503).json({ error: "POS shared secret is not configured" });
+  const session = (req as any).user;
+  if (session.userId !== posIdentity.ownerUserId) return res.status(403).json({ error: "Only the workspace owner can launch POS" });
+  const pathname = "/api/platform/provision";
+  const body = JSON.stringify({
+    organization: { id: posIdentity.organizationId, name: store.settings.companyName || "Vision79", slug: `v79-${posIdentity.organizationId.slice(0, 12)}` },
+    user: { id: posUserId(session.userId) }, role: "owner"
+  });
+  const timestamp = String(Date.now());
+  try {
+    const response = await fetch(new URL(pathname, posServiceUrl), {
+      method: "POST", headers: { "content-type": "application/json", "x-v79-service-id": "v79-hub", "x-v79-timestamp": timestamp,
+        "x-v79-signature": signPlatformRequest({ method: "POST", pathname, timestamp, body, secret: posSecret }) },
+      body, signal: AbortSignal.timeout(5000)
+    });
+    if (!response.ok) return res.status(502).json({ error: "POS workspace provisioning failed", upstreamStatus: response.status });
+  } catch { return res.status(503).json({ error: "POS service is unavailable" }); }
+  for (const [key, entry] of launchTickets) if (entry.expiresAt < Date.now() || entry.userId === session.userId) launchTickets.delete(key);
+  const ticket = crypto.randomBytes(32).toString("base64url");
+  launchTickets.set(crypto.createHash("sha256").update(ticket).digest("hex"), { userId: session.userId, tenantId: posIdentity.organizationId, expiresAt: Date.now() + 120000 });
+  const url = new URL("/", posPublicUrl);
+  url.hash = new URLSearchParams({ ticket }).toString();
+  res.setHeader("Cache-Control", "no-store");
+  res.redirect(302, url.toString());
 });
 
 // ==========================================
@@ -1046,8 +1181,8 @@ app.get("/api/users", (req, res) => {
 
 app.post("/api/users", (req, res) => {
   const { username, password, fullName, role, permissions } = req.body;
-  if (!username || !password) {
-    return res.status(400).json({ error: "Username and password are required" });
+  if (typeof username !== "string" || !username.trim() || typeof password !== "string" || password.length < 12 || !["admin", "manager", "staff", "viewer"].includes(role || "staff")) {
+    return res.status(400).json({ error: "Valid username, role and password of at least 12 characters are required" });
   }
 
   const existing = store.users.find((u) => u.username.toLowerCase() === username.trim().toLowerCase());
@@ -1056,9 +1191,9 @@ app.post("/api/users", (req, res) => {
   }
 
   const newUser: StoredUser = {
-    id: "u_" + Math.random().toString(36).substr(2, 9),
+    id: crypto.randomUUID(),
     username: username.trim(),
-    password: password.trim(),
+    password: hashPassword(password),
     fullName: fullName || username,
     role: role || "staff",
     permissions: Array.isArray(permissions) ? permissions : ["dashboard", "inventory", "pos", "reports"],
@@ -1082,16 +1217,20 @@ app.put("/api/users/:id", (req, res) => {
   }
 
   const current = store.users[userIndex];
+  if (password !== undefined && (typeof password !== "string" || password.length < 12)) return res.status(400).json({ error: "Password must contain at least 12 characters" });
+  if (role !== undefined && !["admin", "manager", "staff", "viewer"].includes(role)) return res.status(400).json({ error: "Invalid role" });
+  if (current.role === "admin" && role && role !== "admin" && store.users.filter(u => u.role === "admin").length === 1) return res.status(400).json({ error: "Cannot demote the sole administrator" });
   store.users[userIndex] = {
     ...current,
     username: username !== undefined ? username.trim() : current.username,
-    password: password ? password.trim() : current.password,
+    password: password ? hashPassword(password) : current.password,
     fullName: fullName !== undefined ? fullName : current.fullName,
     role: role !== undefined ? role : current.role,
     permissions: Array.isArray(permissions) ? permissions : current.permissions
   };
 
   saveStore(store);
+  if (password || (role && role !== current.role)) for (const [token, session] of sessions) if (session.userId === id) sessions.delete(token);
   broadcast({ type: "USERS_UPDATED", payload: store.users.map(sanitizeUser) });
   res.json(sanitizeUser(store.users[userIndex]));
 });
@@ -1107,6 +1246,7 @@ app.delete("/api/users/:id", (req, res) => {
   }
 
   store.users = store.users.filter((u) => u.id !== id);
+  for (const [token, session] of sessions) if (session.userId === id) sessions.delete(token);
   saveStore(store);
   broadcast({ type: "USERS_UPDATED", payload: store.users.map(sanitizeUser) });
   res.json({ success: true });
@@ -1115,19 +1255,24 @@ app.delete("/api/users/:id", (req, res) => {
 // ==========================================
 // INVENTORY ROUTES
 // ==========================================
+const validStock = (value: unknown) => Number.isSafeInteger(value) && (value as number) >= 0;
+const validMoney = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value >= 0 && Number.isSafeInteger(Math.round(value * 100));
 
 app.get("/api/inventory", (req, res) => {
   res.json(store.inventory);
 });
 
 app.post("/api/inventory", (req, res) => {
+  if (typeof req.body?.name !== "string" || !req.body.name.trim() || typeof req.body?.sku !== "string" || !req.body.sku.trim() ||
+      !validStock(req.body.quantity) || !validMoney(req.body.price) || (req.body.costPrice !== undefined && !validMoney(req.body.costPrice)) ||
+      (req.body.reorderThreshold !== undefined && !validStock(req.body.reorderThreshold))) return res.status(400).json({ error: "Valid name, SKU, quantity and prices are required" });
   const newItem: InventoryItem = {
     ...req.body,
     id: "v79_" + Math.random().toString(36).substr(2, 9),
-    quantity: Number(req.body.quantity) || 0,
-    price: Number(req.body.price) || 0,
-    costPrice: Number(req.body.costPrice) || (Number(req.body.price) * 0.7) || 0,
-    reorderThreshold: Number(req.body.reorderThreshold) || 5,
+    quantity: req.body.quantity,
+    price: req.body.price,
+    costPrice: req.body.costPrice ?? 0,
+    reorderThreshold: req.body.reorderThreshold ?? 5,
     tags: Array.isArray(req.body.tags) ? req.body.tags : [],
     lastUpdated: new Date().toISOString()
   };
@@ -1141,23 +1286,25 @@ app.post("/api/inventory", (req, res) => {
 // Bulk import to prevent quadratic HTTP storms
 app.post("/api/inventory/bulk", (req, res) => {
   const { items } = req.body;
-  if (!Array.isArray(items) || items.length === 0) {
+  if (!Array.isArray(items) || items.length === 0 || items.length > 1000) {
     return res.status(400).json({ error: "Array of items required" });
   }
+  if (items.some(raw => typeof raw?.name !== "string" || !raw.name.trim() || typeof raw?.sku !== "string" || !raw.sku.trim() ||
+      !validStock(raw.quantity) || !validMoney(raw.price) || (raw.costPrice !== undefined && !validMoney(raw.costPrice)) ||
+      (raw.reorderThreshold !== undefined && !validStock(raw.reorderThreshold)))) return res.status(400).json({ error: "Every item needs valid name, SKU, quantity and prices" });
 
   const addedItems: InventoryItem[] = [];
 
   for (const raw of items) {
-    if (!raw.name || !raw.sku) continue;
     const item: InventoryItem = {
       id: "v79_" + Math.random().toString(36).substr(2, 9),
       name: String(raw.name),
       sku: String(raw.sku),
       category: raw.category || "General",
-      quantity: Number(raw.quantity) || 0,
-      price: Number(raw.price) || 0,
-      costPrice: Number(raw.costPrice) || (Number(raw.price) * 0.7) || 0,
-      reorderThreshold: Number(raw.reorderThreshold) || 10,
+      quantity: raw.quantity,
+      price: raw.price,
+      costPrice: raw.costPrice ?? 0,
+      reorderThreshold: raw.reorderThreshold ?? 10,
       tags: Array.isArray(raw.tags) ? raw.tags : [],
       barcode: raw.barcode || "",
       manufacturer: raw.manufacturer || "",
@@ -1181,15 +1328,17 @@ app.put("/api/inventory/:id", (req, res) => {
   if (index === -1) {
     return res.status(404).json({ error: "Item not found" });
   }
+  for (const key of ["quantity", "reorderThreshold"]) if (req.body[key] !== undefined && !validStock(req.body[key])) return res.status(400).json({ error: `Invalid ${key}` });
+  for (const key of ["price", "costPrice"]) if (req.body[key] !== undefined && !validMoney(req.body[key])) return res.status(400).json({ error: `Invalid ${key}` });
 
   store.inventory[index] = {
     ...store.inventory[index],
     ...req.body,
     id,
-    quantity: Number(req.body.quantity) ?? store.inventory[index].quantity,
-    price: Number(req.body.price) ?? store.inventory[index].price,
-    costPrice: Number(req.body.costPrice) ?? store.inventory[index].costPrice,
-    reorderThreshold: Number(req.body.reorderThreshold) ?? store.inventory[index].reorderThreshold,
+    quantity: req.body.quantity ?? store.inventory[index].quantity,
+    price: req.body.price ?? store.inventory[index].price,
+    costPrice: req.body.costPrice ?? store.inventory[index].costPrice,
+    reorderThreshold: req.body.reorderThreshold ?? store.inventory[index].reorderThreshold,
     lastUpdated: new Date().toISOString()
   };
 
@@ -1208,11 +1357,8 @@ app.patch("/api/inventory/:id/stock", (req, res) => {
     return res.status(404).json({ error: "Item not found" });
   }
 
-  if (typeof absolute === "number") {
-    item.quantity = Math.max(0, absolute);
-  } else if (typeof delta === "number") {
-    item.quantity = Math.max(0, item.quantity + delta);
-  }
+  if (absolute !== undefined ? !validStock(absolute) : !Number.isSafeInteger(delta) || !validStock(item.quantity + delta)) return res.status(400).json({ error: "Invalid stock adjustment" });
+  item.quantity = absolute !== undefined ? absolute : item.quantity + delta;
 
   item.lastUpdated = new Date().toISOString();
   saveStore(store);
@@ -1239,20 +1385,26 @@ app.post("/api/pos/checkout", (req, res) => {
     return res.status(400).json({ error: "Cart cannot be empty" });
   }
 
-  // Deduct inventory stock
-  for (const cartItem of cart) {
-    const invItem = store.inventory.find((i) => i.id === cartItem.item.id);
-    if (invItem) {
-      invItem.quantity = Math.max(0, invItem.quantity - cartItem.quantity);
-      invItem.lastUpdated = new Date().toISOString();
-    }
+  const quantities = new Map<string, number>();
+  for (const row of cart) {
+    const id = row?.item?.id;
+    if (typeof id !== "string" || !Number.isSafeInteger(row.quantity) || row.quantity <= 0) return res.status(400).json({ error: "Invalid cart quantity" });
+    quantities.set(id, (quantities.get(id) || 0) + row.quantity);
   }
-
-  // Calculate pricing
-  const subtotal = cart.reduce((sum: number, c: any) => sum + (c.item.price * c.quantity), 0);
+  const verified = [...quantities].map(([id, quantity]) => ({ item: store.inventory.find(item => item.id === id), quantity }));
+  if (verified.some(row => !row.item || !Number.isFinite(row.item.price) || row.item.price < 0)) return res.status(400).json({ error: "Unknown or invalid catalogue item" });
+  if (verified.some(row => row.quantity > row.item!.quantity)) return res.status(409).json({ error: "Insufficient stock" });
+  const subtotalCents = verified.reduce((sum, row) => sum + Math.round(row.item!.price * 100) * row.quantity, 0);
+  if (!Number.isSafeInteger(subtotalCents)) return res.status(400).json({ error: "Cart total is too large" });
+  const subtotal = subtotalCents / 100;
   const taxRate = store.settings.enableTax ? (store.settings.taxRate / 100) : 0;
-  const tax = Number((subtotal * taxRate).toFixed(2));
-  const total = Number((subtotal + tax).toFixed(2));
+  const tax = Math.round(subtotalCents * taxRate) / 100;
+  const total = (subtotalCents + Math.round(subtotalCents * taxRate)) / 100;
+
+  for (const row of verified) {
+    row.item!.quantity -= row.quantity;
+    row.item!.lastUpdated = new Date().toISOString();
+  }
 
   const newTransaction: Transaction = {
     id: "txn_" + Date.now() + "_" + Math.random().toString(36).substr(2, 4),
@@ -1261,16 +1413,16 @@ app.post("/api/pos/checkout", (req, res) => {
     customerName: customerName ? customerName.trim() : "Walk-in Customer",
     customerContact: customerContact ? customerContact.trim() : "",
     paymentMethod: paymentMethod || "Cash",
-    items: cart.map((c: any) => ({
+    items: verified.map(({ item, quantity }) => ({
       item: {
-        id: c.item.id,
-        name: c.item.name,
-        sku: c.item.sku,
-        category: c.item.category,
-        price: c.item.price
+        id: item!.id,
+        name: item!.name,
+        sku: item!.sku,
+        category: item!.category,
+        price: item!.price
       },
-      quantity: c.quantity,
-      unitPrice: c.item.price
+      quantity,
+      unitPrice: item!.price
     })),
     subtotal,
     tax,
@@ -1281,11 +1433,6 @@ app.post("/api/pos/checkout", (req, res) => {
   };
 
   store.transactions.unshift(newTransaction);
-  // Keep last 500 transactions
-  if (store.transactions.length > 500) {
-    store.transactions = store.transactions.slice(0, 500);
-  }
-
   saveStore(store);
 
   broadcast({ type: "INVENTORY_UPDATED", payload: store.inventory });
@@ -1303,7 +1450,9 @@ app.get("/api/transactions", (req, res) => {
 // ==========================================
 
 app.get("/api/settings", (req, res) => {
-  res.json(store.settings);
+  const settings = { ...store.settings };
+  if ((req as any).user.role !== "admin") delete settings.posApiKey;
+  res.json(settings);
 });
 
 app.put("/api/settings", (req, res) => {
@@ -1313,9 +1462,10 @@ app.put("/api/settings", (req, res) => {
 });
 
 app.post("/api/settings/reset", (req, res) => {
+  if (process.env.NODE_ENV === "production") return res.status(403).json({ error: "Reset is unavailable in production" });
   store = {
     inventory: defaultInventory,
-    users: defaultUsers,
+    users: store.users,
     transactions: defaultTransactions,
     settings: defaultSettings,
     ecosystemApps: defaultEcosystemApps,
@@ -1330,7 +1480,7 @@ app.post("/api/settings/reset", (req, res) => {
   broadcast({ type: "TIQUET_TICKETS_UPDATED", tickets: store.tickets });
   broadcast({ type: "FFPRO_RECORDS_UPDATED", records: store.ffproRecords });
   broadcast({ type: "MARKETING_CAMPAIGNS_UPDATED", campaigns: store.marketingCampaigns });
-  res.json({ success: true, message: "Reset to default database state" });
+  res.json({ success: true, message: "Sample business data reset; user accounts were preserved" });
 });
 
 // ==========================================
@@ -1645,7 +1795,8 @@ app.post("/api/ecosystem/ffpro/sync-pos", (req, res) => {
   const todayTxns = store.transactions.filter((t) => t.date.startsWith(today));
   const todayTotal = todayTxns.reduce((sum, t) => sum + (t.status === "completed" ? t.total : 0), 0);
 
-  const syncAmount = req.body.amount || todayTotal || 450.00;
+  const syncAmount = todayTotal;
+  if (!todayTxns.length) return res.status(409).json({ error: "No completed POS transactions to reconcile" });
   const newRecord: FFPROSyncRecord = {
     id: "ffp-" + Date.now(),
     date: new Date().toISOString(),
@@ -1716,7 +1867,7 @@ async function startServer() {
     });
   }
 
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT || 3040);
   server.listen(PORT, "0.0.0.0", () => {
     console.log(`V79 Client Hub Server running on http://0.0.0.0:${PORT}`);
   });

@@ -1,5 +1,5 @@
 import { useState, FormEvent } from "react";
-import { Lock, User as UserIcon, ShieldCheck, AlertCircle, Eye, EyeOff, Sparkles } from "lucide-react";
+import { Lock, User as UserIcon, ShieldCheck, AlertCircle, Eye, EyeOff } from "lucide-react";
 import { motion } from "motion/react";
 import { User } from "../types";
 
@@ -8,8 +8,8 @@ interface LoginProps {
 }
 
 export function Login({ onLoginSuccess }: LoginProps) {
-  const [username, setUsername] = useState("admin");
-  const [password, setPassword] = useState("password123");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -37,18 +37,12 @@ export function Login({ onLoginSuccess }: LoginProps) {
         throw new Error(data.error || "Authentication failed");
       }
 
-      onLoginSuccess(data.user, data.token);
+      onLoginSuccess(data.user, "cookie");
     } catch (err: any) {
       setError(err.message || "Failed to log in. Please check credentials.");
     } finally {
       setIsLoading(false);
     }
-  };
-
-  const handleQuickFill = (user: string, pass: string) => {
-    setUsername(user);
-    setPassword(pass);
-    setError("");
   };
 
   return (
@@ -156,48 +150,6 @@ export function Login({ onLoginSuccess }: LoginProps) {
               )}
             </button>
           </form>
-
-          {/* Quick-Fill Presets for Seamless Testing & Evaluation */}
-          <div className="mt-6 pt-6 border-t border-slate-800/80">
-            <div className="flex items-center gap-1.5 mb-2.5 text-slate-400 text-[11px] font-medium uppercase tracking-wider">
-              <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
-              <span>Quick Login Profiles:</span>
-            </div>
-            <div className="grid grid-cols-2 gap-2 text-xs">
-              <button
-                type="button"
-                onClick={() => handleQuickFill("admin", "password123")}
-                className="px-3 py-2 rounded-lg bg-slate-800/70 hover:bg-indigo-950/60 border border-slate-700/60 hover:border-indigo-500/40 text-left transition-colors text-slate-300 hover:text-white"
-              >
-                <div className="font-semibold text-indigo-400">Admin</div>
-                <div className="text-[10px] text-slate-500 font-mono">admin / password123</div>
-              </button>
-              <button
-                type="button"
-                onClick={() => handleQuickFill("manager", "manager123")}
-                className="px-3 py-2 rounded-lg bg-slate-800/70 hover:bg-indigo-950/60 border border-slate-700/60 hover:border-indigo-500/40 text-left transition-colors text-slate-300 hover:text-white"
-              >
-                <div className="font-semibold text-sky-400">Manager</div>
-                <div className="text-[10px] text-slate-500 font-mono">manager / manager123</div>
-              </button>
-              <button
-                type="button"
-                onClick={() => handleQuickFill("staff", "viewer123")}
-                className="px-3 py-2 rounded-lg bg-slate-800/70 hover:bg-indigo-950/60 border border-slate-700/60 hover:border-indigo-500/40 text-left transition-colors text-slate-300 hover:text-white"
-              >
-                <div className="font-semibold text-emerald-400">Cashier</div>
-                <div className="text-[10px] text-slate-500 font-mono">staff / viewer123</div>
-              </button>
-              <button
-                type="button"
-                onClick={() => handleQuickFill("viewer", "viewer123")}
-                className="px-3 py-2 rounded-lg bg-slate-800/70 hover:bg-indigo-950/60 border border-slate-700/60 hover:border-indigo-500/40 text-left transition-colors text-slate-300 hover:text-white"
-              >
-                <div className="font-semibold text-amber-400">Auditor</div>
-                <div className="text-[10px] text-slate-500 font-mono">viewer / viewer123</div>
-              </button>
-            </div>
-          </div>
         </div>
       </motion.div>
     </div>

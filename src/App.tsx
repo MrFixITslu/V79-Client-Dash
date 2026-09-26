@@ -37,9 +37,7 @@ import { getInventoryForecast } from "./services/aiService";
 import { CheckCircle2, AlertCircle, RotateCw } from "lucide-react";
 
 export default function App() {
-  const [authToken, setAuthToken] = useState<string | null>(() => {
-    return localStorage.getItem("v79_auth_token");
-  });
+  const [authToken, setAuthToken] = useState<string | null>(null);
 
   const [user, setUser] = useState<User | null>(null);
   const [isVerifyingSession, setIsVerifyingSession] = useState(true);
@@ -77,24 +75,14 @@ export default function App() {
   // --- Verify Active Auth Session on Load ---
   useEffect(() => {
     const verifySession = async () => {
-      if (!authToken) {
-        setIsVerifyingSession(false);
-        return;
-      }
-
       try {
-        const res = await fetch("/api/auth/me", {
-          headers: {
-            Authorization: `Bearer ${authToken}`,
-          },
-        });
+        const res = await fetch("/api/auth/me");
 
         if (res.ok) {
           const data = await res.json();
           setUser(data.user);
         } else {
           // Token expired or invalid
-          localStorage.removeItem("v79_auth_token");
           setAuthToken(null);
           setUser(null);
         }
@@ -195,26 +183,21 @@ export default function App() {
 
   // --- Authentication Handlers ---
   const handleLoginSuccess = (authenticatedUser: User, token: string) => {
-    localStorage.setItem("v79_auth_token", token);
-    setAuthToken(token);
+    setAuthToken("cookie");
     setUser(authenticatedUser);
     setCurrentView("dashboard");
     showToast(`Welcome back, ${authenticatedUser.fullName || authenticatedUser.username}!`);
   };
 
   const handleLogout = async () => {
-    if (authToken) {
+    if (user) {
       try {
-        await fetch("/api/auth/logout", {
-          method: "POST",
-          headers: { Authorization: `Bearer ${authToken}` },
-        });
+        await fetch("/api/auth/logout", { method: "POST" });
       } catch (e) {
         // Ignore logout network errors
       }
     }
 
-    localStorage.removeItem("v79_auth_token");
     setAuthToken(null);
     setUser(null);
     setCurrentView("dashboard");

@@ -44,7 +44,7 @@ export function HubOverview({
   );
 
   const getLaunchUrl = (app: EcosystemApp | undefined, fallback: string) => {
-    return app?.appUrl || fallback;
+    return app?.id === "app-v79pos" || fallback === "https://pos.v79sl.com" ? "/api/apps/pos/launch" : app?.appUrl || fallback;
   };
 
   return (

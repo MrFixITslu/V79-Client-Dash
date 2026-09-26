@@ -49,29 +49,7 @@ export function WorkspaceTeam({
     role: "staff" as UserRole,
   });
 
-  const teamList = users.length > 0 ? users : [
-    {
-      id: "u-1",
-      username: currentUser?.username || "Vision79SLU",
-      fullName: currentUser?.fullName || "Vision 79 Administrator",
-      role: (currentUser?.role || "admin") as UserRole,
-      createdAt: "2026-01-15T00:00:00.000Z",
-    },
-    {
-      id: "u-2",
-      username: "tech_lead",
-      fullName: "Field Technician Manager",
-      role: "manager" as UserRole,
-      createdAt: "2026-02-10T00:00:00.000Z",
-    },
-    {
-      id: "u-3",
-      username: "pos_cashier",
-      fullName: "Retail Checkout Operator",
-      role: "staff" as UserRole,
-      createdAt: "2026-03-01T00:00:00.000Z",
-    },
-  ];
+  const teamList = users;
 
   const filteredTeam = teamList.filter(
     (m) =>
@@ -194,13 +172,13 @@ export function WorkspaceTeam({
           >
             <span>← Back to Hub</span>
           </button>
-          <button
+          {currentUser?.role === "admin" && <button
             onClick={handleOpenAdd}
             className="inline-flex items-center gap-2 px-3.5 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-semibold shadow-sm transition-all cursor-pointer"
           >
             <UserPlus className="w-4 h-4 text-cyan-400" />
             <span>Add Team Member</span>
-          </button>
+          </button>}
         </div>
       </div>
 
