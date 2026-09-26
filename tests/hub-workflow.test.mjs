@@ -3,11 +3,13 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { execFileSync } from 'node:child_process';
 import { createServer } from 'node:net';
+import { createServer as createHttpServer } from 'node:http';
+import { createPublicKey, verify as verifySignature } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { signPlatformRequest } from '../server/platform-contract.mjs';
+import { signPlatformRequest, verifyPlatformRequest } from '../server/platform-contract.mjs';
 
 const project = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const secret = 'hub-workflow-test-secret-must-be-long-enough';
@@ -24,6 +26,22 @@ test('owner onboarding, team permissions, single-use launches and account isolat
   const dataDir = await mkdtemp(path.join(os.tmpdir(), 'v79-hub-workflow-'));
   const port = await freePort();
   const origin = `http://127.0.0.1:${port}`;
+  let provisionedId = '';
+  const posServer = createHttpServer(async (req,res) => {
+    const chunks=[];
+    for await (const chunk of req) chunks.push(chunk);
+    const body=Buffer.concat(chunks).toString();
+    const pathname=new URL(req.url,'http://localhost').pathname;
+    const valid=req.headers['x-v79-service-id']==='v79-hub' && verifyPlatformRequest({method:req.method,pathname,timestamp:req.headers['x-v79-timestamp'],body,secret,signature:req.headers['x-v79-signature']});
+    res.setHeader('content-type','application/json');
+    if(!valid) { res.statusCode=401; return res.end('{}'); }
+    if(pathname==='/api/platform/provision') { provisionedId=JSON.parse(body).organization.id; return res.end(JSON.stringify({provisioned:true})); }
+    if(pathname.startsWith('/api/platform/summary/') && provisionedId) return res.end(JSON.stringify({metrics:{products:0,locations:1,sales:0}}));
+    res.statusCode=404; res.end('{}');
+  });
+  await new Promise(resolve=>posServer.listen(0,'127.0.0.1',resolve));
+  t.after(()=>new Promise(resolve=>posServer.close(resolve)));
+  const posOrigin=`http://127.0.0.1:${posServer.address().port}`;
   const child = spawn(process.execPath, ['--import', 'tsx', 'server.ts'], {
     cwd: project,
     env: {
@@ -35,6 +53,7 @@ test('owner onboarding, team permissions, single-use launches and account isolat
       V79_BILLING_PROVIDER: 'disabled', V79_MAIL_PROVIDER: 'disabled', V79_SELF_SERVICE_SIGNUP: '0',
       V79_ACCESS_MODE: 'beta',
       FFPRO_BASE_URL: '', TIQUET_BASE_URL: '', MARKETING_BASE_URL: '', ACADEMY_BASE_URL: '',
+      POS_BASE_URL: posOrigin,
     },
     stdio: ['ignore', 'ignore', 'pipe'],
   });
@@ -81,12 +100,23 @@ test('owner onboarding, team permissions, single-use launches and account isolat
   assert.equal(ownerDash.seats.limit, 10);
   assert.equal((await request('/api/billing/checkout', { cookie: ownerCookie, method: 'POST', body: { plan: 'business', billingCycle: 'monthly' } })).status, 409);
   assert.equal(ownerDash.products.pos.openUrl, '');
+  const jwks=await (await request('/.well-known/jwks.json')).json();
+  assert.equal(jwks.keys[0].alg,'EdDSA');
+  const posTokenResponse=await request('/api/apps/pos/token',{cookie:ownerCookie,method:'POST'});
+  assert.equal(posTokenResponse.status,200);
+  const posToken=(await posTokenResponse.json()).token;
+  const [header,claims,signature]=posToken.split('.');
+  const parsed=JSON.parse(Buffer.from(claims,'base64url'));
+  assert.equal(parsed.tenant_id,provisionedId);
+  assert.equal(parsed.aud,'v79-commerce');
+  assert.equal(verifySignature(null,Buffer.from(`${header}.${claims}`),createPublicKey({key:jwks.keys[0],format:'jwk'}),Buffer.from(signature,'base64url')),true);
   const betaJoin = await request('/api/pos/beta/join', { cookie: ownerCookie, method: 'POST' });
   assert.equal(betaJoin.status, 200);
   assert.equal((await betaJoin.json()).access.status, 'beta');
   assert.equal((await request('/api/pos/beta/join', { cookie: ownerCookie, method: 'POST' })).status, 200);
   const posDashboard = await (await request('/api/platform/dashboard', { cookie: ownerCookie })).json();
   assert.equal(posDashboard.products.pos.entitled, true);
+  assert.equal(posDashboard.products.pos.status,'connected');
   assert.equal(posDashboard.products.pos.accessStatus, 'beta');
   assert.equal(posDashboard.products.pos.launchReady, false);
   assert.equal(posDashboard.products.pos.openUrl, '');
@@ -105,6 +135,7 @@ test('owner onboarding, team permissions, single-use launches and account isolat
   assert.equal((await request('/api/billing', { cookie: memberCookie })).status, 403);
   assert.equal((await request('/api/team', { cookie: memberCookie })).status, 403);
   assert.equal((await request('/api/pos/beta/join', { cookie: memberCookie, method: 'POST' })).status, 403);
+  assert.equal((await request('/api/apps/pos/token', { cookie: memberCookie, method: 'POST' })).status, 403);
   assert.equal((await request('/api/apps/ffpro/launch', { cookie: memberCookie, redirect: 'manual' })).status, 403);
   const launch = await request('/api/apps/tiquet/launch', { cookie: memberCookie, redirect: 'manual' });
   assert.equal(launch.status, 302);

@@ -21,6 +21,25 @@ const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 process.umask(0o077);
 fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
 
+// Persist this key with Hub data so POS tokens remain verifiable after a restart.
+const posSigningKeyPath=path.join(DATA_DIR,"pos-signing-ed25519.pem");
+if(!fs.existsSync(posSigningKeyPath)) {
+  const pair=crypto.generateKeyPairSync("ed25519");
+  try { fs.writeFileSync(posSigningKeyPath,pair.privateKey.export({format:"pem",type:"pkcs8"}),{mode:0o600,flag:"wx"}); }
+  catch(error:any) { if(error?.code!=="EEXIST") throw error; }
+}
+const posSigningKey=crypto.createPrivateKey(fs.readFileSync(posSigningKeyPath));
+const posPublicKey=crypto.createPublicKey(posSigningKey);
+const posKeyId=crypto.createHash("sha256").update(posPublicKey.export({format:"der",type:"spki"})).digest("hex").slice(0,20);
+function posJwt(userId:string,organizationId:string) {
+  const now=Math.floor(Date.now()/1000);
+  const header=Buffer.from(JSON.stringify({alg:"EdDSA",typ:"JWT",kid:posKeyId})).toString("base64url");
+  const issuer=new URL(clean(process.env.APP_URL)||"https://hub.v79sl.com").origin;
+  const claims=Buffer.from(JSON.stringify({iss:issuer,aud:"v79-commerce",sub:userId,tenant_id:organizationId,iat:now,nbf:now,exp:now+300})).toString("base64url");
+  const message=`${header}.${claims}`;
+  return `${message}.${crypto.sign(null,Buffer.from(message),posSigningKey).toString("base64url")}`;
+}
+
 const app = express();
 app.disable("x-powered-by");
 if (process.env.TRUST_PROXY === "1") app.set("trust proxy", 1);
@@ -938,7 +957,7 @@ const productConfig = {
   },
   pos: {
     name:"V79 POS",
-    url:"",
+    url:clean(process.env.POS_BASE_URL),
     openUrl:"",
     publicUrl:"",
   },
@@ -982,8 +1001,8 @@ async function fetchSummary(product: Product, externalSubjectId: string) {
       signal:AbortSignal.timeout(5000),
     });
     const body=await response.json().catch(()=>({}));
-    if(["ffpro","tiquet","marketing"].includes(product) && response.status===404) {
-      return {status:"ready",error:`Open ${productConfig[product].name} to initialise this organisation's workspace.`};
+    if(["ffpro","tiquet","marketing","pos"].includes(product) && response.status===404) {
+      return {status:"ready",error:product==="pos" ? "POS service is reachable. The owner can initialise this workspace through the beta API while its browser interface is being built." : `Open ${productConfig[product].name} to initialise this organisation's workspace.`};
     }
     if(!response.ok) {
       if(response.status===429 || response.status>=500) {
@@ -1103,6 +1122,10 @@ app.post("/api/platform/events", (req: any, res) => {
   res.status(202).json({ accepted: true, duplicate: false, eventId: event.id });
 });
 
+app.get("/.well-known/jwks.json", (_req,res)=>{
+  res.setHeader("Cache-Control","public, max-age=300");
+  res.json({keys:[{...posPublicKey.export({format:"jwk"}),kid:posKeyId,alg:"EdDSA",use:"sig"}]});
+});
 app.get("/api/health", (_req,res)=>{
   try {
     db.prepare("SELECT 1").get();
@@ -2024,10 +2047,29 @@ app.post("/api/pos/beta/join", requireAuth, requireOwner, (req,res)=>{
   const row=db.prepare("SELECT status,enrolled_at AS enrolledAt FROM pos_access WHERE organization_id=?").get(m.organizationId);
   res.json({access:row,mode:ACCESS_MODE,launchReady:false});
 });
+app.post("/api/apps/pos/token",requireAuth,requireOwner,async (req,res)=>{
+  const m=(req as any).hubMembership,user=(req as any).hubUser;
+  if(!productEntitled(m.organizationId,"pos")) return res.status(403).json({error:"POS access is not active."});
+  const serviceUrl=clean(process.env.POS_BASE_URL),secret=clean(process.env.V79_PLATFORM_SHARED_SECRET);
+  if(!serviceUrl || secret.length<32) return res.status(503).json({error:"POS integration is not configured."});
+  const pathname="/api/platform/provision";
+  const body=JSON.stringify({organization:{id:m.organizationId,name:m.organizationName,slug:m.slug},user:{id:user.id},role:"owner"});
+  const timestamp=String(Date.now());
+  try {
+    const response=await fetch(new URL(pathname,serviceUrl),{
+      method:"POST",headers:{"content-type":"application/json","x-v79-service-id":"v79-hub","x-v79-timestamp":timestamp,"x-v79-signature":signPlatformRequest({method:"POST",pathname,timestamp,body,secret})},
+      body,signal:AbortSignal.timeout(5000),
+    });
+    if(!response.ok) return res.status(502).json({error:"POS workspace provisioning failed.",upstreamStatus:response.status});
+    recordAudit(req,"pos.token_issued",{organizationId:m.organizationId,actorUserId:user.id,targetType:"product",targetId:"pos"});
+    return res.json({token:posJwt(user.id,m.organizationId),tokenType:"Bearer",expiresIn:300,tenantId:m.organizationId,apiUrl:clean(process.env.POS_PUBLIC_URL)||null});
+  } catch { return res.status(503).json({error:"POS service is unavailable."}); }
+});
 app.get("/api/pos/access", requireAuth, (req,res)=>{
   const m=(req as any).hubMembership;
+  const entitled=productEntitled(m.organizationId,"pos");
   const row=db.prepare("SELECT status,enrolled_at AS enrolledAt FROM pos_access WHERE organization_id=?").get(m.organizationId) as any;
-  res.json({access:row || null,mode:ACCESS_MODE,betaSignupOpen:POS_BETA_SIGNUP,entitled:productEntitled(m.organizationId,"pos"),launchReady:false});
+  res.json({access:row || null,mode:ACCESS_MODE,betaSignupOpen:POS_BETA_SIGNUP,entitled,launchReady:false});
 });
 app.put("/api/integrations/:product", requireAuth, requireAdmin, (req,res)=>{
   const product=req.params.product as Product;
@@ -2046,15 +2088,12 @@ app.get("/api/platform/dashboard", requireAuth, async (req,res)=>{
   const products:any={};
   const dashboardUser=(req as any).hubUser;
   await Promise.all((Object.keys(productConfig) as Product[]).map(async product=>{
-    const subject=product === "academy" ? dashboardUser.email : integrations[product];
+    const subject=product === "academy" ? dashboardUser.email : product === "pos" ? m.organizationId : integrations[product];
     const accessible=memberCanAccessProduct(dashboardUser.id,m.organizationId,m.role,product);
     products[product]=product === "pos"
-      ? {status:productEntitled(m.organizationId,"pos") ? "ready" : "unlinked",
-         error:ACCESS_MODE === "production"
-           ? "Paid POS access is managed separately. Contact V79 Digital about conversion."
-           : productEntitled(m.organizationId,"pos")
-             ? "Beta place reserved. The browser app is being prepared for testing."
-             : POS_BETA_SIGNUP ? "Free beta registration is open for organisation owners." : "Beta registration is closed."}
+      ? productEntitled(m.organizationId,"pos")
+        ? await fetchSummary(product,m.organizationId)
+        : {status:"unlinked",error:"POS access is not active for this organisation."}
       : accessible
       ? (subject ? await fetchSummary(product,subject) : {status:"unlinked"})
       : {status:"restricted",error:"This app has not been assigned to your Hub account."};
