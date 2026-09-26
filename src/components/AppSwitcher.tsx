@@ -62,7 +62,7 @@ export function AppSwitcher({
   };
 
   const getLaunchUrl = (app: EcosystemApp) => {
-    return app.appUrl;
+    return app.id === "app-v79pos" ? "/api/apps/pos/launch" : app.appUrl;
   };
 
   return (
@@ -136,7 +136,7 @@ export function AppSwitcher({
           <div className="pt-2.5 border-t border-slate-800 flex items-center justify-between text-[11px] px-1">
             <span className="text-slate-400 flex items-center gap-1">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-              <span>SSO Direct Navigation</span>
+              <span>Open external apps</span>
             </span>
 
             <button

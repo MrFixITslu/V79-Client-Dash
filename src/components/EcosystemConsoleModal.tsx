@@ -186,7 +186,7 @@ export function EcosystemConsoleModal({
   };
 
   const launchWithSSO = () => {
-    const ssoUrl = authToken ? `${app.appUrl}?sso_token=${authToken}` : app.appUrl;
+    const ssoUrl = app.id === "app-v79pos" ? "/api/apps/pos/launch" : app.appUrl;
     window.open(ssoUrl, "_blank");
   };
 
@@ -210,7 +210,7 @@ export function EcosystemConsoleModal({
               <div className="flex items-center gap-2">
                 <h2 className="text-lg font-bold text-white">{app.name}</h2>
                 <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                  Live In-Hub Console
+                  Hub Records
                 </span>
                 {app.version && (
                   <span className="text-[10px] font-mono text-slate-400 bg-slate-800 px-2 py-0.5 rounded border border-slate-700">

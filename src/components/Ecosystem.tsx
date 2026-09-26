@@ -20,11 +20,8 @@ import {
   ExternalLink,
   Search,
   Plus,
-  KeyRound,
   CheckCircle2,
-  Copy,
   Settings2,
-  ShieldCheck,
   Sparkles,
   GitBranch,
   X,
@@ -74,7 +71,6 @@ export function Ecosystem({
 
   // Modals
   const [activeConsoleApp, setActiveConsoleApp] = useState<EcosystemApp | null>(null);
-  const [showSSOModal, setShowSSOModal] = useState(false);
   const [showConfigModal, setShowConfigModal] = useState<EcosystemApp | null>(null);
   const [showRegisterModal, setShowRegisterModal] = useState(false);
 
@@ -164,15 +160,6 @@ export function Ecosystem({
     }
   };
 
-  const handleCopySSOToken = () => {
-    if (authToken) {
-      navigator.clipboard.writeText(authToken);
-      showToast("V79 SSO Token copied to clipboard!");
-    } else {
-      showToast("No active session token available", "error");
-    }
-  };
-
   const renderAppIcon = (iconName: string) => {
     switch (iconName) {
       case "Wallet":
@@ -221,19 +208,11 @@ export function Ecosystem({
               <strong className="text-sky-400">Tiquet (Service Desk & RMA)</strong>,{" "}
               <strong className="text-pink-400">Marketing Hub</strong>, and{" "}
               <strong className="text-emerald-400">V79 POS</strong> with real-time cross-app
-              reconciliation and shared SSO credentials.
+              reconciliation and a signed POS launch. Other apps need their own configured sign-in.
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-3 shrink-0">
-            <button
-              onClick={() => setShowSSOModal(true)}
-              className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold bg-slate-800 hover:bg-slate-700 text-indigo-300 border border-indigo-500/30 shadow-md transition-all"
-            >
-              <KeyRound className="w-4 h-4 text-indigo-400" />
-              <span>V79 SSO Token</span>
-            </button>
-
             {currentUser.role === "admin" && (
               <button
                 onClick={() => setShowRegisterModal(true)}
@@ -357,7 +336,7 @@ export function Ecosystem({
                 {/* Launch External */}
                 <a
                   href={
-                    authToken ? `${app.appUrl}?sso_token=${authToken}` : app.appUrl
+                    app.id === "app-v79pos" ? "/api/apps/pos/launch" : app.appUrl
                   }
                   target="_blank"
                   rel="noreferrer"
@@ -373,7 +352,7 @@ export function Ecosystem({
                   className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold bg-slate-900 hover:bg-slate-800 text-white shadow-sm transition-all"
                 >
                   <Server className="w-3.5 h-3.5 text-indigo-400" />
-                  <span>In-Hub Console</span>
+                  <span>Hub Records</span>
                 </button>
               </div>
 
@@ -407,80 +386,6 @@ export function Ecosystem({
           </div>
         ))}
       </div>
-
-      {/* ========================================================= */}
-      {/* SSO TOKEN MODAL */}
-      {/* ========================================================= */}
-      {showSSOModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in">
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 w-full max-w-xl shadow-2xl text-slate-100">
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-indigo-500/20 text-indigo-400 flex items-center justify-center border border-indigo-500/30">
-                  <ShieldCheck className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="text-base font-bold text-white">V79 Unified SSO Credentials</h3>
-                  <p className="text-xs text-slate-400">Single Sign-On bridge across all apps</p>
-                </div>
-              </div>
-              <button
-                onClick={() => setShowSSOModal(false)}
-                className="text-slate-400 hover:text-white"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="space-y-4">
-              <p className="text-xs text-slate-300 leading-relaxed">
-                All apps in the Vision 79 ecosystem (<strong>FFPRO</strong>, <strong>Tiquet</strong>,{" "}
-                <strong>Marketing</strong>, etc.) authenticate seamlessly with your current user session.
-                You can copy your active Bearer token below or use the automated launch buttons which
-                pass <code className="text-indigo-300">?sso_token=...</code> to external clients.
-              </p>
-
-              <div>
-                <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">
-                  Active Bearer Session Token
-                </label>
-                <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between gap-3">
-                  <code className="text-xs font-mono text-indigo-300 truncate">
-                    {authToken || "No active session"}
-                  </code>
-                  <button
-                    onClick={handleCopySSOToken}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shrink-0"
-                  >
-                    <Copy className="w-3.5 h-3.5" />
-                    <span>Copy Token</span>
-                  </button>
-                </div>
-              </div>
-
-              <div className="p-4 rounded-2xl bg-indigo-950/40 border border-indigo-800/60 space-y-1.5">
-                <h4 className="text-xs font-bold text-indigo-300">API Session Verification Endpoint</h4>
-                <p className="text-xs text-slate-300 font-mono">
-                  GET /api/auth/me <br />
-                  Authorization: Bearer {authToken ? authToken.slice(0, 16) + "..." : "..."}
-                </p>
-                <p className="text-[11px] text-slate-400 pt-1">
-                  Returns user ID, name, role ({currentUser.role}), and authorized permissions.
-                </p>
-              </div>
-
-              <div className="flex justify-end pt-2">
-                <button
-                  onClick={() => setShowSSOModal(false)}
-                  className="px-5 py-2.5 rounded-xl text-xs font-bold bg-slate-800 hover:bg-slate-700 text-white"
-                >
-                  Close
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* ========================================================= */}
       {/* CONFIGURE APP URL MODAL */}

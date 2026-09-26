@@ -3,10 +3,32 @@ services:
     build: .
     container_name: v79-hub
     restart: unless-stopped
-    ports:
-      - "3000:3000"
+    env_file: .env
     environment:
-      - PORT=3000
-      - NODE_ENV=production
+      NODE_ENV: production
+      PORT: 3040
+      APP_URL: ${APP_URL:-https://hub.v79sl.com}
+      DATA_DIR: /app/data
+      V79_HUB_ADMIN_USERNAME: ${V79_HUB_ADMIN_USERNAME:-admin}
+      V79_HUB_ADMIN_PASSWORD: ${V79_HUB_ADMIN_PASSWORD:?Set a unique 16+ character admin password}
+      V79_PLATFORM_SHARED_SECRET: ${V79_PLATFORM_SHARED_SECRET:?Set the same 32+ character secret as POS}
+      POS_BASE_URL: ${POS_BASE_URL:-http://v79-commerce-api:8080}
+      POS_PUBLIC_URL: ${POS_PUBLIC_URL:-https://pos.v79sl.com}
+      V79_POS_ORG_ID: ${V79_POS_ORG_ID:-}
+      V79_POS_OWNER_USER_ID: ${V79_POS_OWNER_USER_ID:-}
+    expose:
+      - "3040"
     volumes:
       - ./data:/app/data
+    networks:
+      - proxy_network
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3040/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+networks:
+  proxy_network:
+    external: true

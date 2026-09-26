@@ -9,12 +9,13 @@
     "start": "node server.ts",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test": "node --test tests/hub-security.test.mjs"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
     "@tailwindcss/vite": "^4.3.3",
-    "@vitejs/plugin-react": "^6.1.1",
+    "@vitejs/plugin-react": "^5.1.4",
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
     "html5-qrcode": "^2.3.8",
@@ -32,7 +33,7 @@
     "@types/react-dom": "^19.3.0",
     "@types/ws": "^8.18.1",
     "autoprefixer": "^10.4.21",
-    "esbuild": "^0.25.0",
+    "esbuild": "^0.28.2",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.21.0",
     "typescript": "^7.0.2"

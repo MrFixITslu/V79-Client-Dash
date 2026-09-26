@@ -120,7 +120,7 @@ export function WorkspaceConnections({ apps, onNavigate, authToken }: WorkspaceC
               </div>
 
               <a
-                href={app.appUrl}
+                href={app.id === "app-v79pos" ? "/api/apps/pos/launch" : app.appUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-1 text-slate-700 hover:text-cyan-700 font-semibold"
