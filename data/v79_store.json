@@ -1,0 +1,813 @@
+{
+  "inventory": [
+    {
+      "id": "v79-1",
+      "name": "UniFi Dream Machine Pro (UDM-Pro)",
+      "sku": "NET-UDM-001",
+      "category": "Networking",
+      "quantity": 14,
+      "price": 499,
+      "costPrice": 380,
+      "lastUpdated": "2026-09-26T01:14:54.485Z",
+      "reorderThreshold": 5,
+      "tags": [
+        "ubiquiti",
+        "routing",
+        "firewall",
+        "rackmount"
+      ],
+      "barcode": "810354918231",
+      "manufacturer": "Ubiquiti Networks",
+      "location": "Rack A-01",
+      "imageUrl": "https://images.unsplash.com/photo-1544197150-b99a580bb7a8?w=500&auto=format&fit=crop&q=80"
+    },
+    {
+      "id": "v79-2",
+      "name": "Cisco Catalyst 24-Port Gigabit PoE+ Switch",
+      "sku": "NET-CS-24P",
+      "category": "Networking",
+      "quantity": 6,
+      "price": 649.99,
+      "costPrice": 480,
+      "lastUpdated": "2026-09-26T01:14:54.485Z",
+      "reorderThreshold": 8,
+      "tags": [
+        "cisco",
+        "switch",
+        "poe",
+        "managed"
+      ],
+      "barcode": "882658129034",
+      "manufacturer": "Cisco Systems",
+      "location": "Rack A-02",
+      "imageUrl": "https://images.unsplash.com/photo-1558494949-ef010cbdcc31?w=500&auto=format&fit=crop&q=80"
+    },
+    {
+      "id": "v79-3",
+      "name": "Star Micronics TSP143III Thermal POS Printer",
+      "sku": "POS-PRN-010",
+      "category": "POS Hardware",
+      "quantity": 18,
+      "price": 245,
+      "costPrice": 175,
+      "lastUpdated": "2026-09-26T01:14:54.485Z",
+      "reorderThreshold": 10,
+      "tags": [
+        "thermal",
+        "receipt",
+        "usb",
+        "pos"
+      ],
+      "barcode": "088047011922",
+      "manufacturer": "Star Micronics",
+      "location": "Shelf B-04",
+      "imageUrl": "https://images.unsplash.com/photo-1612815154858-60aa4c59eaa6?w=500&auto=format&fit=crop&q=80"
+    },
+    {
+      "id": "v79-4",
+      "name": "Zebra DS2208 Handheld 2D Barcode Scanner",
+      "sku": "POS-SCN-220",
+      "category": "POS Hardware",
+      "quantity": 24,
+      "price": 119.5,
+      "costPrice": 78,
+      "lastUpdated": "2026-09-26T01:15:03.586Z",
+      "reorderThreshold": 12,
+      "tags": [
+        "scanner",
+        "2d",
+        "qr",
+        "usb"
+      ],
+      "barcode": "753584820193",
+      "manufacturer": "Zebra Technologies",
+      "location": "Shelf B-02",
+      "imageUrl": "https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?w=500&auto=format&fit=crop&q=80"
+    },
+    {
+      "id": "v79-5",
+      "name": "APC Smart-UPS 1500VA LCD 120V Battery Backup",
+      "sku": "PWR-UPS-1500",
+      "category": "Power & Infrastructure",
+      "quantity": 4,
+      "price": 589,
+      "costPrice": 440,
+      "lastUpdated": "2026-09-26T01:14:54.485Z",
+      "reorderThreshold": 5,
+      "tags": [
+        "apc",
+        "ups",
+        "surge",
+        "battery"
+      ],
+      "barcode": "731304268712",
+      "manufacturer": "Schneider Electric",
+      "location": "Bay C-Floor",
+      "imageUrl": "https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=500&auto=format&fit=crop&q=80"
+    },
+    {
+      "id": "v79-6",
+      "name": "Cat6A Pure Copper Bulk Cable Spool 1000ft (Blue)",
+      "sku": "CAB-C6A-1000",
+      "category": "Cabling & Infrastructure",
+      "quantity": 32,
+      "price": 185,
+      "costPrice": 120,
+      "lastUpdated": "2026-09-26T01:14:54.485Z",
+      "reorderThreshold": 15,
+      "tags": [
+        "cable",
+        "cat6a",
+        "bulk",
+        "networking"
+      ],
+      "barcode": "639725890123",
+      "manufacturer": "TrueCable",
+      "location": "Warehouse D-10",
+      "imageUrl": "https://images.unsplash.com/photo-1544197150-b99a580bb7a8?w=500&auto=format&fit=crop&q=80"
+    },
+    {
+      "id": "v79-7",
+      "name": "Logitech MX Master 3S Wireless Performance Mouse",
+      "sku": "ACC-LOG-MX3S",
+      "category": "Peripherals & Workstations",
+      "quantity": 42,
+      "price": 99.99,
+      "costPrice": 72,
+      "lastUpdated": "2026-09-26T01:14:54.485Z",
+      "reorderThreshold": 10,
+      "tags": [
+        "logitech",
+        "bluetooth",
+        "ergonomic",
+        "mouse"
+      ],
+      "barcode": "097855174543",
+      "manufacturer": "Logitech",
+      "location": "Shelf E-01",
+      "imageUrl": "https://images.unsplash.com/photo-1527864550417-7fd91fc51a46?w=500&auto=format&fit=crop&q=80"
+    },
+    {
+      "id": "v79-8",
+      "name": "Keychron K2 Pro QMK/VIA Wireless Keyboard",
+      "sku": "ACC-KEY-K2P",
+      "category": "Peripherals & Workstations",
+      "quantity": 19,
+      "price": 139,
+      "costPrice": 95,
+      "lastUpdated": "2026-09-26T01:14:54.485Z",
+      "reorderThreshold": 8,
+      "tags": [
+        "keyboard",
+        "mechanical",
+        "wireless",
+        "rgb"
+      ],
+      "barcode": "697241285012",
+      "manufacturer": "Keychron",
+      "location": "Shelf E-03",
+      "imageUrl": "https://images.unsplash.com/photo-1587829741301-dc798b83add3?w=500&auto=format&fit=crop&q=80"
+    },
+    {
+      "id": "v79-9",
+      "name": "Dell UltraSharp 27 4K USB-C Hub Monitor (U2723QE)",
+      "sku": "MON-DEL-27U",
+      "category": "Peripherals & Workstations",
+      "quantity": 7,
+      "price": 620,
+      "costPrice": 470,
+      "lastUpdated": "2026-09-26T01:14:54.485Z",
+      "reorderThreshold": 5,
+      "tags": [
+        "monitor",
+        "4k",
+        "ips",
+        "usbc",
+        "dell"
+      ],
+      "barcode": "884116398210",
+      "manufacturer": "Dell Technologies",
+      "location": "Storage F-02",
+      "imageUrl": "https://images.unsplash.com/photo-1527443224154-c4a3942d3acf?w=500&auto=format&fit=crop&q=80"
+    },
+    {
+      "id": "v79-10",
+      "name": "Heavy-Duty 16-Inch POS Steel Cash Drawer",
+      "sku": "POS-CSH-16B",
+      "category": "POS Hardware",
+      "quantity": 11,
+      "price": 89,
+      "costPrice": 55,
+      "lastUpdated": "2026-09-26T01:14:54.485Z",
+      "reorderThreshold": 6,
+      "tags": [
+        "cash drawer",
+        "steel",
+        "security",
+        "rj12"
+      ],
+      "barcode": "712398450192",
+      "manufacturer": "APG Cash Drawer",
+      "location": "Shelf B-06",
+      "imageUrl": "https://images.unsplash.com/photo-1556742049-0a67c5574f73?w=500&auto=format&fit=crop&q=80"
+    }
+  ],
+  "users": [
+    {
+      "id": "u-1",
+      "username": "admin",
+      "password": "password123",
+      "fullName": "System Administrator",
+      "role": "admin",
+      "permissions": [
+        "dashboard",
+        "inventory",
+        "pos",
+        "invoices",
+        "reports",
+        "settings",
+        "users"
+      ],
+      "lastLogin": "2026-09-26T01:26:21.138Z",
+      "createdAt": "2026-09-26T01:14:54.485Z"
+    },
+    {
+      "id": "u-2",
+      "username": "manager",
+      "password": "manager123",
+      "fullName": "Operations Manager",
+      "role": "manager",
+      "permissions": [
+        "dashboard",
+        "inventory",
+        "pos",
+        "invoices",
+        "reports",
+        "settings"
+      ],
+      "lastLogin": "2026-09-26T01:14:54.485Z",
+      "createdAt": "2026-09-26T01:14:54.485Z"
+    },
+    {
+      "id": "u-3",
+      "username": "staff",
+      "password": "viewer123",
+      "fullName": "Front Desk Cashier",
+      "role": "staff",
+      "permissions": [
+        "dashboard",
+        "inventory",
+        "pos",
+        "invoices",
+        "reports"
+      ],
+      "lastLogin": "2026-09-26T01:14:54.485Z",
+      "createdAt": "2026-09-26T01:14:54.485Z"
+    },
+    {
+      "id": "u-4",
+      "username": "viewer",
+      "password": "viewer123",
+      "fullName": "Guest Auditor",
+      "role": "viewer",
+      "permissions": [
+        "dashboard",
+        "inventory",
+        "reports"
+      ],
+      "lastLogin": "2026-09-26T01:14:54.485Z",
+      "createdAt": "2026-09-26T01:14:54.485Z"
+    }
+  ],
+  "transactions": [
+    {
+      "id": "txn_1790385303586_p5nv",
+      "receiptNumber": "V79-2026-5704",
+      "date": "2026-09-26T01:15:03.586Z",
+      "customerName": "Test Customer",
+      "customerContact": "",
+      "paymentMethod": "Cash",
+      "items": [
+        {
+          "item": {
+            "id": "v79-4",
+            "name": "Zebra DS2208 Handheld 2D Barcode Scanner",
+            "sku": "POS-SCN-220",
+            "category": "POS Hardware",
+            "price": 119.5
+          },
+          "quantity": 1,
+          "unitPrice": 119.5
+        }
+      ],
+      "subtotal": 119.5,
+      "tax": 14.94,
+      "total": 134.44,
+      "cashier": "admin",
+      "notes": "",
+      "status": "completed"
+    },
+    {
+      "id": "txn_1740001",
+      "receiptNumber": "V79-2026-1082",
+      "date": "2026-09-25T23:14:54.485Z",
+      "customerName": "St. Lucia Ministry of Infrastructure",
+      "customerContact": "ict@govt.lc",
+      "paymentMethod": "Bank Transfer",
+      "items": [
+        {
+          "item": {
+            "id": "v79-1",
+            "name": "UniFi Dream Machine Pro (UDM-Pro)",
+            "sku": "NET-UDM-001",
+            "category": "Networking",
+            "price": 499
+          },
+          "quantity": 2,
+          "unitPrice": 499
+        },
+        {
+          "item": {
+            "id": "v79-6",
+            "name": "Cat6A Pure Copper Bulk Cable Spool 1000ft (Blue)",
+            "sku": "CAB-C6A-1000",
+            "category": "Cabling & Infrastructure",
+            "price": 185
+          },
+          "quantity": 3,
+          "unitPrice": 185
+        }
+      ],
+      "subtotal": 1553,
+      "tax": 194.13,
+      "total": 1747.13,
+      "cashier": "admin",
+      "notes": "Site office networking project deployment",
+      "status": "completed"
+    },
+    {
+      "id": "txn_1740002",
+      "receiptNumber": "V79-2026-1083",
+      "date": "2026-09-25T20:14:54.485Z",
+      "customerName": "Baywalk Retail Point",
+      "customerContact": "accounts@baywalkslu.com",
+      "paymentMethod": "Credit Card",
+      "items": [
+        {
+          "item": {
+            "id": "v79-3",
+            "name": "Star Micronics TSP143III Thermal POS Printer",
+            "sku": "POS-PRN-010",
+            "category": "POS Hardware",
+            "price": 245
+          },
+          "quantity": 1,
+          "unitPrice": 245
+        },
+        {
+          "item": {
+            "id": "v79-4",
+            "name": "Zebra DS2208 Handheld 2D Barcode Scanner",
+            "sku": "POS-SCN-220",
+            "category": "POS Hardware",
+            "price": 119.5
+          },
+          "quantity": 1,
+          "unitPrice": 119.5
+        }
+      ],
+      "subtotal": 364.5,
+      "tax": 45.56,
+      "total": 410.06,
+      "cashier": "staff",
+      "notes": "Register #2 upgrade kit",
+      "status": "completed"
+    }
+  ],
+  "settings": {
+    "companyName": "Vision 79 Ltd",
+    "tradingName": "V79 Digital Hub",
+    "country": "Saint Lucia",
+    "city": "Castries",
+    "email": "Vision79SLU@gmail.com",
+    "phone": "+1 (758) 450-7979",
+    "currency": "XCD",
+    "taxRate": 12.5,
+    "enableTax": true,
+    "posApiKey": "v79_live_pos_key_sec99",
+    "webhookUrl": "https://api.vision79.lc/webhooks/pos"
+  },
+  "ecosystemApps": [
+    {
+      "id": "app-ffpro",
+      "name": "Fire Finance Pro (FFPRO)",
+      "shortName": "FFPRO",
+      "tagline": "Strategic Personal & Enterprise Wealth Hub",
+      "description": "Cloud-synchronized personal & business finance engine. Manages cash flow forecasting, net worth, automated budgeting, and seamless register sync with V79 POS.",
+      "category": "finance",
+      "status": "active",
+      "appUrl": "https://ffpro.v79sl.com",
+      "githubRepo": "https://github.com/MrFixITslu/FFPRO",
+      "iconName": "Wallet",
+      "colorScheme": {
+        "primary": "from-amber-500 to-orange-600",
+        "bgGradient": "bg-gradient-to-br from-amber-500/10 via-orange-500/5 to-transparent",
+        "badgeBg": "bg-amber-500/15 border-amber-500/30",
+        "badgeText": "text-amber-400",
+        "border": "border-amber-500/30 hover:border-amber-500/60"
+      },
+      "metrics": [
+        {
+          "label": "Cash Inflow (MTD)",
+          "value": "$28,450 XCD",
+          "sublabel": "+12.4% vs last mo"
+        },
+        {
+          "label": "Budget Health",
+          "value": "94.2%",
+          "sublabel": "Optimal allocation"
+        },
+        {
+          "label": "Wealth Forecast",
+          "value": "+18.4% YoY",
+          "sublabel": "Next 12 months"
+        }
+      ],
+      "features": [
+        "Real-time POS Cash Register Sync",
+        "Cash Flow & Burn Forecasting",
+        "Capital Expenditure & Depreciation",
+        "Interactive Goal Planner",
+        "V79 Unified SSO Authentication"
+      ],
+      "ssoSupported": true,
+      "isFlagship": true,
+      "version": "v2.4.0",
+      "lastSync": "2026-09-26T01:11:07.317Z"
+    },
+    {
+      "id": "app-tiquet",
+      "name": "V79 Tiquet (Service Desk & RMA)",
+      "shortName": "Tiquet",
+      "tagline": "Omnichannel Support, Service Desk & RMA Dispatch",
+      "description": "Enterprise ticketing system and field technician dispatch. Directly links work orders to inventory replacement parts, warranty SLAs, and POS client invoices.",
+      "category": "support",
+      "status": "active",
+      "appUrl": "https://tiquet.v79sl.com",
+      "githubRepo": "https://github.com/MrFixITslu/V79Tiquet",
+      "iconName": "Headphones",
+      "colorScheme": {
+        "primary": "from-blue-600 to-cyan-600",
+        "bgGradient": "bg-gradient-to-br from-blue-500/10 via-cyan-500/5 to-transparent",
+        "badgeBg": "bg-blue-500/15 border-blue-500/30",
+        "badgeText": "text-blue-400",
+        "border": "border-blue-500/30 hover:border-blue-500/60"
+      },
+      "metrics": [
+        {
+          "label": "Open Service Tickets",
+          "value": "4 Active",
+          "sublabel": "1 urgent RMA"
+        },
+        {
+          "label": "Avg SLA Resolution",
+          "value": "1.4 hrs",
+          "sublabel": "Target < 4 hrs"
+        },
+        {
+          "label": "SLA Adherence Rate",
+          "value": "98.5%",
+          "sublabel": "Last 30 days"
+        }
+      ],
+      "features": [
+        "Direct Inventory Hardware/SKU Linking",
+        "Field Dispatch & Technician Tracker",
+        "Automated WhatsApp & Email SLA Alerts",
+        "Hardware RMA & Warranty Tracking",
+        "One-Click Ticket from POS Receipts"
+      ],
+      "ssoSupported": true,
+      "isFlagship": true,
+      "version": "v3.1.2",
+      "lastSync": "2026-09-26T01:21:07.317Z"
+    },
+    {
+      "id": "app-marketing",
+      "name": "V79 Marketing Suite",
+      "shortName": "Marketing",
+      "tagline": "Campaign Orchestration & Brand Asset Management",
+      "description": "Unified digital marketing and promotional campaign platform. Automates promo codes, social media broadcasting, customer WhatsApp campaigns, and ad attribution.",
+      "category": "marketing",
+      "status": "active",
+      "appUrl": "https://marketing.v79sl.com",
+      "githubRepo": "https://github.com/MrFixITslu/V79Marketing",
+      "iconName": "Megaphone",
+      "colorScheme": {
+        "primary": "from-pink-500 to-rose-600",
+        "bgGradient": "bg-gradient-to-br from-pink-500/10 via-rose-500/5 to-transparent",
+        "badgeBg": "bg-pink-500/15 border-pink-500/30",
+        "badgeText": "text-pink-400",
+        "border": "border-pink-500/30 hover:border-pink-500/60"
+      },
+      "metrics": [
+        {
+          "label": "Active Campaigns",
+          "value": "3 Live",
+          "sublabel": "Instagram + WhatsApp"
+        },
+        {
+          "label": "Audience Reach",
+          "value": "14.2k",
+          "sublabel": "St. Lucia & Caribbean"
+        },
+        {
+          "label": "Campaign ROI",
+          "value": "4.8x",
+          "sublabel": "$12.8k converted sales"
+        }
+      ],
+      "features": [
+        "POS Coupon & Discount Generator",
+        "Social Media Campaign Scheduler",
+        "Product Launch Asset Library",
+        "Conversion Attribution & Lead CRM",
+        "Direct Inventory Item Promotion"
+      ],
+      "ssoSupported": true,
+      "isFlagship": true,
+      "version": "v1.9.0",
+      "lastSync": "2026-09-26T00:56:07.317Z"
+    },
+    {
+      "id": "app-v79pos",
+      "name": "V79 POS (Point of Sale & Register)",
+      "shortName": "V79 POS",
+      "tagline": "High-Performance Omnichannel Point of Sale & Register Terminal",
+      "description": "Cloud-synchronized retail register checkout, hardware peripherals (receipt printers, barcode scanners, cash drawers), offline resiliency, and real-time inventory deduction.",
+      "category": "operations",
+      "status": "active",
+      "appUrl": "https://pos.v79sl.com",
+      "githubRepo": "https://github.com/MrFixITslu/v79pos",
+      "iconName": "CreditCard",
+      "colorScheme": {
+        "primary": "from-emerald-500 to-teal-600",
+        "bgGradient": "bg-gradient-to-br from-emerald-500/10 via-teal-500/5 to-transparent",
+        "badgeBg": "bg-emerald-500/15 border-emerald-500/30",
+        "badgeText": "text-emerald-400",
+        "border": "border-emerald-500/30 hover:border-emerald-500/60"
+      },
+      "metrics": [
+        {
+          "label": "Terminal URL",
+          "value": "pos.v79sl.com",
+          "sublabel": "Live production sync"
+        },
+        {
+          "label": "Hardware Link",
+          "value": "Ready",
+          "sublabel": "Thermal & Drawer kick"
+        },
+        {
+          "label": "Checkout Velocity",
+          "value": "< 1.2s",
+          "sublabel": "Sub-second scanning"
+        }
+      ],
+      "features": [
+        "Barcode Scanner & Thermal Printer Ready",
+        "Offline-Resilient Cart Queue",
+        "Split Payments & Multi-Currency (XCD/USD)",
+        "Customer Loyalty & Promo Vouchers",
+        "Live Multi-Terminal Inventory Sync"
+      ],
+      "ssoSupported": true,
+      "isFlagship": true,
+      "version": "v2.5.0",
+      "lastSync": "2026-09-26T01:14:07.317Z"
+    },
+    {
+      "id": "app-analytics",
+      "name": "V79 Analytics & BI",
+      "shortName": "Analytics",
+      "tagline": "Cross-Ecosystem Telemetry & Executive Insights",
+      "description": "Deep business intelligence combining POS cash receipts, FFPRO finance books, support ticket costs from Tiquet, and advertising metrics into one executive cockpit.",
+      "category": "analytics",
+      "status": "active",
+      "appUrl": "https://analytics.vision79.lc",
+      "githubRepo": "https://github.com/MrFixITslu/V79Analytics",
+      "iconName": "LineChart",
+      "colorScheme": {
+        "primary": "from-violet-600 to-indigo-600",
+        "bgGradient": "bg-gradient-to-br from-violet-500/10 via-indigo-500/5 to-transparent",
+        "badgeBg": "bg-violet-500/15 border-violet-500/30",
+        "badgeText": "text-violet-400",
+        "border": "border-violet-500/30 hover:border-violet-500/60"
+      },
+      "metrics": [
+        {
+          "label": "Catalog Sales Velocity",
+          "value": "34.5 items/d",
+          "sublabel": "+8.2% week-on-week"
+        },
+        {
+          "label": "Blended Gross Margin",
+          "value": "33.8%",
+          "sublabel": "Target 30%"
+        },
+        {
+          "label": "Client Retention Rate",
+          "value": "88.4%",
+          "sublabel": "30-day recurring"
+        }
+      ],
+      "features": [
+        "Cross-App Executive Telemetry",
+        "Customer Lifetime Value (LTV) Cohorts",
+        "Stockout Revenue Impact Calculator",
+        "Daily Sales vs Expense Waterfall",
+        "Executive PDF Reporting Export"
+      ],
+      "ssoSupported": true,
+      "isFlagship": false,
+      "version": "v1.5.0",
+      "lastSync": "2026-09-26T00:41:07.317Z"
+    },
+    {
+      "id": "app-lifehealth",
+      "name": "LifeHealth SLU (Team & Safety)",
+      "shortName": "LifeHealth",
+      "tagline": "Staff Rostering, Field Certifications & OSHA Safety",
+      "description": "Workforce health, scheduling, technician OSHA compliance, tool safety checks, and employee wellness portal for Vision 79 field staff.",
+      "category": "team",
+      "status": "active",
+      "appUrl": "https://lifehealth.vision79.lc",
+      "githubRepo": "https://github.com/MrFixITslu/LifeHealthSLU",
+      "iconName": "HeartPulse",
+      "colorScheme": {
+        "primary": "from-teal-500 to-emerald-600",
+        "bgGradient": "bg-gradient-to-br from-teal-500/10 via-emerald-500/5 to-transparent",
+        "badgeBg": "bg-teal-500/15 border-teal-500/30",
+        "badgeText": "text-teal-400",
+        "border": "border-teal-500/30 hover:border-teal-500/60"
+      },
+      "metrics": [
+        {
+          "label": "Active Field Roster",
+          "value": "8 Staff",
+          "sublabel": "All shifts staffed"
+        },
+        {
+          "label": "Safety Compliance",
+          "value": "100%",
+          "sublabel": "OSHA certifications current"
+        },
+        {
+          "label": "Wellness Index",
+          "value": "9.2/10",
+          "sublabel": "Team survey score"
+        }
+      ],
+      "features": [
+        "Field Technician Shift Scheduler",
+        "OSHA & Equipment Safety Log",
+        "Driver & High-Voltage Certifications",
+        "Team Wellness Check-ins",
+        "Incident Reporting & Emergency Contacts"
+      ],
+      "ssoSupported": true,
+      "isFlagship": false,
+      "version": "v1.2.0",
+      "lastSync": "2026-09-26T00:26:07.317Z"
+    }
+  ],
+  "tickets": [
+    {
+      "id": "tiq-1",
+      "ticketNumber": "TIQ-4091",
+      "title": "UniFi UDM-Pro SFP+ 10G WAN Link Flapping",
+      "clientName": "Castries Port Authority",
+      "clientContact": "+1 (758) 457-6100",
+      "priority": "urgent",
+      "status": "open",
+      "linkedSku": "NET-UDM-001",
+      "linkedItemName": "UniFi Dream Machine Pro (UDM-Pro)",
+      "technician": "Marcus Theodore (Lead Network Eng)",
+      "createdAt": "2026-09-25T22:26:07.317Z",
+      "slaDeadline": "2026-09-26T02:26:07.317Z",
+      "notes": "Main optical transceiver dropping packets on high tide telemetry. Dispatched technician with replacement Cat6A & 10G SFP+ module."
+    },
+    {
+      "id": "tiq-2",
+      "ticketNumber": "TIQ-4092",
+      "title": "Thermal Printer Auto-Cutter Failure on POS Register #3",
+      "clientName": "Rodney Bay Marina Duty Free",
+      "clientContact": "it@rbmarina.lc",
+      "priority": "high",
+      "status": "in_progress",
+      "linkedSku": "POS-PRN-010",
+      "linkedItemName": "Star Micronics TSP143III Thermal Printer",
+      "technician": "Darren St. Rose (Hardware Tech)",
+      "createdAt": "2026-09-25T20:26:07.317Z",
+      "slaDeadline": "2026-09-26T04:26:07.317Z",
+      "notes": "Cutter blade jammed on thick receipt stock. Cleaned sensor and running diagnostic self-test."
+    },
+    {
+      "id": "tiq-3",
+      "ticketNumber": "TIQ-4093",
+      "title": "Cash Drawer 24V Solenoid RJ12 Kick Trigger Malfunction",
+      "clientName": "Vieux Fort Hardware & Supplies",
+      "clientContact": "+1 (758) 454-9988",
+      "priority": "normal",
+      "status": "waiting_parts",
+      "linkedSku": "POS-CAS-001",
+      "linkedItemName": "APG Vasario Heavy Duty Cash Drawer 1616",
+      "technician": "Darren St. Rose (Hardware Tech)",
+      "createdAt": "2026-09-25T01:26:07.317Z",
+      "slaDeadline": "2026-09-26T13:26:07.317Z",
+      "notes": "Awaiting replacement interface cable RJ12-to-Star printer from inventory Bay B-05."
+    },
+    {
+      "id": "tiq-4",
+      "ticketNumber": "TIQ-4094",
+      "title": "Structured Cabling Run (Cat6A) Termination Certification",
+      "clientName": "Ministry of Commerce & Innovation",
+      "clientContact": "tech@commerce.govt.lc",
+      "priority": "normal",
+      "status": "resolved",
+      "linkedSku": "CAB-C6A-1000",
+      "linkedItemName": "Cat6A Pure Copper Bulk Cable Spool 1000ft (Blue)",
+      "technician": "Marcus Theodore (Lead Network Eng)",
+      "createdAt": "2026-09-24T01:26:07.317Z",
+      "slaDeadline": "2026-09-25T01:26:07.317Z",
+      "notes": "Fluke tester certified 10 Gbps on all 24 keystones. Client signed off on completion certificate."
+    }
+  ],
+  "ffproRecords": [
+    {
+      "id": "ffp-1",
+      "date": "2026-09-25T23:26:07.317Z",
+      "type": "pos_revenue",
+      "title": "POS Register Batch Sync - Receipt #V79-2026-1082",
+      "amount": 410.06,
+      "status": "synced",
+      "source": "V79 POS Register #1"
+    },
+    {
+      "id": "ffp-2",
+      "date": "2026-09-24T23:26:07.317Z",
+      "type": "inventory_asset_valuation",
+      "title": "Hardware Asset Capitalization (Networking & Peripherals)",
+      "amount": 14680,
+      "status": "synced",
+      "source": "V79 Inventory Valuation Engine"
+    },
+    {
+      "id": "ffp-3",
+      "date": "2026-09-24T01:26:07.317Z",
+      "type": "cogs_expense",
+      "title": "Supplier Stock Restock Wire Transfer - Ubiquiti Dist.",
+      "amount": -8450,
+      "status": "synced",
+      "source": "Ordely Supplier Settlement"
+    }
+  ],
+  "marketingCampaigns": [
+    {
+      "id": "mkt-1",
+      "name": "Spring POS Hardware & Modernization Upgrade",
+      "channel": "WhatsApp Business",
+      "discountCode": "V79POS10",
+      "discountPercent": 10,
+      "targetProduct": "POS Hardware & Terminals",
+      "reach": 8420,
+      "conversions": 42,
+      "status": "active",
+      "budgetXCD": 1200
+    },
+    {
+      "id": "mkt-2",
+      "name": "Enterprise UniFi Fiber High-Speed Networking",
+      "channel": "LinkedIn",
+      "discountCode": "UNIFI79",
+      "discountPercent": 15,
+      "targetProduct": "UniFi Dream Machine Pro",
+      "reach": 3110,
+      "conversions": 18,
+      "status": "active",
+      "budgetXCD": 850
+    },
+    {
+      "id": "mkt-3",
+      "name": "Castries Tech Hub Loyalty Member Flash Deal",
+      "channel": "Instagram",
+      "discountCode": "V79PERK",
+      "discountPercent": 8,
+      "targetProduct": "Peripherals & Workstations",
+      "reach": 2670,
+      "conversions": 34,
+      "status": "active",
+      "budgetXCD": 500
+    }
+  ]
+}

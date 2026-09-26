@@ -1,68 +1,12 @@
 services:
   v79-hub:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    build: .
     container_name: v79-hub
     restart: unless-stopped
-    env_file: .env
+    ports:
+      - "3000:3000"
     environment:
+      - PORT=3000
       - NODE_ENV=production
-      - PORT=3040
-      - APP_URL=${APP_URL:-https://hub.v79sl.com}
-      - TRUST_PROXY=${TRUST_PROXY:-1}
-      - V79_HUB_ADMIN_EMAIL=${V79_HUB_ADMIN_EMAIL}
-      - V79_HUB_ADMIN_PASSWORD=${V79_HUB_ADMIN_PASSWORD}
-      - V79_HUB_ADMIN_NAME=${V79_HUB_ADMIN_NAME:-}
-      - V79_HUB_ORGANIZATION_NAME=${V79_HUB_ORGANIZATION_NAME:-V79 Digital}
-      - V79_SELF_SERVICE_SIGNUP=${V79_SELF_SERVICE_SIGNUP:-0}
-      - V79_TRIAL_DAYS=${V79_TRIAL_DAYS:-14}
-      - V79_MAIL_PROVIDER=${V79_MAIL_PROVIDER:-disabled}
-      - RESEND_API_KEY=${RESEND_API_KEY:-}
-      - V79_MAIL_FROM=${V79_MAIL_FROM:-}
-      - V79_HUB_MFA_KEY=${V79_HUB_MFA_KEY:-}
-      - V79_AUDIT_HASH_KEY=${V79_AUDIT_HASH_KEY:-}
-      - V79_SUMMARY_CACHE_MAX_AGE_MINUTES=${V79_SUMMARY_CACHE_MAX_AGE_MINUTES:-1440}
-      - V79_BILLING_PROVIDER=${V79_BILLING_PROVIDER:-disabled}
-      - WIPAY_PAYMENT_URL=${WIPAY_PAYMENT_URL:-}
-      - WIPAY_ACCOUNT_NUMBER=${WIPAY_ACCOUNT_NUMBER:-}
-      - WIPAY_API_KEY=${WIPAY_API_KEY:-}
-      - WIPAY_COUNTRY_CODE=${WIPAY_COUNTRY_CODE:-}
-      - WIPAY_CURRENCY=${WIPAY_CURRENCY:-XCD}
-      - WIPAY_ENVIRONMENT=${WIPAY_ENVIRONMENT:-sandbox}
-      - WIPAY_ALLOWED_HOSTS=${WIPAY_ALLOWED_HOSTS:-}
-      - V79_PLATFORM_SHARED_SECRET=${V79_PLATFORM_SHARED_SECRET}
-      - V79_WEBSITE_EVENT_SECRET=${V79_WEBSITE_EVENT_SECRET:-}
-      - V79_TIQUET_EVENT_SECRET=${V79_TIQUET_EVENT_SECRET:-}
-      - V79_FFPRO_EVENT_SECRET=${V79_FFPRO_EVENT_SECRET:-}
-      - V79_ACADEMY_EVENT_SECRET=${V79_ACADEMY_EVENT_SECRET:-}
-      - V79_MARKETING_EVENT_SECRET=${V79_MARKETING_EVENT_SECRET:-}
-      - V79_MARKETING_LAUNCH_SECRET=${V79_MARKETING_LAUNCH_SECRET:-}
-      - V79_FFPRO_LAUNCH_SECRET=${V79_FFPRO_LAUNCH_SECRET:-}
-      - V79_TIQUET_LAUNCH_SECRET=${V79_TIQUET_LAUNCH_SECRET:-}
-      - FFPRO_BASE_URL=${FFPRO_BASE_URL:-http://fire-finance-app:3010}
-      - POS_BASE_URL=${POS_BASE_URL:-http://v79-commerce-api:8080}
-      - POS_PUBLIC_URL=${POS_PUBLIC_URL:-https://pos.v79sl.com}
-      - TIQUET_BASE_URL=${TIQUET_BASE_URL:-http://v79-tiquet-manager:3050}
-      - ACADEMY_BASE_URL=${ACADEMY_BASE_URL:-http://v79_course_builder:3030}
-      - MARKETING_BASE_URL=${MARKETING_BASE_URL:-http://v79marketing-app:3070}
-      - FFPRO_PUBLIC_URL=${FFPRO_PUBLIC_URL:-https://ffpro.v79sl.com}
-      - TIQUET_PUBLIC_URL=${TIQUET_PUBLIC_URL:-https://tiquet.v79sl.com}
-      - ACADEMY_PUBLIC_URL=${ACADEMY_PUBLIC_URL:-https://v79academy.v79sl.com/academy}
-      - MARKETING_PUBLIC_URL=${MARKETING_PUBLIC_URL:-https://marketing.v79sl.com}
-    expose:
-      - "3040"
     volumes:
       - ./data:/app/data
-    networks:
-      - proxy_network
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3040/api/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 20s
-
-networks:
-  proxy_network:
-    external: true
