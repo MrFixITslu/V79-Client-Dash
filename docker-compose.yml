@@ -11,9 +11,16 @@ services:
       DATA_DIR: /app/data
       V79_HUB_ADMIN_USERNAME: ${V79_HUB_ADMIN_USERNAME:-admin}
       V79_HUB_ADMIN_PASSWORD: ${V79_HUB_ADMIN_PASSWORD:?Set a unique 16+ character admin password}
+      V79_HUB_ADMIN_EMAIL: ${V79_HUB_ADMIN_EMAIL:-}
       V79_PLATFORM_SHARED_SECRET: ${V79_PLATFORM_SHARED_SECRET:?Set the same 32+ character secret as POS}
       POS_BASE_URL: ${POS_BASE_URL:-http://v79-commerce-api:8080}
       POS_PUBLIC_URL: ${POS_PUBLIC_URL:-https://pos.v79sl.com}
+      FFPRO_PUBLIC_URL: ${FFPRO_PUBLIC_URL:-https://ffpro.v79sl.com}
+      TIQUET_PUBLIC_URL: ${TIQUET_PUBLIC_URL:-https://tiquet.v79sl.com}
+      MARKETING_PUBLIC_URL: ${MARKETING_PUBLIC_URL:-https://marketing.v79sl.com}
+      V79_FFPRO_LAUNCH_SECRET: ${V79_FFPRO_LAUNCH_SECRET:-}
+      V79_TIQUET_LAUNCH_SECRET: ${V79_TIQUET_LAUNCH_SECRET:-}
+      V79_MARKETING_LAUNCH_SECRET: ${V79_MARKETING_LAUNCH_SECRET:-}
       V79_POS_ORG_ID: ${V79_POS_ORG_ID:-}
       V79_POS_OWNER_USER_ID: ${V79_POS_OWNER_USER_ID:-}
     expose:
