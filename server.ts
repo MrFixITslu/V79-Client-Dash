@@ -1920,9 +1920,19 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    app.use(express.static(path.join(__dirname, "dist")));
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(__dirname, "dist", "index.html"));
+    const distDir = path.join(__dirname, "dist");
+    app.use(express.static(distDir, {
+      setHeaders(res, filePath) {
+        if (filePath.endsWith("index.html")) {
+          res.setHeader("Cache-Control", "no-store");
+        } else if (filePath.includes(`${path.sep}assets${path.sep}`)) {
+          res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+        }
+      },
+    }));
+    app.get("*", (_req, res) => {
+      res.setHeader("Cache-Control", "no-store");
+      res.sendFile(path.join(distDir, "index.html"));
     });
   }
 
