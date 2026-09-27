@@ -1,0 +1,55 @@
+name: Diagnose V79 Deployment
+
+on:
+  push:
+    branches: [deploy-diagnostic]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 10
+    steps:
+      - name: Join deployment tailnet
+        uses: tailscale/github-action@v4
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+          ping: ${{ secrets.DEPLOY_HOST }}
+
+      - name: Configure SSH
+        shell: bash
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+          ssh-keygen -y -f "$HOME/.ssh/id_ed25519" >/dev/null
+
+      - name: Inspect server deployment state
+        shell: bash
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_PORT: ${{ vars.DEPLOY_SSH_PORT }}
+        run: |
+          set -euo pipefail
+          port="${DEPLOY_SSH_PORT:-22}"
+          target="${DEPLOY_USER}@${DEPLOY_HOST}"
+          ssh -p "$port" -o StrictHostKeyChecking=yes "$target" '
+            echo "=== TIME ==="; date;
+            echo "=== LOAD ==="; uptime;
+            echo "=== MEMORY ==="; free -h;
+            echo "=== DISK ==="; df -h /;
+            echo "=== CONTAINERS ==="; docker ps -a --format "table {{.Names}}\t{{.Status}}\t{{.Image}}";
+            echo "=== COMPOSE PROJECTS ==="; docker compose ls;
+            echo "=== DOCKER BUILD/COMPOSE PROCESSES ==="; ps -eo pid,etimes,pcpu,pmem,cmd | grep -E "docker compose|docker build|buildkit|npm (ci|install|run build)" | grep -v grep || true;
+            echo "=== NETWORK ==="; docker network inspect proxy_network --format "{{range .Containers}}{{.Name}} {{end}}" || true;
+          '
