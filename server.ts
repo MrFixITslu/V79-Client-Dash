@@ -990,7 +990,22 @@ if (!fs.existsSync(posKeyPath)) {
 const posPrivateKey = crypto.createPrivateKey(fs.readFileSync(posKeyPath));
 const posPublicKey = crypto.createPublicKey(posPrivateKey);
 const posKeyId = crypto.createHash("sha256").update(posPublicKey.export({ format: "der", type: "spki" })).digest("hex").slice(0, 20);
-const launchTickets = new Map<string, { userId: string; tenantId: string; expiresAt: number }>();
+type LaunchProduct = "pos" | "ffpro" | "tiquet" | "marketing";
+const launchTickets = new Map<string, { userId: string; tenantId: string; product: LaunchProduct; expiresAt: number }>();
+const managedLaunch = {
+  ffpro: { serviceId: "v79-ffpro", secretEnv: "V79_FFPRO_LAUNCH_SECRET", publicEnv: "FFPRO_PUBLIC_URL", defaultUrl: "https://ffpro.v79sl.com" },
+  tiquet: { serviceId: "v79-tiquet", secretEnv: "V79_TIQUET_LAUNCH_SECRET", publicEnv: "TIQUET_PUBLIC_URL", defaultUrl: "https://tiquet.v79sl.com" },
+  marketing: { serviceId: "v79-marketing", secretEnv: "V79_MARKETING_LAUNCH_SECRET", publicEnv: "MARKETING_PUBLIC_URL", defaultUrl: "https://marketing.v79sl.com" },
+} as const;
+function managedProduct(source: string): keyof typeof managedLaunch | null {
+  return (Object.keys(managedLaunch) as (keyof typeof managedLaunch)[]).find(product => managedLaunch[product].serviceId === source) || null;
+}
+function launchTicket(userId: string, tenantId: string, product: LaunchProduct) {
+  for (const [key, entry] of launchTickets) if (entry.expiresAt < Date.now() || (entry.userId === userId && entry.product === product)) launchTickets.delete(key);
+  const ticket = crypto.randomBytes(32).toString("base64url");
+  launchTickets.set(crypto.createHash("sha256").update(ticket).digest("hex"), { userId, tenantId, product, expiresAt: Date.now() + 120000 });
+  return ticket;
+}
 function posUserId(userId: string) {
   if (process.env.V79_POS_OWNER_USER_ID && userId === posIdentity.ownerUserId) return process.env.V79_POS_OWNER_USER_ID;
   const hex = crypto.createHash("sha256").update(`${posIdentity.organizationId}:${userId}`).digest("hex");
@@ -1011,15 +1026,28 @@ app.get("/.well-known/jwks.json", (_req, res) => {
 app.get("/api/health", (_req, res) => res.json({ status: "ok" }));
 app.post("/api/platform/session/consume", (req, res) => {
   const body = (req as any).rawBody?.toString("utf8") || "";
-  if (req.get("x-v79-service-id") !== "v79-pos" || !verifyPlatformRequest({ method: "POST", pathname: "/api/platform/session/consume", timestamp: req.get("x-v79-timestamp") || "", signature: req.get("x-v79-signature") || "", body, secret: posSecret })) return res.status(401).json({ error: "Invalid service signature" });
+  const source = req.get("x-v79-service-id") || "";
+  const managed = managedProduct(source);
+  const expectedProduct: LaunchProduct | null = source === "v79-pos" ? "pos" : managed;
+  const secret = expectedProduct === "pos" ? posSecret : managed ? process.env[managedLaunch[managed].secretEnv] || "" : "";
+  if (!expectedProduct || !verifyPlatformRequest({ method: "POST", pathname: "/api/platform/session/consume", timestamp: req.get("x-v79-timestamp") || "", signature: req.get("x-v79-signature") || "", body, secret })) return res.status(401).json({ error: "Invalid service signature" });
   const { product, ticket } = req.body || {};
-  if (product !== "pos" || typeof ticket !== "string") return res.status(400).json({ error: "Invalid ticket" });
+  if (product !== expectedProduct || typeof ticket !== "string" || !/^[A-Za-z0-9_-]{32,180}$/.test(ticket)) return res.status(400).json({ error: "Invalid ticket" });
   const ticketHash = crypto.createHash("sha256").update(ticket).digest("hex");
   const entry = launchTickets.get(ticketHash);
+  if (!entry || entry.product !== product || entry.expiresAt < Date.now() || entry.userId !== posIdentity.ownerUserId || !store.users.some(u => u.id === entry.userId && u.role === "admin")) return res.status(401).json({ error: "Ticket expired or revoked" });
   launchTickets.delete(ticketHash);
-  if (!entry || entry.expiresAt < Date.now() || entry.userId !== posIdentity.ownerUserId || !store.users.some(u => u.id === entry.userId && u.role === "admin")) return res.status(401).json({ error: "Ticket expired or revoked" });
   res.setHeader("Cache-Control", "no-store");
-  res.json({ token: posJwt(posUserId(entry.userId), entry.tenantId), tenantId: entry.tenantId });
+  if (product === "pos") return res.json({ token: posJwt(posUserId(entry.userId), entry.tenantId), tenantId: entry.tenantId });
+  const email = (process.env.V79_HUB_ADMIN_EMAIL || "").trim().toLowerCase();
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(503).json({ error: "Hub owner email is not configured." });
+  res.json({
+    user: { id: posUserId(entry.userId), email, name: store.users.find(u => u.id === entry.userId)?.fullName || email },
+    organization: { id: entry.tenantId, name: store.settings.companyName || "Vision79", slug: `v79-${entry.tenantId.slice(0, 12)}` },
+    role: "owner", plan: "beta", accessMode: "beta",
+    entitlement: { product, enabled: true, access: "owner" },
+    assignedProducts: ["ffpro", "tiquet", "marketing"],
+  });
 });
 server.on("upgrade", (request, socket, head) => {
   const origin = process.env.APP_URL ? new URL(process.env.APP_URL).origin : `http://${request.headers.host}`;
@@ -1078,7 +1106,7 @@ function sanitizeUser(u: StoredUser) {
 // ==========================================
 
 app.post("/api/auth/login", (req, res) => {
-  const { username, password } = req.body;
+  const { username, password } = req.body || {};
   if (typeof username !== "string" || typeof password !== "string" || !username || !password) {
     return res.status(400).json({ error: "Username and password required" });
   }
@@ -1162,13 +1190,30 @@ app.get("/api/apps/pos/launch", requireRole("admin"), async (req, res) => {
     });
     if (!response.ok) return res.status(502).json({ error: "POS workspace provisioning failed", upstreamStatus: response.status });
   } catch { return res.status(503).json({ error: "POS service is unavailable" }); }
-  for (const [key, entry] of launchTickets) if (entry.expiresAt < Date.now() || entry.userId === session.userId) launchTickets.delete(key);
-  const ticket = crypto.randomBytes(32).toString("base64url");
-  launchTickets.set(crypto.createHash("sha256").update(ticket).digest("hex"), { userId: session.userId, tenantId: posIdentity.organizationId, expiresAt: Date.now() + 120000 });
+  const ticket = launchTicket(session.userId, posIdentity.organizationId, "pos");
   const url = new URL("/", posPublicUrl);
   url.hash = new URLSearchParams({ ticket }).toString();
   res.setHeader("Cache-Control", "no-store");
   res.redirect(302, url.toString());
+});
+
+app.get("/api/apps/:product/launch", requireRole("admin"), (req, res) => {
+  const product = req.params.product as keyof typeof managedLaunch;
+  if (!(product in managedLaunch)) return res.status(404).json({ error: "Unknown managed app" });
+  const session = (req as any).user;
+  if (session.userId !== posIdentity.ownerUserId) return res.status(403).json({ error: "Only the workspace owner can launch this app" });
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(process.env.V79_HUB_ADMIN_EMAIL || "")) return res.status(503).json({ error: "Set V79_HUB_ADMIN_EMAIL to the owner's verified email." });
+  const config = managedLaunch[product];
+  if ((process.env[config.secretEnv] || "").length < 32) return res.status(503).json({ error: `${product} launch secret is not configured.` });
+  const configuredUrl = process.env[config.publicEnv] || config.defaultUrl;
+  let target: URL;
+  try {
+    target = new URL("/api/platform/launch", configuredUrl);
+    if (target.protocol !== "https:" || target.username || target.password || !target.hostname.endsWith(".v79sl.com")) throw new Error("Invalid app URL");
+  } catch { return res.status(503).json({ error: `${product} public URL is invalid.` }); }
+  target.searchParams.set("ticket", launchTicket(session.userId, posIdentity.organizationId, product));
+  res.setHeader("Cache-Control", "no-store");
+  res.redirect(302, target.toString());
 });
 
 // ==========================================
@@ -1665,7 +1710,21 @@ app.get("/api/ecosystem/apps", (req, res) => {
     store.ecosystemApps = defaultEcosystemApps;
     saveStore(store);
   }
-  res.json(store.ecosystemApps);
+  const managedDescriptions: Record<string,string> = {
+    "app-ffpro": "Finance planning and reporting. Sign in through the Hub after your FFPRO account is linked.",
+    "app-tiquet": "Service jobs and tickets. Sign in through the Hub after your Tiquet account is linked.",
+    "app-marketing": "Customer and campaign tools. Sign in through the Hub to open your workspace.",
+    "app-v79pos": "Sales, stock and purchasing. The POS beta requires its own service and register testing.",
+    "app-academy": "Public courses and learning. Academy has its own learner account.",
+  };
+  res.json(store.ecosystemApps
+    .filter(a => !["app-analytics","app-lifehealth"].includes(a.id))
+    .map(a => ({ ...a, status: "beta", metrics: undefined, lastSync: undefined,
+      description: managedDescriptions[a.id] || a.description,
+      features: managedDescriptions[a.id] ? [] : a.features,
+      ssoSupported: ["app-ffpro","app-tiquet","app-marketing","app-v79pos"].includes(a.id),
+      appUrl: a.id === "app-academy" ? "https://v79academy.v79sl.com/academy" : a.appUrl,
+    })));
 });
 
 // Update an ecosystem application configuration (e.g. custom URL, status)

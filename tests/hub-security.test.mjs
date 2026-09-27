@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -23,7 +23,7 @@ test('private data, roles, checkout integrity and one-time POS launch', {timeout
   });
   const posOrigin=await listen(pos);
   const probe=createServer();const origin=await listen(probe);await new Promise(resolve=>probe.close(resolve));
-  const server=spawn(process.execPath,['--import','tsx','server.ts'],{cwd:process.cwd(),env:{...process.env,NODE_ENV:'production',DATA_DIR:dir,PORT:new URL(origin).port,APP_URL:origin,V79_HUB_ADMIN_PASSWORD:'a-unique-admin-password-1234',V79_PLATFORM_SHARED_SECRET:secret,POS_BASE_URL:posOrigin,POS_PUBLIC_URL:'https://pos.example.test'},stdio:['ignore','pipe','pipe']});
+  const server=spawn(process.execPath,['--import','tsx','server.ts'],{cwd:process.cwd(),env:{...process.env,NODE_ENV:'production',DATA_DIR:dir,PORT:new URL(origin).port,APP_URL:origin,V79_HUB_ADMIN_PASSWORD:'a-unique-admin-password-1234',V79_HUB_ADMIN_EMAIL:'owner@example.test',V79_PLATFORM_SHARED_SECRET:secret,V79_FFPRO_LAUNCH_SECRET:secret,V79_TIQUET_LAUNCH_SECRET:secret,V79_MARKETING_LAUNCH_SECRET:secret,POS_BASE_URL:posOrigin,POS_PUBLIC_URL:'https://pos.example.test'},stdio:['ignore','pipe','pipe']});
   let errors='';server.stderr.on('data',c=>errors+=c);
   server.stdout.on('data',c=>errors+=c);
   t.after(async()=>{
@@ -79,4 +79,38 @@ test('private data, roles, checkout integrity and one-time POS launch', {timeout
   const [h,p,s]=token.split('.');
   assert.equal(verify(null,Buffer.from(`${h}.${p}`),createPublicKey({format:'jwk',key:jwks.keys[0]}),Buffer.from(s,'base64url')),true);
   assert.equal((await request('/api/platform/session/consume',{method:'POST',headers:serviceHeaders,body})).status,401);
+  for (const [product,serviceId,host] of [['ffpro','v79-ffpro','ffpro.v79sl.com'],['tiquet','v79-tiquet','tiquet.v79sl.com'],['marketing','v79-marketing','marketing.v79sl.com']]) {
+    assert.equal((await request(`/api/apps/${product}/launch`,{headers:{Cookie:viewerCookie}})).status,403);
+    const launch=await request(`/api/apps/${product}/launch`,{headers:{Cookie:cookie}});
+    assert.equal(launch.status,302);
+    const url=new URL(launch.headers.get('location'));
+    assert.equal(url.host,host);
+    assert.equal(url.pathname,'/api/platform/launch');
+    const ticket=url.searchParams.get('ticket');
+    const payload=JSON.stringify({ticket,product});
+    const time=String(Date.now());
+    const signed={method:'POST',headers:{'content-type':'application/json','x-v79-service-id':serviceId,'x-v79-timestamp':time,'x-v79-signature':signPlatformRequest({method:'POST',pathname:'/api/platform/session/consume',timestamp:time,body:payload,secret})},body:payload};
+    const consumed=await request('/api/platform/session/consume',signed);
+    assert.equal(consumed.status,200);
+    const identity=await consumed.json();
+    assert.equal(identity.user.email,'owner@example.test');
+    assert.equal(identity.entitlement.product,product);
+    assert.equal(identity.organization.id,provision.organization.id);
+    assert.equal((await request('/api/platform/session/consume',signed)).status,401);
+  }
+});
+
+test('administrator password recovery preserves Hub records and old hash is replaced', async t => {
+  const dir=await mkdtemp(join(tmpdir(),'v79-hub-reset-'));
+  t.after(()=>rm(dir,{recursive:true,force:true}));
+  const old='scrypt:old-salt:old-hash';
+  const file=join(dir,'v79_store.json');
+  const {writeFile,readFile,readdir}=await import('node:fs/promises');
+  await writeFile(file,JSON.stringify({users:[{id:'owner',username:'admin',role:'admin',password:old}],inventory:[{id:'record'}]}));
+  execFileSync(process.execPath,['scripts/reset-admin-password.mjs'],{cwd:process.cwd(),env:{...process.env,DATA_DIR:dir,V79_HUB_ADMIN_USERNAME:'admin',V79_HUB_ADMIN_PASSWORD:'a-new-unique-password-2026'}});
+  const updated=JSON.parse(await readFile(file,'utf8'));
+  assert.equal(updated.inventory[0].id,'record');
+  assert.match(updated.users[0].password,/^scrypt:[a-f0-9]{32}:[a-f0-9]{128}$/);
+  assert.notEqual(updated.users[0].password,old);
+  assert.equal((await readdir(dir)).filter(name=>name.includes('before-password-reset')).length,1);
 });
