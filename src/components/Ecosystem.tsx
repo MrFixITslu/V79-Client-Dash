@@ -340,8 +340,8 @@ export function Ecosystem({
               <div className="grid grid-cols-2 gap-2">
                 {(managedLaunchPaths[app.id] || app.id === "app-academy") ? <a
                   href={managedLaunchPaths[app.id] || "https://v79academy.v79sl.com/academy"}
-                  target="_blank"
-                  rel="noreferrer"
+                  target={managedLaunchPaths[app.id] ? undefined : "_blank"}
+                  rel={managedLaunchPaths[app.id] ? undefined : "noopener noreferrer"}
                   className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm shadow-indigo-600/20 transition-all"
                 >
                   <ExternalLink className="w-3.5 h-3.5" />
