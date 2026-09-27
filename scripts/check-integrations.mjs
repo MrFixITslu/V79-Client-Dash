@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Read-only contract probe from the Hub container on proxy_network.
 import 'dotenv/config';
-import Database from 'better-sqlite3';
+import fs from 'node:fs';
 import path from 'node:path';
 import { signPlatformRequest } from '../server/platform-contract.mjs';
 
@@ -21,14 +21,14 @@ const strict = process.argv.includes('--require-records');
 const secret = String(process.env.V79_PLATFORM_SHARED_SECRET || '');
 if (secret.length < 32) { console.error('Platform shared secret is missing or too short.'); process.exit(1); }
 const directory = path.resolve(process.env.DATA_DIR || path.join(process.cwd(),'data'));
-let db;
 try {
-  db = new Database(path.join(directory,'v79-hub.db'),{readonly:true,fileMustExist:true});
-  const owner = db.prepare(`SELECT o.id AS organizationId,u.email FROM users u
-    JOIN memberships m ON m.user_id=u.id AND m.role='owner'
-    JOIN organizations o ON o.id=m.organization_id
-    WHERE u.email=? LIMIT 1`).get(String(process.env.V79_HUB_ADMIN_EMAIL || '').trim().toLowerCase());
-  if (!owner) throw new Error('Configured owner and organization not found in the Hub database.');
+  const email = String(process.env.V79_HUB_ADMIN_EMAIL || '').trim().toLowerCase();
+  if (!/^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$/.test(email)) throw new Error('V79_HUB_ADMIN_EMAIL is not configured.');
+  const identityPath = path.join(directory,'pos-identity.json');
+  if (!fs.existsSync(identityPath)) throw new Error('Hub workspace identity is missing; launch POS once or restore pos-identity.json.');
+  const identity = JSON.parse(fs.readFileSync(identityPath,'utf8'));
+  if (!identity?.organizationId) throw new Error('Hub workspace identity does not contain organizationId.');
+  const owner = { organizationId:String(identity.organizationId), email };
   let failed = false;
   for (const name of selected) {
     const product = products[name];
@@ -59,6 +59,4 @@ try {
 } catch (error) {
   console.error(error.message || String(error));
   process.exitCode=1;
-} finally {
-  db?.close();
 }
