@@ -61,8 +61,16 @@ export function AppSwitcher({
     }
   };
 
-  const getLaunchUrl = (app: EcosystemApp) => {
-    return app.id === "app-v79pos" ? "/api/apps/pos/launch" : app.appUrl;
+  const getLaunchUrl = (app: EcosystemApp): string | null => {
+    const managed: Record<string, string> = {
+      "app-ffpro": "/api/apps/ffpro/launch",
+      "app-tiquet": "/api/apps/tiquet/launch",
+      "app-marketing": "/api/apps/marketing/launch",
+      "app-v79pos": "/api/apps/pos/launch",
+    };
+    if (managed[app.id]) return managed[app.id];
+    if (app.id === "app-academy") return "https://v79academy.v79sl.com/academy";
+    return /^https:\/\//i.test(app.appUrl || "") ? app.appUrl : null;
   };
 
   return (
@@ -107,6 +115,7 @@ export function AppSwitcher({
           <div className="grid grid-cols-3 gap-2 py-3">
             {apps.map((app) => {
               const url = getLaunchUrl(app);
+              if (!url) return null;
               return (
                 <a
                   key={app.id}

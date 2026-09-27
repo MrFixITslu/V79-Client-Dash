@@ -72,6 +72,24 @@ export default function App() {
     }, 3500);
   };
 
+  // Product servers return here when a signed launch cannot be completed.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("error") !== "launch_denied") return;
+    const names: Record<string, string> = {
+      ffpro: "FFPRO",
+      tiquet: "Tiquet",
+      marketing: "Marketing",
+    };
+    const name = names[params.get("return") || ""] || "The app";
+    setToast({ message: `${name} could not complete sign-in. Check its launch configuration and account link.`, type: "error" });
+    setTimeout(() => setToast(null), 8000);
+    params.delete("error");
+    params.delete("return");
+    const query = params.toString();
+    window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`);
+  }, []);
+
   // --- Verify Active Auth Session on Load ---
   useEffect(() => {
     const verifySession = async () => {
