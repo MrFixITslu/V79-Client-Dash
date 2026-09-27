@@ -115,13 +115,14 @@ export function AppSwitcher({
           <div className="grid grid-cols-3 gap-2 py-3">
             {apps.map((app) => {
               const url = getLaunchUrl(app);
+              const managedLaunch = app.id in { "app-ffpro": true, "app-tiquet": true, "app-marketing": true, "app-v79pos": true };
               if (!url) return null;
               return (
                 <a
                   key={app.id}
                   href={url}
-                  target="_blank"
-                  rel="noopener noreferrer"
+                  target={managedLaunch ? undefined : "_blank"}
+                  rel={managedLaunch ? undefined : "noopener noreferrer"}
                   onClick={() => setIsOpen(false)}
                   className="group p-2.5 rounded-2xl hover:bg-slate-800/80 border border-transparent hover:border-slate-700 transition-all flex flex-col items-center text-center cursor-pointer no-underline"
                 >
