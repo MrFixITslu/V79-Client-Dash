@@ -26,6 +26,8 @@ rsync -a --delete --exclude='/.env' --exclude='/data/' \
   --exclude='/backups/' --exclude='/.incoming.*/' "$stage/" "$root/"
 cd "$root"
 docker compose --project-name v79-hub up -d --build --wait --wait-timeout 120
-test "$(docker inspect --format '{{.State.Health.Status}}' v79-hub)" = healthy
+container_id="$(docker compose --project-name v79-hub ps -q v79-hub)"
+test -n "$container_id"
+test "$(docker inspect --format '{{.State.Health.Status}}' "$container_id")" = healthy
 rm -f -- "$archive"
 echo "Deployed and healthy: $sha"
