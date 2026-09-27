@@ -6,15 +6,16 @@ import path from 'node:path';
 import { signPlatformRequest } from '../server/platform-contract.mjs';
 
 const products = {
+  pos: { url:'POS_BASE_URL', defaultUrl:'http://v79-commerce-api:8080', health:'/ready' },
   ffpro: { url:'FFPRO_BASE_URL', defaultUrl:'http://fire-finance-app:3010', health:'/api/health' },
   tiquet: { url:'TIQUET_BASE_URL', defaultUrl:'http://v79-tiquet-manager:3050', health:'/health' },
   marketing: { url:'MARKETING_BASE_URL', defaultUrl:'http://v79marketing-app:3070', health:'/api/health' },
   academy: { url:'ACADEMY_BASE_URL', defaultUrl:'http://v79_course_builder:3030', health:'/healthz' },
 };
 const only = process.argv.indexOf('--only');
-const selected = only < 0 ? Object.keys(products) : [process.argv[only + 1]];
+const selected = only < 0 ? ['pos','ffpro','tiquet','marketing'] : [process.argv[only + 1]];
 if (selected.some(name => !products[name]) || (only >= 0 && selected.length !== 1)) {
-  console.error('Usage: node scripts/check-integrations.mjs [--only ffpro|tiquet|marketing|academy] [--require-records]');
+  console.error('Usage: node scripts/check-integrations.mjs [--only pos|ffpro|tiquet|marketing|academy] [--require-records]');
   process.exit(2);
 }
 const strict = process.argv.includes('--require-records');
