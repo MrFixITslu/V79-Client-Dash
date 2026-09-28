@@ -40,12 +40,12 @@ interface UserManagementProps {
 }
 
 const ALL_VIEWS: { id: ViewState; label: string; desc: string }[] = [
-  { id: "overview", label: "Overview", desc: "View ecosystem health and command centre" },
-  { id: "dashboard", label: "Dashboard", desc: "View metrics and AI forecasts" },
-  { id: "inventory", label: "Inventory", desc: "Catalog and stock adjustments" },
-  { id: "invoices", label: "Sales & Receipts", desc: "View transaction log and reprint" },
-  { id: "reports", label: "Reports", desc: "Valuations and audit analytics" },
-  { id: "settings", label: "Settings", desc: "Company and integration configs" },
+  { id: "overview", label: "Overview", desc: "View ecosystem health and business KPIs" },
+  { id: "connections", label: "Connections", desc: "Open and review connected V79 applications" },
+  { id: "team", label: "Team", desc: "View organisation members and roles" },
+  { id: "security", label: "Security", desc: "Review workspace security controls" },
+  { id: "billing", label: "Billing", desc: "View plan and subscription information" },
+  { id: "users", label: "User Management", desc: "Create and manage Hub users" },
 ];
 
 export function UserManagement({
@@ -68,7 +68,7 @@ export function UserManagement({
     password: "",
     fullName: "",
     role: "staff" as UserRole,
-    permissions: ["overview", "dashboard", "inventory", "invoices", "reports"] as ViewState[],
+    permissions: ["overview"] as ViewState[],
   });
 
   const handleOpenAdd = () => {
@@ -78,7 +78,7 @@ export function UserManagement({
       password: "",
       fullName: "",
       role: "staff",
-      permissions: ["overview", "dashboard", "inventory", "invoices", "reports"],
+      permissions: ["overview"],
     });
     setErrorMessage("");
     setShowPassword(false);
@@ -92,7 +92,7 @@ export function UserManagement({
       password: "", // Leave blank unless changing
       fullName: user.fullName || user.username,
       role: user.role,
-      permissions: user.permissions || ["overview", "dashboard", "inventory", "reports"],
+      permissions: (user.permissions || ["overview"]).filter((permission) => ALL_VIEWS.some((view) => view.id === permission)),
     });
     setErrorMessage("");
     setShowPassword(false);
@@ -102,13 +102,13 @@ export function UserManagement({
   const handleRoleChange = (role: UserRole) => {
     let perms: ViewState[] = [];
     if (role === "admin") {
-      perms = ["overview", "connections", "team", "security", "billing", "dashboard", "inventory", "invoices", "reports", "settings", "users"];
+      perms = ["overview", "connections", "team", "security", "billing", "users"];
     } else if (role === "manager") {
-      perms = ["overview", "connections", "team", "security", "billing", "dashboard", "inventory", "invoices", "reports", "settings"];
+      perms = ["overview", "connections", "team", "security", "billing"];
     } else if (role === "staff") {
-      perms = ["overview", "dashboard", "inventory", "invoices", "reports"];
+      perms = ["overview", "connections"];
     } else {
-      perms = ["overview", "dashboard", "inventory", "reports"];
+      perms = ["overview"];
     }
 
     setFormData((prev) => ({

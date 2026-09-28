@@ -134,15 +134,15 @@ export function WorkspaceTeam({
   const roleStyles: Record<UserRole, { badge: string; desc: string }> = {
     admin: {
       badge: "bg-purple-100 text-purple-800 border-purple-200",
-      desc: "Full organization authority, user invites & system settings",
+      desc: "Full organisation authority, user access & platform controls",
     },
     manager: {
       badge: "bg-blue-100 text-blue-800 border-blue-200",
-      desc: "Ecosystem management, reports, inventory & team review",
+      desc: "Ecosystem management, service visibility & team review",
     },
     staff: {
       badge: "bg-emerald-100 text-emerald-800 border-emerald-200",
-      desc: "Operational access, catalog updates & day-to-day workflow",
+      desc: "Operational Hub access and day-to-day workflow",
     },
     viewer: {
       badge: "bg-slate-100 text-slate-700 border-slate-200",
