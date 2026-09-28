@@ -5,6 +5,11 @@ import {
   Search, Send, Settings2, Trash2, X,
 } from "lucide-react";
 import { EcosystemApp } from "../types";
+import { academyAdminApi } from "../lib/academyAdmin";
+import { AcademyLearners } from "./AcademyLearners";
+import { AcademyPublishing } from "./AcademyPublishing";
+import { AcademyImport } from "./AcademyImport";
+import { AcademyJuniorAdmin } from "./AcademyJuniorAdmin";
 
 type CourseStatus = "Draft" | "Review" | "Ready for Upload" | "Uploaded" | "Imported" | "Published" | "Archived";
 type PricingType = "free" | "free_trial" | "premium" | "subscription";
@@ -54,31 +59,30 @@ interface Lesson {
   orderNumber: number;
 }
 
+interface QuizQuestion {
+  id: string;
+  questionText: string;
+  questionType: "multiple_choice" | "true_false";
+  options: string[];
+  correctAnswer: string | number;
+  explanation: string;
+  orderNumber: number;
+}
+
+interface Quiz {
+  id: string;
+  lessonId: string;
+  title: string;
+  passingScore: number;
+  questions: QuizQuestion[];
+}
+
 interface AdminConsoleProps {
   ecosystemApps: EcosystemApp[];
 }
 
 type AdminSection = "academy" | "platform";
-const API = "/api/admin/academy";
-
-async function academyApi<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const response = await fetch(`${API}${path}`, {
-    ...options,
-    cache: "no-store",
-    headers: {
-      ...(options.body ? { "Content-Type": "application/json" } : {}),
-      ...(options.headers || {}),
-    },
-  });
-  const payload = await response.json().catch(() => null);
-  if (!response.ok) {
-    const message = payload?.error || `Academy request failed (${response.status})`;
-    const details = Array.isArray(payload?.details) ? "\n" + payload.details.join("\n") : "";
-    throw new Error(message + details);
-  }
-  return payload as T;
-}
-
+type AcademyView = "courses" | "learners" | "publishing" | "import" | "junior";
 const emptyCourse = (): Partial<Course> => ({
   title: "",
   shortDescription: "",
@@ -106,6 +110,7 @@ const statusClass: Record<string, string> = {
 
 export function AdminConsole({ ecosystemApps }: AdminConsoleProps) {
   const [section, setSection] = useState<AdminSection>("academy");
+  const [academyView, setAcademyView] = useState<AcademyView>("courses");
   const [courses, setCourses] = useState<Course[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState<Partial<Course> | null>(null);
@@ -126,7 +131,7 @@ export function AdminConsole({ ecosystemApps }: AdminConsoleProps) {
   const loadCourses = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await academyApi<Course[]>("/courses");
+      const data = await academyAdminApi<Course[]>("/courses");
       setCourses(data);
       if (selectedId) {
         const current = data.find((course) => course.id === selectedId);
@@ -150,7 +155,7 @@ export function AdminConsole({ ecosystemApps }: AdminConsoleProps) {
     setLessonsByModule({});
     setExpandedModules(new Set());
     try {
-      setModules(await academyApi<Module[]>(`/courses/${course.id}/modules`));
+      setModules(await academyAdminApi<Module[]>(`/courses/${course.id}/modules`));
     } catch (error) {
       flash(error instanceof Error ? error.message : "Could not load course modules", "error");
     }
@@ -176,8 +181,8 @@ export function AdminConsole({ ecosystemApps }: AdminConsoleProps) {
       };
       const wasExisting = Boolean(selectedId);
       const saved = selectedId
-        ? await academyApi<Course>(`/courses/${selectedId}`, { method: "PUT", body: JSON.stringify(payload) })
-        : await academyApi<Course>("/courses", { method: "POST", body: JSON.stringify(payload) });
+        ? await academyAdminApi<Course>(`/courses/${selectedId}`, { method: "PUT", body: JSON.stringify(payload) })
+        : await academyAdminApi<Course>("/courses", { method: "POST", body: JSON.stringify(payload) });
       setSelectedId(saved.id);
       setDraft(saved);
       await loadCourses();
@@ -193,7 +198,7 @@ export function AdminConsole({ ecosystemApps }: AdminConsoleProps) {
     if (!selectedId) return;
     setBusy(true);
     try {
-      const result = await academyApi<{ course: Course }>(`/courses/${selectedId}/publish`, {
+      const result = await academyAdminApi<{ course: Course }>(`/courses/${selectedId}/publish`, {
         method: "POST",
         body: JSON.stringify({ userRole: "Admin" }),
       });
@@ -211,7 +216,7 @@ export function AdminConsole({ ecosystemApps }: AdminConsoleProps) {
     if (!selectedId) return;
     setBusy(true);
     try {
-      const copy = await academyApi<Course>(`/courses/${selectedId}/duplicate`, { method: "POST" });
+      const copy = await academyAdminApi<Course>(`/courses/${selectedId}/duplicate`, { method: "POST" });
       await loadCourses();
       await selectCourse(copy);
       flash("Course duplicated.");
@@ -226,7 +231,7 @@ export function AdminConsole({ ecosystemApps }: AdminConsoleProps) {
     if (!selectedId || !draft) return;
     setBusy(true);
     try {
-      const saved = await academyApi<Course>(`/courses/${selectedId}`, {
+      const saved = await academyAdminApi<Course>(`/courses/${selectedId}`, {
         method: "PUT",
         body: JSON.stringify({ ...draft, status: "Archived", userRole: "Admin" }),
       });
@@ -245,7 +250,7 @@ export function AdminConsole({ ecosystemApps }: AdminConsoleProps) {
     if (!window.confirm(`Delete "${draft.title}" and all associated course content? This cannot be undone.`)) return;
     setBusy(true);
     try {
-      await academyApi(`/courses/${selectedId}`, { method: "DELETE" });
+      await academyAdminApi(`/courses/${selectedId}`, { method: "DELETE" });
       setSelectedId(null);
       setDraft(null);
       setModules([]);
@@ -261,7 +266,7 @@ export function AdminConsole({ ecosystemApps }: AdminConsoleProps) {
   const addModule = async () => {
     if (!selectedId) return;
     try {
-      const row = await academyApi<Module>(`/courses/${selectedId}/modules`, {
+      const row = await academyAdminApi<Module>(`/courses/${selectedId}/modules`, {
         method: "POST",
         body: JSON.stringify({ title: "New Module", description: "" }),
       });
@@ -274,7 +279,7 @@ export function AdminConsole({ ecosystemApps }: AdminConsoleProps) {
 
   const updateModule = async (module: Module, patch: Partial<Module>) => {
     try {
-      const updated = await academyApi<Module>(`/modules/${module.id}`, {
+      const updated = await academyAdminApi<Module>(`/modules/${module.id}`, {
         method: "PUT",
         body: JSON.stringify(patch),
       });
@@ -287,7 +292,7 @@ export function AdminConsole({ ecosystemApps }: AdminConsoleProps) {
   const deleteModule = async (module: Module) => {
     if (!window.confirm(`Delete module "${module.title}" and all of its lessons?`)) return;
     try {
-      await academyApi(`/modules/${module.id}`, { method: "DELETE" });
+      await academyAdminApi(`/modules/${module.id}`, { method: "DELETE" });
       setModules((current) => current.filter((row) => row.id !== module.id));
       setLessonsByModule((current) => {
         const next = { ...current };
@@ -311,7 +316,7 @@ export function AdminConsole({ ecosystemApps }: AdminConsoleProps) {
     setExpandedModules(next);
     if (!lessonsByModule[module.id]) {
       try {
-        const lessons = await academyApi<Lesson[]>(`/modules/${module.id}/lessons`);
+        const lessons = await academyAdminApi<Lesson[]>(`/modules/${module.id}/lessons`);
         setLessonsByModule((current) => ({ ...current, [module.id]: lessons }));
       } catch (error) {
         flash(error instanceof Error ? error.message : "Lessons could not be loaded", "error");
@@ -321,7 +326,7 @@ export function AdminConsole({ ecosystemApps }: AdminConsoleProps) {
 
   const addLesson = async (module: Module) => {
     try {
-      const lesson = await academyApi<Lesson>(`/modules/${module.id}/lessons`, {
+      const lesson = await academyAdminApi<Lesson>(`/modules/${module.id}/lessons`, {
         method: "POST",
         body: JSON.stringify({ title: "New Lesson", estimatedTime: "20 mins" }),
       });
@@ -338,7 +343,7 @@ export function AdminConsole({ ecosystemApps }: AdminConsoleProps) {
 
   const updateLesson = async (lesson: Lesson, patch: Partial<Lesson>) => {
     try {
-      const updated = await academyApi<Lesson>(`/lessons/${lesson.id}`, {
+      const updated = await academyAdminApi<Lesson>(`/lessons/${lesson.id}`, {
         method: "PUT",
         body: JSON.stringify(patch),
       });
@@ -355,7 +360,7 @@ export function AdminConsole({ ecosystemApps }: AdminConsoleProps) {
   const deleteLesson = async (lesson: Lesson) => {
     if (!window.confirm(`Delete lesson "${lesson.title}"?`)) return;
     try {
-      await academyApi(`/lessons/${lesson.id}`, { method: "DELETE" });
+      await academyAdminApi(`/lessons/${lesson.id}`, { method: "DELETE" });
       setLessonsByModule((current) => ({
         ...current,
         [lesson.moduleId]: (current[lesson.moduleId] || []).filter((row) => row.id !== lesson.id),
@@ -417,7 +422,39 @@ export function AdminConsole({ ecosystemApps }: AdminConsoleProps) {
           </p>
         </section>
       ) : (
-        <div className="grid grid-cols-1 xl:grid-cols-[420px_minmax(0,1fr)] gap-5">
+        <div className="space-y-4">
+          <div className="flex flex-wrap gap-2">
+            {[
+              ["courses", "Courses"],
+              ["learners", "Learners"],
+              ["publishing", "Publishing"],
+              ["import", "Import"],
+              ["junior", "Junior Academy"],
+            ].map(([id, label]) => (
+              <button
+                key={id}
+                onClick={() => setAcademyView(id as AcademyView)}
+                className={`px-3 py-2 rounded-lg border text-xs font-semibold ${
+                  academyView === id
+                    ? "bg-slate-950 border-slate-950 text-white"
+                    : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {academyView === "learners" ? (
+            <AcademyLearners />
+          ) : academyView === "publishing" ? (
+            <AcademyPublishing courses={courses} onCoursesChanged={loadCourses} />
+          ) : academyView === "import" ? (
+            <AcademyImport onImported={loadCourses} />
+          ) : academyView === "junior" ? (
+            <AcademyJuniorAdmin courses={courses} />
+          ) : (
+            <div className="grid grid-cols-1 xl:grid-cols-[420px_minmax(0,1fr)] gap-5">
           <section className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
             <div className="p-4 border-b border-slate-200 space-y-3">
               <div className="flex items-center justify-between gap-3">
@@ -555,6 +592,8 @@ export function AdminConsole({ ecosystemApps }: AdminConsoleProps) {
               </>
             )}
           </section>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -611,9 +650,173 @@ function LessonEditor({ lesson, onSave, onDelete }: { lesson: Lesson; onSave: (l
           <Field label="Audio URL"><input value={draft.audioUrl || ""} onChange={(e) => setDraft({ ...draft, audioUrl: e.target.value })} className="admin-input" /></Field>
           <Field label="Learning objectives — one per line" wide><textarea rows={3} value={(draft.learningObjectives || []).join("\n")} onChange={(e) => setDraft({ ...draft, learningObjectives: e.target.value.split("\n").map((value) => value.trim()).filter(Boolean) })} className="admin-input" /></Field>
           <Field label="Exercise prompt" wide><textarea rows={3} value={draft.exercisePrompt || ""} onChange={(e) => setDraft({ ...draft, exercisePrompt: e.target.value })} className="admin-input" /></Field>
+          <div className="md:col-span-2">
+            <QuizEditor lessonId={lesson.id} />
+          </div>
           <div className="md:col-span-2 flex justify-end">
             <button onClick={() => void save()} disabled={saving} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-950 text-white text-xs font-semibold disabled:opacity-50">
               {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />} Save lesson
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+function QuizEditor({ lessonId }: { lessonId: string }) {
+  const [quiz, setQuiz] = useState<Quiz | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  const load = async () => {
+    if (loaded) return;
+    try {
+      setQuiz(await academyAdminApi<Quiz | null>(`/lessons/${lessonId}/quiz`));
+      setLoaded(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Quiz could not be loaded.");
+    }
+  };
+
+  const toggle = async () => {
+    if (!open) await load();
+    setOpen(!open);
+  };
+
+  const ensureQuiz = () => {
+    if (quiz) return quiz;
+    const created: Quiz = {
+      id: "",
+      lessonId,
+      title: "Lesson Assessment",
+      passingScore: 80,
+      questions: [],
+    };
+    setQuiz(created);
+    return created;
+  };
+
+  const addQuestion = () => {
+    const current = ensureQuiz();
+    const next: QuizQuestion = {
+      id: crypto.randomUUID(),
+      questionText: "",
+      questionType: "multiple_choice",
+      options: ["Option A", "Option B"],
+      correctAnswer: "Option A",
+      explanation: "",
+      orderNumber: current.questions.length + 1,
+    };
+    setQuiz({ ...current, questions: [...current.questions, next] });
+  };
+
+  const updateQuestion = (id: string, patch: Partial<QuizQuestion>) => {
+    const current = ensureQuiz();
+    setQuiz({
+      ...current,
+      questions: current.questions.map((question) => question.id === id ? { ...question, ...patch } : question),
+    });
+  };
+
+  const removeQuestion = (id: string) => {
+    const current = ensureQuiz();
+    setQuiz({
+      ...current,
+      questions: current.questions
+        .filter((question) => question.id !== id)
+        .map((question, index) => ({ ...question, orderNumber: index + 1 })),
+    });
+  };
+
+  const save = async () => {
+    const current = ensureQuiz();
+    setSaving(true);
+    setError("");
+    try {
+      const saved = await academyAdminApi<Quiz>(`/lessons/${lessonId}/quiz`, {
+        method: "POST",
+        body: JSON.stringify({
+          title: current.title,
+          passingScore: Number(current.passingScore || 80),
+          questions: current.questions,
+        }),
+      });
+      setQuiz(saved);
+      setLoaded(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Quiz could not be saved.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="border border-slate-200 rounded-xl overflow-hidden">
+      <button type="button" onClick={() => void toggle()} className="w-full px-3 py-2.5 flex items-center justify-between bg-slate-50 text-xs font-semibold text-slate-700">
+        <span>Lesson quiz {quiz?.questions?.length ? `· ${quiz.questions.length} question(s)` : ""}</span>
+        {open ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+      </button>
+      {open && (
+        <div className="p-3 space-y-3">
+          {error && <div className="text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded-lg p-2">{error}</div>}
+          <div className="grid grid-cols-1 sm:grid-cols-[1fr_140px] gap-2">
+            <input value={quiz?.title || "Lesson Assessment"} onChange={(e) => setQuiz({ ...ensureQuiz(), title: e.target.value })} className="admin-input" placeholder="Quiz title" />
+            <label className="flex items-center gap-2 text-xs text-slate-600">
+              Pass %
+              <input type="number" min="1" max="100" value={quiz?.passingScore || 80} onChange={(e) => setQuiz({ ...ensureQuiz(), passingScore: Number(e.target.value) })} className="admin-input w-20" />
+            </label>
+          </div>
+          <div className="space-y-2">
+            {(quiz?.questions || []).map((question) => (
+              <div key={question.id} className="border border-slate-200 rounded-lg p-3 space-y-2">
+                <div className="flex gap-2">
+                  <input value={question.questionText} onChange={(e) => updateQuestion(question.id, { questionText: e.target.value })} className="admin-input flex-1" placeholder="Question" />
+                  <select
+                    value={question.questionType}
+                    onChange={(e) => {
+                      const type = e.target.value as QuizQuestion["questionType"];
+                      updateQuestion(question.id, {
+                        questionType: type,
+                        options: type === "true_false" ? ["True", "False"] : question.options,
+                        correctAnswer: type === "true_false" ? "True" : question.correctAnswer,
+                      });
+                    }}
+                    className="admin-input w-40"
+                  >
+                    <option value="multiple_choice">Multiple choice</option>
+                    <option value="true_false">True / false</option>
+                  </select>
+                  <button type="button" onClick={() => removeQuestion(question.id)} className="p-2 text-rose-600"><Trash2 className="w-4 h-4" /></button>
+                </div>
+                {question.questionType === "multiple_choice" ? (
+                  <>
+                    <textarea
+                      rows={2}
+                      value={question.options.join("\n")}
+                      onChange={(e) => updateQuestion(question.id, { options: e.target.value.split("\n").map((v) => v.trim()).filter(Boolean) })}
+                      className="admin-input"
+                      placeholder="Options — one per line"
+                    />
+                    <input value={String(question.correctAnswer ?? "")} onChange={(e) => updateQuestion(question.id, { correctAnswer: e.target.value })} className="admin-input" placeholder="Correct answer — exact option text" />
+                  </>
+                ) : (
+                  <select value={String(question.correctAnswer || "True")} onChange={(e) => updateQuestion(question.id, { correctAnswer: e.target.value })} className="admin-input">
+                    <option value="True">True</option>
+                    <option value="False">False</option>
+                  </select>
+                )}
+                <textarea rows={2} value={question.explanation || ""} onChange={(e) => updateQuestion(question.id, { explanation: e.target.value })} className="admin-input" placeholder="Explanation shown after answering" />
+              </div>
+            ))}
+          </div>
+          <div className="flex items-center justify-between">
+            <button type="button" onClick={addQuestion} className="px-3 py-2 rounded-lg border border-slate-200 text-xs font-semibold inline-flex items-center gap-1"><Plus className="w-3.5 h-3.5" /> Add question</button>
+            <button type="button" disabled={saving} onClick={() => void save()} className="px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-semibold disabled:opacity-50">
+              {saving ? "Saving..." : "Save quiz"}
             </button>
           </div>
         </div>
