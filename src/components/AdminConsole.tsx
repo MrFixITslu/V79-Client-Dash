@@ -12,6 +12,8 @@ import { AcademyImport } from "./AcademyImport";
 import { AcademyJuniorAdmin } from "./AcademyJuniorAdmin";
 import { TiquetPlatformAdmin } from "./TiquetPlatformAdmin";
 import { MarketingPlatformAdmin } from "./MarketingPlatformAdmin";
+import { POSPlatformAdmin } from "./POSPlatformAdmin";
+import { FFPROPlatformAdmin } from "./FFPROPlatformAdmin";
 
 type CourseStatus = "Draft" | "Review" | "Ready for Upload" | "Uploaded" | "Imported" | "Published" | "Archived";
 type PricingType = "free" | "free_trial" | "premium" | "subscription";
@@ -84,7 +86,7 @@ interface AdminConsoleProps {
 }
 
 type AdminSection = "academy" | "platform";
-type PlatformView = "tiquet" | "marketing";
+type PlatformView = "pos" | "ffpro" | "tiquet" | "marketing";
 type AcademyView = "courses" | "learners" | "publishing" | "import" | "junior";
 const emptyCourse = (): Partial<Course> => ({
   title: "",
@@ -422,6 +424,8 @@ export function AdminConsole({ ecosystemApps }: AdminConsoleProps) {
         <div className="space-y-4">
           <div className="flex flex-wrap gap-2">
             {[
+              ["pos", "POS"],
+              ["ffpro", "FFPRO"],
               ["tiquet", "Tiquet"],
               ["marketing", "Marketing"],
             ].map(([id, label]) => (
@@ -437,10 +441,17 @@ export function AdminConsole({ ecosystemApps }: AdminConsoleProps) {
                 {label}
               </button>
             ))}
-            <span className="px-3 py-2 text-[10px] text-slate-400">POS and FFPRO platform controls are next.</span>
           </div>
 
-          {platformView === "marketing" ? <MarketingPlatformAdmin /> : <TiquetPlatformAdmin />}
+          {platformView === "pos" ? (
+            <POSPlatformAdmin />
+          ) : platformView === "ffpro" ? (
+            <FFPROPlatformAdmin />
+          ) : platformView === "marketing" ? (
+            <MarketingPlatformAdmin />
+          ) : (
+            <TiquetPlatformAdmin />
+          )}
         </div>
       ) : (
         <div className="space-y-4">
