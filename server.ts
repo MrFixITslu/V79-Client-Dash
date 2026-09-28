@@ -6,7 +6,6 @@ import path from "path";
 import { fileURLToPath } from "url";
 import fs from "fs";
 import crypto from "crypto";
-import { GoogleGenAI, Type } from "@google/genai";
 import { signPlatformRequest, verifyPlatformRequest } from "./server/platform-contract.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -34,23 +33,6 @@ const STORE_FILE = path.join(DATA_DIR, "v79_store.json");
 process.umask(0o077);
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
 
-interface InventoryItem {
-  id: string;
-  name: string;
-  sku: string;
-  category: string;
-  quantity: number;
-  price: number;
-  costPrice: number;
-  lastUpdated: string;
-  reorderThreshold: number;
-  tags: string[];
-  barcode?: string;
-  manufacturer?: string;
-  imageUrl?: string;
-  location?: string;
-}
-
 interface StoredUser {
   id: string;
   username: string;
@@ -62,44 +44,8 @@ interface StoredUser {
   createdAt: string;
 }
 
-interface Transaction {
-  id: string;
-  receiptNumber: string;
-  date: string;
-  customerName: string;
-  customerContact?: string;
-  paymentMethod: string;
-  items: {
-    item: {
-      id: string;
-      name: string;
-      sku: string;
-      category: string;
-      price: number;
-    };
-    quantity: number;
-    unitPrice: number;
-  }[];
-  subtotal: number;
-  tax: number;
-  total: number;
-  cashier: string;
-  notes?: string;
-  status: "completed" | "refunded";
-}
-
-interface StoreSettings {
+interface WorkspaceProfile {
   companyName: string;
-  tradingName: string;
-  country: string;
-  city: string;
-  email: string;
-  phone: string;
-  currency: string;
-  taxRate: number; // e.g. 12.5%
-  enableTax: boolean;
-  posApiKey?: string;
-  webhookUrl?: string;
 }
 
 interface EcosystemApp {
@@ -132,313 +78,17 @@ interface EcosystemApp {
   lastSync?: string;
 }
 
-interface TiquetTicket {
-  id: string;
-  ticketNumber: string;
-  title: string;
-  clientName: string;
-  clientContact: string;
-  priority: "urgent" | "high" | "normal" | "low";
-  status: "open" | "in_progress" | "waiting_parts" | "resolved";
-  linkedSku?: string;
-  linkedItemName?: string;
-  technician: string;
-  createdAt: string;
-  slaDeadline: string;
-  notes: string;
-}
-
-interface FFPROSyncRecord {
-  id: string;
-  date: string;
-  type: "pos_revenue" | "inventory_asset_valuation" | "cogs_expense";
-  title: string;
-  amount: number;
-  status: "synced" | "pending";
-  source: string;
-}
-
-interface MarketingCampaign {
-  id: string;
-  name: string;
-  channel: "WhatsApp Business" | "Instagram" | "LinkedIn" | "Email" | "Store Display";
-  discountCode?: string;
-  discountPercent?: number;
-  targetProduct?: string;
-  reach: number;
-  conversions: number;
-  status: "active" | "scheduled" | "ended";
-  budgetXCD: number;
-}
-
 interface AppStore {
-  inventory: InventoryItem[];
   users: StoredUser[];
-  transactions: Transaction[];
-  settings: StoreSettings;
+  workspace: WorkspaceProfile;
   ecosystemApps: EcosystemApp[];
-  tickets: TiquetTicket[];
-  ffproRecords: FFPROSyncRecord[];
-  marketingCampaigns: MarketingCampaign[];
 }
 
 // Initial Seed Data
-const defaultInventory: InventoryItem[] = [
-  {
-    id: "v79-1",
-    name: "UniFi Dream Machine Pro (UDM-Pro)",
-    sku: "NET-UDM-001",
-    category: "Networking",
-    quantity: 14,
-    price: 499.00,
-    costPrice: 380.00,
-    lastUpdated: new Date().toISOString(),
-    reorderThreshold: 5,
-    tags: ["ubiquiti", "routing", "firewall", "rackmount"],
-    barcode: "810354918231",
-    manufacturer: "Ubiquiti Networks",
-    location: "Rack A-01",
-    imageUrl: "https://images.unsplash.com/photo-1544197150-b99a580bb7a8?w=500&auto=format&fit=crop&q=80"
-  },
-  {
-    id: "v79-2",
-    name: "Cisco Catalyst 24-Port Gigabit PoE+ Switch",
-    sku: "NET-CS-24P",
-    category: "Networking",
-    quantity: 6,
-    price: 649.99,
-    costPrice: 480.00,
-    lastUpdated: new Date().toISOString(),
-    reorderThreshold: 8,
-    tags: ["cisco", "switch", "poe", "managed"],
-    barcode: "882658129034",
-    manufacturer: "Cisco Systems",
-    location: "Rack A-02",
-    imageUrl: "https://images.unsplash.com/photo-1558494949-ef010cbdcc31?w=500&auto=format&fit=crop&q=80"
-  },
-  {
-    id: "v79-3",
-    name: "Star Micronics TSP143III Thermal POS Printer",
-    sku: "POS-PRN-010",
-    category: "POS Hardware",
-    quantity: 18,
-    price: 245.00,
-    costPrice: 175.00,
-    lastUpdated: new Date().toISOString(),
-    reorderThreshold: 10,
-    tags: ["thermal", "receipt", "usb", "pos"],
-    barcode: "088047011922",
-    manufacturer: "Star Micronics",
-    location: "Shelf B-04",
-    imageUrl: "https://images.unsplash.com/photo-1612815154858-60aa4c59eaa6?w=500&auto=format&fit=crop&q=80"
-  },
-  {
-    id: "v79-4",
-    name: "Zebra DS2208 Handheld 2D Barcode Scanner",
-    sku: "POS-SCN-220",
-    category: "POS Hardware",
-    quantity: 25,
-    price: 119.50,
-    costPrice: 78.00,
-    lastUpdated: new Date().toISOString(),
-    reorderThreshold: 12,
-    tags: ["scanner", "2d", "qr", "usb"],
-    barcode: "753584820193",
-    manufacturer: "Zebra Technologies",
-    location: "Shelf B-02",
-    imageUrl: "https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?w=500&auto=format&fit=crop&q=80"
-  },
-  {
-    id: "v79-5",
-    name: "APC Smart-UPS 1500VA LCD 120V Battery Backup",
-    sku: "PWR-UPS-1500",
-    category: "Power & Infrastructure",
-    quantity: 4,
-    price: 589.00,
-    costPrice: 440.00,
-    lastUpdated: new Date().toISOString(),
-    reorderThreshold: 5,
-    tags: ["apc", "ups", "surge", "battery"],
-    barcode: "731304268712",
-    manufacturer: "Schneider Electric",
-    location: "Bay C-Floor",
-    imageUrl: "https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=500&auto=format&fit=crop&q=80"
-  },
-  {
-    id: "v79-6",
-    name: "Cat6A Pure Copper Bulk Cable Spool 1000ft (Blue)",
-    sku: "CAB-C6A-1000",
-    category: "Cabling & Infrastructure",
-    quantity: 32,
-    price: 185.00,
-    costPrice: 120.00,
-    lastUpdated: new Date().toISOString(),
-    reorderThreshold: 15,
-    tags: ["cable", "cat6a", "bulk", "networking"],
-    barcode: "639725890123",
-    manufacturer: "TrueCable",
-    location: "Warehouse D-10",
-    imageUrl: "https://images.unsplash.com/photo-1544197150-b99a580bb7a8?w=500&auto=format&fit=crop&q=80"
-  },
-  {
-    id: "v79-7",
-    name: "Logitech MX Master 3S Wireless Performance Mouse",
-    sku: "ACC-LOG-MX3S",
-    category: "Peripherals & Workstations",
-    quantity: 42,
-    price: 99.99,
-    costPrice: 72.00,
-    lastUpdated: new Date().toISOString(),
-    reorderThreshold: 10,
-    tags: ["logitech", "bluetooth", "ergonomic", "mouse"],
-    barcode: "097855174543",
-    manufacturer: "Logitech",
-    location: "Shelf E-01",
-    imageUrl: "https://images.unsplash.com/photo-1527864550417-7fd91fc51a46?w=500&auto=format&fit=crop&q=80"
-  },
-  {
-    id: "v79-8",
-    name: "Keychron K2 Pro QMK/VIA Wireless Keyboard",
-    sku: "ACC-KEY-K2P",
-    category: "Peripherals & Workstations",
-    quantity: 19,
-    price: 139.00,
-    costPrice: 95.00,
-    lastUpdated: new Date().toISOString(),
-    reorderThreshold: 8,
-    tags: ["keyboard", "mechanical", "wireless", "rgb"],
-    barcode: "697241285012",
-    manufacturer: "Keychron",
-    location: "Shelf E-03",
-    imageUrl: "https://images.unsplash.com/photo-1587829741301-dc798b83add3?w=500&auto=format&fit=crop&q=80"
-  },
-  {
-    id: "v79-9",
-    name: "Dell UltraSharp 27 4K USB-C Hub Monitor (U2723QE)",
-    sku: "MON-DEL-27U",
-    category: "Peripherals & Workstations",
-    quantity: 7,
-    price: 620.00,
-    costPrice: 470.00,
-    lastUpdated: new Date().toISOString(),
-    reorderThreshold: 5,
-    tags: ["monitor", "4k", "ips", "usbc", "dell"],
-    barcode: "884116398210",
-    manufacturer: "Dell Technologies",
-    location: "Storage F-02",
-    imageUrl: "https://images.unsplash.com/photo-1527443224154-c4a3942d3acf?w=500&auto=format&fit=crop&q=80"
-  },
-  {
-    id: "v79-10",
-    name: "Heavy-Duty 16-Inch POS Steel Cash Drawer",
-    sku: "POS-CSH-16B",
-    category: "POS Hardware",
-    quantity: 11,
-    price: 89.00,
-    costPrice: 55.00,
-    lastUpdated: new Date().toISOString(),
-    reorderThreshold: 6,
-    tags: ["cash drawer", "steel", "security", "rj12"],
-    barcode: "712398450192",
-    manufacturer: "APG Cash Drawer",
-    location: "Shelf B-06",
-    imageUrl: "https://images.unsplash.com/photo-1556742049-0a67c5574f73?w=500&auto=format&fit=crop&q=80"
-  }
-];
-
 const defaultUsers: StoredUser[] = [];
 
-const defaultTransactions: Transaction[] = [
-  {
-    id: "txn_1740001",
-    receiptNumber: "V79-2026-1082",
-    date: new Date(Date.now() - 3600 * 1000 * 2).toISOString(),
-    customerName: "St. Lucia Ministry of Infrastructure",
-    customerContact: "ict@govt.lc",
-    paymentMethod: "Bank Transfer",
-    items: [
-      {
-        item: {
-          id: "v79-1",
-          name: "UniFi Dream Machine Pro (UDM-Pro)",
-          sku: "NET-UDM-001",
-          category: "Networking",
-          price: 499.00
-        },
-        quantity: 2,
-        unitPrice: 499.00
-      },
-      {
-        item: {
-          id: "v79-6",
-          name: "Cat6A Pure Copper Bulk Cable Spool 1000ft (Blue)",
-          sku: "CAB-C6A-1000",
-          category: "Cabling & Infrastructure",
-          price: 185.00
-        },
-        quantity: 3,
-        unitPrice: 185.00
-      }
-    ],
-    subtotal: 1553.00,
-    tax: 194.13,
-    total: 1747.13,
-    cashier: "admin",
-    notes: "Site office networking project deployment",
-    status: "completed"
-  },
-  {
-    id: "txn_1740002",
-    receiptNumber: "V79-2026-1083",
-    date: new Date(Date.now() - 3600 * 1000 * 5).toISOString(),
-    customerName: "Baywalk Retail Point",
-    customerContact: "accounts@baywalkslu.com",
-    paymentMethod: "Credit Card",
-    items: [
-      {
-        item: {
-          id: "v79-3",
-          name: "Star Micronics TSP143III Thermal POS Printer",
-          sku: "POS-PRN-010",
-          category: "POS Hardware",
-          price: 245.00
-        },
-        quantity: 1,
-        unitPrice: 245.00
-      },
-      {
-        item: {
-          id: "v79-4",
-          name: "Zebra DS2208 Handheld 2D Barcode Scanner",
-          sku: "POS-SCN-220",
-          category: "POS Hardware",
-          price: 119.50
-        },
-        quantity: 1,
-        unitPrice: 119.50
-      }
-    ],
-    subtotal: 364.50,
-    tax: 45.56,
-    total: 410.06,
-    cashier: "staff",
-    notes: "Register #2 upgrade kit",
-    status: "completed"
-  }
-];
-
-const defaultSettings: StoreSettings = {
-  companyName: "Vision 79 Ltd",
-  tradingName: "V79 Digital Hub",
-  country: "Saint Lucia",
-  city: "Castries",
-  email: "Vision79SLU@gmail.com",
-  phone: "+1 (758) 450-7979",
-  currency: "XCD",
-  taxRate: 12.5,
-  enableTax: true,
-  posApiKey: "",
-  webhookUrl: "https://api.vision79.lc/webhooks/pos"
+const defaultWorkspace: WorkspaceProfile = {
+  companyName: process.env.V79_HUB_ORG_NAME || "V79 Digital",
 };
 
 const defaultEcosystemApps: EcosystemApp[] = [
@@ -689,222 +339,86 @@ const defaultEcosystemApps: EcosystemApp[] = [
   }
 ];
 
-const defaultTickets: TiquetTicket[] = [
-  {
-    id: "tiq-1",
-    ticketNumber: "TIQ-4091",
-    title: "UniFi UDM-Pro SFP+ 10G WAN Link Flapping",
-    clientName: "Castries Port Authority",
-    clientContact: "+1 (758) 457-6100",
-    priority: "urgent",
-    status: "open",
-    linkedSku: "NET-UDM-001",
-    linkedItemName: "UniFi Dream Machine Pro (UDM-Pro)",
-    technician: "Marcus Theodore (Lead Network Eng)",
-    createdAt: new Date(Date.now() - 1000 * 3600 * 3).toISOString(),
-    slaDeadline: new Date(Date.now() + 1000 * 3600 * 1).toISOString(),
-    notes: "Main optical transceiver dropping packets on high tide telemetry. Dispatched technician with replacement Cat6A & 10G SFP+ module."
-  },
-  {
-    id: "tiq-2",
-    ticketNumber: "TIQ-4092",
-    title: "Thermal Printer Auto-Cutter Failure on POS Register #3",
-    clientName: "Rodney Bay Marina Duty Free",
-    clientContact: "it@rbmarina.lc",
-    priority: "high",
-    status: "in_progress",
-    linkedSku: "POS-PRN-010",
-    linkedItemName: "Star Micronics TSP143III Thermal Printer",
-    technician: "Darren St. Rose (Hardware Tech)",
-    createdAt: new Date(Date.now() - 1000 * 3600 * 5).toISOString(),
-    slaDeadline: new Date(Date.now() + 1000 * 3600 * 3).toISOString(),
-    notes: "Cutter blade jammed on thick receipt stock. Cleaned sensor and running diagnostic self-test."
-  },
-  {
-    id: "tiq-3",
-    ticketNumber: "TIQ-4093",
-    title: "Cash Drawer 24V Solenoid RJ12 Kick Trigger Malfunction",
-    clientName: "Vieux Fort Hardware & Supplies",
-    clientContact: "+1 (758) 454-9988",
-    priority: "normal",
-    status: "waiting_parts",
-    linkedSku: "POS-CAS-001",
-    linkedItemName: "APG Vasario Heavy Duty Cash Drawer 1616",
-    technician: "Darren St. Rose (Hardware Tech)",
-    createdAt: new Date(Date.now() - 1000 * 3600 * 24).toISOString(),
-    slaDeadline: new Date(Date.now() + 1000 * 3600 * 12).toISOString(),
-    notes: "Awaiting replacement interface cable RJ12-to-Star printer from inventory Bay B-05."
-  },
-  {
-    id: "tiq-4",
-    ticketNumber: "TIQ-4094",
-    title: "Structured Cabling Run (Cat6A) Termination Certification",
-    clientName: "Ministry of Commerce & Innovation",
-    clientContact: "tech@commerce.govt.lc",
-    priority: "normal",
-    status: "resolved",
-    linkedSku: "CAB-C6A-1000",
-    linkedItemName: "Cat6A Pure Copper Bulk Cable Spool 1000ft (Blue)",
-    technician: "Marcus Theodore (Lead Network Eng)",
-    createdAt: new Date(Date.now() - 1000 * 3600 * 48).toISOString(),
-    slaDeadline: new Date(Date.now() - 1000 * 3600 * 24).toISOString(),
-    notes: "Fluke tester certified 10 Gbps on all 24 keystones. Client signed off on completion certificate."
-  }
-];
-
-const defaultFFPRORecords: FFPROSyncRecord[] = [
-  {
-    id: "ffp-1",
-    date: new Date(Date.now() - 3600 * 1000 * 2).toISOString(),
-    type: "pos_revenue",
-    title: "POS Register Batch Sync - Receipt #V79-2026-1082",
-    amount: 410.06,
-    status: "synced",
-    source: "V79 POS Register #1"
-  },
-  {
-    id: "ffp-2",
-    date: new Date(Date.now() - 3600 * 1000 * 26).toISOString(),
-    type: "inventory_asset_valuation",
-    title: "Hardware Asset Capitalization (Networking & Peripherals)",
-    amount: 14680.00,
-    status: "synced",
-    source: "V79 Inventory Valuation Engine"
-  },
-  {
-    id: "ffp-3",
-    date: new Date(Date.now() - 3600 * 1000 * 48).toISOString(),
-    type: "cogs_expense",
-    title: "Supplier Stock Restock Wire Transfer - Ubiquiti Dist.",
-    amount: -8450.00,
-    status: "synced",
-    source: "Ordely Supplier Settlement"
-  }
-];
-
-const defaultMarketingCampaigns: MarketingCampaign[] = [
-  {
-    id: "mkt-1",
-    name: "Spring POS Hardware & Modernization Upgrade",
-    channel: "WhatsApp Business",
-    discountCode: "V79POS10",
-    discountPercent: 10,
-    targetProduct: "POS Hardware & Terminals",
-    reach: 8420,
-    conversions: 42,
-    status: "active",
-    budgetXCD: 1200
-  },
-  {
-    id: "mkt-2",
-    name: "Enterprise UniFi Fiber High-Speed Networking",
-    channel: "LinkedIn",
-    discountCode: "UNIFI79",
-    discountPercent: 15,
-    targetProduct: "UniFi Dream Machine Pro",
-    reach: 3110,
-    conversions: 18,
-    status: "active",
-    budgetXCD: 850
-  },
-  {
-    id: "mkt-3",
-    name: "Castries Tech Hub Loyalty Member Flash Deal",
-    channel: "Instagram",
-    discountCode: "V79PERK",
-    discountPercent: 8,
-    targetProduct: "Peripherals & Workstations",
-    reach: 2670,
-    conversions: 34,
-    status: "active",
-    budgetXCD: 500
-  }
-];
-
 // Store loader and writer
+function normalizeEcosystemApps(value: unknown): EcosystemApp[] {
+  let loadedApps: EcosystemApp[] = Array.isArray(value) && value.length > 0
+    ? value as EcosystemApp[]
+    : defaultEcosystemApps.map(app => ({ ...app }));
+
+  const v79posApp = defaultEcosystemApps.find(app => app.id === "app-v79pos")!;
+  const academyApp = defaultEcosystemApps.find(app => app.id === "app-academy")!;
+
+  loadedApps = loadedApps.map((app) => {
+    if (app.id === "app-ffpro" || app.shortName === "FFPRO") return { ...app, appUrl: "https://ffpro.v79sl.com" };
+    if (app.id === "app-tiquet" || app.shortName === "Tiquet") return { ...app, appUrl: "https://tiquet.v79sl.com" };
+    if (app.id === "app-marketing" || app.shortName === "Marketing") return { ...app, appUrl: "https://marketing.v79sl.com" };
+    if (app.id === "app-v79pos" || app.shortName === "V79 POS") return { ...app, appUrl: "https://pos.v79sl.com" };
+    if (app.id === "app-academy" || app.shortName === "Academy") return { ...app, appUrl: "https://v79academy.v79sl.com/academy" };
+    if (app.id === "app-ordely" || app.shortName === "Ordely" || app.name?.toLowerCase().includes("ordely")) return { ...v79posApp };
+    return app;
+  });
+
+  if (!loadedApps.some(app => app.id === "app-v79pos")) loadedApps.splice(3, 0, { ...v79posApp });
+  if (!loadedApps.some(app => app.id === "app-academy")) {
+    const posIndex = loadedApps.findIndex(app => app.id === "app-v79pos");
+    loadedApps.splice(posIndex >= 0 ? posIndex : loadedApps.length, 0, { ...academyApp });
+  }
+  return loadedApps;
+}
+
 function loadStore(): AppStore {
   try {
     if (fs.existsSync(STORE_FILE)) {
-      const raw = fs.readFileSync(STORE_FILE, "utf-8");
-      const parsed = JSON.parse(raw);
-      let loadedApps: EcosystemApp[] = Array.isArray(parsed.ecosystemApps) && parsed.ecosystemApps.length > 0 ? parsed.ecosystemApps : defaultEcosystemApps;
-      // Auto-migrate to canonical v79sl.com domains and swap Ordely with V79 POS
-      const v79posApp = defaultEcosystemApps.find((da) => da.id === "app-v79pos")!;
-      loadedApps = loadedApps.map((a: EcosystemApp) => {
-        if (a.id === "app-ffpro" || a.shortName === "FFPRO") {
-          return { ...a, appUrl: "https://ffpro.v79sl.com" };
-        }
-        if (a.id === "app-tiquet" || a.shortName === "Tiquet") {
-          return { ...a, appUrl: "https://tiquet.v79sl.com" };
-        }
-        if (a.id === "app-marketing" || a.shortName === "Marketing") {
-          return { ...a, appUrl: "https://marketing.v79sl.com" };
-        }
-        if (a.id === "app-ordely" || a.shortName === "Ordely" || a.name?.toLowerCase().includes("ordely")) {
-          return { ...v79posApp };
-        }
-        if (a.id === "app-v79pos" || a.shortName === "V79 POS") {
-          return { ...a, appUrl: "https://pos.v79sl.com" };
-        }
-        return a;
-      });
+      const parsed = JSON.parse(fs.readFileSync(STORE_FILE, "utf-8"));
+      const legacyCompanyName = typeof parsed?.settings?.companyName === "string"
+        ? parsed.settings.companyName.trim()
+        : "";
+      const workspaceCompanyName = typeof parsed?.workspace?.companyName === "string"
+        ? parsed.workspace.companyName.trim()
+        : "";
 
-      // Ensure v79pos is present if it wasn't
-      if (!loadedApps.some((a) => a.id === "app-v79pos" || a.shortName === "V79 POS")) {
-        loadedApps.splice(3, 0, v79posApp);
-      }
-
-      // Ensure app-academy is present
-      const academyApp = defaultEcosystemApps.find((da) => da.id === "app-academy");
-      if (academyApp && !loadedApps.some((a) => a.id === "app-academy" || a.shortName === "Academy")) {
-        const insertIdx = loadedApps.findIndex((a) => a.id === "app-v79pos");
-        if (insertIdx !== -1) {
-          loadedApps.splice(insertIdx, 0, academyApp);
-        } else {
-          loadedApps.push(academyApp);
-        }
-      }
-
-      const loadedStore: AppStore = {
-        inventory: Array.isArray(parsed.inventory) ? parsed.inventory : defaultInventory,
+      return {
         users: Array.isArray(parsed.users) ? parsed.users : defaultUsers,
-        transactions: Array.isArray(parsed.transactions) ? parsed.transactions : defaultTransactions,
-        settings: parsed.settings ? { ...defaultSettings, ...parsed.settings } : defaultSettings,
-        ecosystemApps: loadedApps,
-        tickets: Array.isArray(parsed.tickets) && parsed.tickets.length > 0 ? parsed.tickets : defaultTickets,
-        ffproRecords: Array.isArray(parsed.ffproRecords) && parsed.ffproRecords.length > 0 ? parsed.ffproRecords : defaultFFPRORecords,
-        marketingCampaigns: Array.isArray(parsed.marketingCampaigns) && parsed.marketingCampaigns.length > 0 ? parsed.marketingCampaigns : defaultMarketingCampaigns
+        workspace: {
+          companyName: workspaceCompanyName || legacyCompanyName || defaultWorkspace.companyName,
+        },
+        ecosystemApps: normalizeEcosystemApps(parsed.ecosystemApps),
       };
-      saveStore(loadedStore);
-      return loadedStore;
     }
   } catch (err) {
     throw new Error(`Unable to read existing Hub data at ${STORE_FILE}; restore from backup instead of replacing it.`, { cause: err });
   }
 
   const initialStore: AppStore = {
-    inventory: process.env.NODE_ENV === "production" ? [] : defaultInventory,
     users: defaultUsers,
-    transactions: process.env.NODE_ENV === "production" ? [] : defaultTransactions,
-    settings: defaultSettings,
-    ecosystemApps: defaultEcosystemApps,
-    tickets: process.env.NODE_ENV === "production" ? [] : defaultTickets,
-    ffproRecords: process.env.NODE_ENV === "production" ? [] : defaultFFPRORecords,
-    marketingCampaigns: process.env.NODE_ENV === "production" ? [] : defaultMarketingCampaigns
+    workspace: { ...defaultWorkspace },
+    ecosystemApps: defaultEcosystemApps.map(app => ({ ...app })),
   };
   saveStore(initialStore);
   return initialStore;
 }
 
 function saveStore(store: AppStore): void {
-  try {
-    const tempFile = STORE_FILE + ".tmp";
-    fs.writeFileSync(tempFile, JSON.stringify(store, null, 2), { encoding: "utf-8", mode: 0o600 });
-    fs.renameSync(tempFile, STORE_FILE);
-    fs.chmodSync(STORE_FILE, 0o600);
-  } catch (err) {
-    throw err;
+  let existing: Record<string, unknown> = {};
+  if (fs.existsSync(STORE_FILE)) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(STORE_FILE, "utf-8"));
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) existing = parsed;
+    } catch (err) {
+      throw new Error(`Unable to preserve existing Hub data at ${STORE_FILE}.`, { cause: err });
+    }
   }
+
+  const persisted = {
+    ...existing,
+    users: store.users,
+    workspace: store.workspace,
+    ecosystemApps: store.ecosystemApps,
+  };
+  const tempFile = STORE_FILE + ".tmp";
+  fs.writeFileSync(tempFile, JSON.stringify(persisted, null, 2), { encoding: "utf-8", mode: 0o600 });
+  fs.renameSync(tempFile, STORE_FILE);
+  fs.chmodSync(STORE_FILE, 0o600);
 }
 
 // In-Memory store synchronized with disk
@@ -936,7 +450,7 @@ if (adminPassword) {
   const username = process.env.V79_HUB_ADMIN_USERNAME || "admin";
   let admin = store.users.find(u => u.username.toLowerCase() === username.toLowerCase());
   if (!admin) {
-    admin = { id: crypto.randomUUID(), username, password: "", fullName: "Hub Administrator", role: "admin", permissions: ["dashboard","inventory","pos","invoices","reports","settings","users"], createdAt: new Date().toISOString() };
+    admin = { id: crypto.randomUUID(), username, password: "", fullName: "Hub Administrator", role: "admin", permissions: ["overview","connections","team","security","billing","users"], createdAt: new Date().toISOString() };
     store.users.push(admin);
   }
   // Only replace a password when initially bootstrapping; subsequent edits in
@@ -1043,7 +557,7 @@ app.post("/api/platform/session/consume", (req, res) => {
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(503).json({ error: "Hub owner email is not configured." });
   res.json({
     user: { id: posUserId(entry.userId), email, name: store.users.find(u => u.id === entry.userId)?.fullName || email },
-    organization: { id: entry.tenantId, name: store.settings.companyName || "Vision79", slug: `v79-${entry.tenantId.slice(0, 12)}` },
+    organization: { id: entry.tenantId, name: store.workspace.companyName || "V79 Digital", slug: `v79-${entry.tenantId.slice(0, 12)}` },
     role: "owner", plan: "beta", accessMode: "beta",
     entitlement: { product, enabled: true, access: "owner" },
     assignedProducts: ["ffpro", "tiquet", "marketing"],
@@ -1065,7 +579,7 @@ function broadcast(data: any, sender?: WebSocket) {
   wss.clients.forEach((client) => {
     const session = [...sessions.values()].find(s => s.userId === (client as any).userId && s.expiresAt > Date.now());
     if (client.readyState === WebSocket.OPEN && client !== sender && session &&
-        (!["USERS_UPDATED","TRANSACTION_CREATED","FFPRO_RECORDS_UPDATED"].includes(data.type) || session.role === "admin")) {
+        (data.type !== "USERS_UPDATED" || session.role === "admin")) {
       client.send(message);
     }
   });
@@ -1096,9 +610,20 @@ function requireRole(...roles: StoredUser["role"][]) {
   };
 }
 
+const allowedHubPermissions = new Set(["overview", "connections", "team", "security", "billing", "users"]);
+function normalizePermissions(value: unknown, role: StoredUser["role"]) {
+  const requested = Array.isArray(value)
+    ? value.filter(permission => typeof permission === "string" && allowedHubPermissions.has(permission))
+    : [];
+  if (requested.length > 0) return [...new Set(requested)];
+  if (role === "admin") return ["overview", "connections", "team", "security", "billing", "users"];
+  if (role === "manager") return ["overview", "connections", "team", "security", "billing"];
+  if (role === "staff") return ["overview", "connections"];
+  return ["overview"];
+}
 function sanitizeUser(u: StoredUser) {
   const { password, ...safeUser } = u;
-  return safeUser;
+  return { ...safeUser, permissions: normalizePermissions(safeUser.permissions, safeUser.role) };
 }
 
 // ==========================================
@@ -1236,6 +761,7 @@ const retiredEmbeddedAppPaths = [
   "/api/transactions",
   "/api/pos",
   "/api/settings",
+  "/api/ai",
   "/api/ecosystem/tiquet",
   "/api/ecosystem/ffpro",
   "/api/ecosystem/marketing",
@@ -1244,15 +770,7 @@ app.use(retiredEmbeddedAppPaths, (_req, res) => {
   res.status(410).json({ error: "This embedded Hub app-data API has been retired. Use the dedicated V79 application." });
 });
 app.use("/api/users", requireRole("admin"));
-app.use("/api/settings", (req, res, next) => req.method === "GET" ? next() : requireRole("admin")(req, res, next));
-app.use("/api/inventory", (req, res, next) => ["GET", "HEAD"].includes(req.method) ? next() : requireRole("admin", "manager", "staff")(req, res, next));
-app.use("/api/pos", requireRole("admin", "manager", "staff"));
-app.use("/api/transactions", requireRole("admin"));
-app.use("/api/ecosystem/ffpro", requireRole("admin"));
 app.use("/api/ecosystem/apps", (req, res, next) => req.method === "GET" ? next() : requireRole("admin")(req, res, next));
-app.use("/api/ecosystem/tiquet", (req, res, next) => req.method === "GET" ? next() : requireRole("admin", "manager", "staff")(req, res, next));
-app.use("/api/ecosystem/marketing", (req, res, next) => req.method === "GET" ? next() : requireRole("admin", "manager")(req, res, next));
-app.use("/api/ai", requireRole("admin", "manager"));
 
 app.get("/api/apps/pos/launch", requireRole("admin"), async (req, res) => {
   if (posSecret.length < 32) return res.status(503).json({ error: "POS shared secret is not configured" });
@@ -1260,7 +778,7 @@ app.get("/api/apps/pos/launch", requireRole("admin"), async (req, res) => {
   if (session.userId !== posIdentity.ownerUserId) return res.status(403).json({ error: "Only the workspace owner can launch POS" });
   const pathname = "/api/platform/provision";
   const body = JSON.stringify({
-    organization: { id: posIdentity.organizationId, name: store.settings.companyName || "Vision79", slug: `v79-${posIdentity.organizationId.slice(0, 12)}` },
+    organization: { id: posIdentity.organizationId, name: store.workspace.companyName || "V79 Digital", slug: `v79-${posIdentity.organizationId.slice(0, 12)}` },
     user: { id: posUserId(session.userId) }, role: "owner"
   });
   const timestamp = String(Date.now());
@@ -1323,7 +841,7 @@ app.post("/api/users", (req, res) => {
     password: hashPassword(password),
     fullName: fullName || username,
     role: role || "staff",
-    permissions: Array.isArray(permissions) ? permissions : ["dashboard", "inventory", "pos", "reports"],
+    permissions: normalizePermissions(permissions, role || "staff"),
     createdAt: new Date().toISOString(),
     lastLogin: undefined
   };
@@ -1353,7 +871,7 @@ app.put("/api/users/:id", (req, res) => {
     password: password ? hashPassword(password) : current.password,
     fullName: fullName !== undefined ? fullName : current.fullName,
     role: role !== undefined ? role : current.role,
-    permissions: Array.isArray(permissions) ? permissions : current.permissions
+    permissions: normalizePermissions(Array.isArray(permissions) ? permissions : current.permissions, role !== undefined ? role : current.role)
   };
 
   saveStore(store);
@@ -1377,409 +895,6 @@ app.delete("/api/users/:id", (req, res) => {
   saveStore(store);
   broadcast({ type: "USERS_UPDATED", payload: store.users.map(sanitizeUser) });
   res.json({ success: true });
-});
-
-// ==========================================
-// INVENTORY ROUTES
-// ==========================================
-const validStock = (value: unknown) => Number.isSafeInteger(value) && (value as number) >= 0;
-const validMoney = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value >= 0 && Number.isSafeInteger(Math.round(value * 100));
-
-app.get("/api/inventory", (req, res) => {
-  res.json(store.inventory);
-});
-
-app.post("/api/inventory", (req, res) => {
-  if (typeof req.body?.name !== "string" || !req.body.name.trim() || typeof req.body?.sku !== "string" || !req.body.sku.trim() ||
-      !validStock(req.body.quantity) || !validMoney(req.body.price) || (req.body.costPrice !== undefined && !validMoney(req.body.costPrice)) ||
-      (req.body.reorderThreshold !== undefined && !validStock(req.body.reorderThreshold))) return res.status(400).json({ error: "Valid name, SKU, quantity and prices are required" });
-  const newItem: InventoryItem = {
-    ...req.body,
-    id: "v79_" + Math.random().toString(36).substr(2, 9),
-    quantity: req.body.quantity,
-    price: req.body.price,
-    costPrice: req.body.costPrice ?? 0,
-    reorderThreshold: req.body.reorderThreshold ?? 5,
-    tags: Array.isArray(req.body.tags) ? req.body.tags : [],
-    lastUpdated: new Date().toISOString()
-  };
-
-  store.inventory.push(newItem);
-  saveStore(store);
-  broadcast({ type: "INVENTORY_UPDATED", payload: store.inventory });
-  res.status(201).json(newItem);
-});
-
-// Bulk import to prevent quadratic HTTP storms
-app.post("/api/inventory/bulk", (req, res) => {
-  const { items } = req.body;
-  if (!Array.isArray(items) || items.length === 0 || items.length > 1000) {
-    return res.status(400).json({ error: "Array of items required" });
-  }
-  if (items.some(raw => typeof raw?.name !== "string" || !raw.name.trim() || typeof raw?.sku !== "string" || !raw.sku.trim() ||
-      !validStock(raw.quantity) || !validMoney(raw.price) || (raw.costPrice !== undefined && !validMoney(raw.costPrice)) ||
-      (raw.reorderThreshold !== undefined && !validStock(raw.reorderThreshold)))) return res.status(400).json({ error: "Every item needs valid name, SKU, quantity and prices" });
-
-  const addedItems: InventoryItem[] = [];
-
-  for (const raw of items) {
-    const item: InventoryItem = {
-      id: "v79_" + Math.random().toString(36).substr(2, 9),
-      name: String(raw.name),
-      sku: String(raw.sku),
-      category: raw.category || "General",
-      quantity: raw.quantity,
-      price: raw.price,
-      costPrice: raw.costPrice ?? 0,
-      reorderThreshold: raw.reorderThreshold ?? 10,
-      tags: Array.isArray(raw.tags) ? raw.tags : [],
-      barcode: raw.barcode || "",
-      manufacturer: raw.manufacturer || "",
-      imageUrl: raw.imageUrl || "",
-      location: raw.location || "Main Warehouse",
-      lastUpdated: new Date().toISOString()
-    };
-    store.inventory.push(item);
-    addedItems.push(item);
-  }
-
-  saveStore(store);
-  broadcast({ type: "INVENTORY_UPDATED", payload: store.inventory });
-  res.json({ success: true, count: addedItems.length, items: addedItems });
-});
-
-app.put("/api/inventory/:id", (req, res) => {
-  const { id } = req.params;
-  const index = store.inventory.findIndex((item) => item.id === id);
-
-  if (index === -1) {
-    return res.status(404).json({ error: "Item not found" });
-  }
-  for (const key of ["quantity", "reorderThreshold"]) if (req.body[key] !== undefined && !validStock(req.body[key])) return res.status(400).json({ error: `Invalid ${key}` });
-  for (const key of ["price", "costPrice"]) if (req.body[key] !== undefined && !validMoney(req.body[key])) return res.status(400).json({ error: `Invalid ${key}` });
-
-  store.inventory[index] = {
-    ...store.inventory[index],
-    ...req.body,
-    id,
-    quantity: req.body.quantity ?? store.inventory[index].quantity,
-    price: req.body.price ?? store.inventory[index].price,
-    costPrice: req.body.costPrice ?? store.inventory[index].costPrice,
-    reorderThreshold: req.body.reorderThreshold ?? store.inventory[index].reorderThreshold,
-    lastUpdated: new Date().toISOString()
-  };
-
-  saveStore(store);
-  broadcast({ type: "INVENTORY_UPDATED", payload: store.inventory });
-  res.json(store.inventory[index]);
-});
-
-// Quick stock adjustment (+ or -)
-app.patch("/api/inventory/:id/stock", (req, res) => {
-  const { id } = req.params;
-  const { delta, absolute } = req.body;
-
-  const item = store.inventory.find((i) => i.id === id);
-  if (!item) {
-    return res.status(404).json({ error: "Item not found" });
-  }
-
-  if (absolute !== undefined ? !validStock(absolute) : !Number.isSafeInteger(delta) || !validStock(item.quantity + delta)) return res.status(400).json({ error: "Invalid stock adjustment" });
-  item.quantity = absolute !== undefined ? absolute : item.quantity + delta;
-
-  item.lastUpdated = new Date().toISOString();
-  saveStore(store);
-  broadcast({ type: "INVENTORY_UPDATED", payload: store.inventory });
-  res.json(item);
-});
-
-app.delete("/api/inventory/:id", (req, res) => {
-  const { id } = req.params;
-  store.inventory = store.inventory.filter((item) => item.id !== id);
-  saveStore(store);
-  broadcast({ type: "INVENTORY_UPDATED", payload: store.inventory });
-  res.json({ success: true });
-});
-
-// ==========================================
-// POS CHECKOUT & TRANSACTIONS
-// ==========================================
-
-app.post("/api/pos/checkout", (req, res) => {
-  const { cart, customerName, customerContact, paymentMethod, notes, cashier } = req.body;
-
-  if (!Array.isArray(cart) || cart.length === 0) {
-    return res.status(400).json({ error: "Cart cannot be empty" });
-  }
-
-  const quantities = new Map<string, number>();
-  for (const row of cart) {
-    const id = row?.item?.id;
-    if (typeof id !== "string" || !Number.isSafeInteger(row.quantity) || row.quantity <= 0) return res.status(400).json({ error: "Invalid cart quantity" });
-    quantities.set(id, (quantities.get(id) || 0) + row.quantity);
-  }
-  const verified = [...quantities].map(([id, quantity]) => ({ item: store.inventory.find(item => item.id === id), quantity }));
-  if (verified.some(row => !row.item || !Number.isFinite(row.item.price) || row.item.price < 0)) return res.status(400).json({ error: "Unknown or invalid catalogue item" });
-  if (verified.some(row => row.quantity > row.item!.quantity)) return res.status(409).json({ error: "Insufficient stock" });
-  const subtotalCents = verified.reduce((sum, row) => sum + Math.round(row.item!.price * 100) * row.quantity, 0);
-  if (!Number.isSafeInteger(subtotalCents)) return res.status(400).json({ error: "Cart total is too large" });
-  const subtotal = subtotalCents / 100;
-  const taxRate = store.settings.enableTax ? (store.settings.taxRate / 100) : 0;
-  const tax = Math.round(subtotalCents * taxRate) / 100;
-  const total = (subtotalCents + Math.round(subtotalCents * taxRate)) / 100;
-
-  for (const row of verified) {
-    row.item!.quantity -= row.quantity;
-    row.item!.lastUpdated = new Date().toISOString();
-  }
-
-  const newTransaction: Transaction = {
-    id: "txn_" + Date.now() + "_" + Math.random().toString(36).substr(2, 4),
-    receiptNumber: `V79-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`,
-    date: new Date().toISOString(),
-    customerName: customerName ? customerName.trim() : "Walk-in Customer",
-    customerContact: customerContact ? customerContact.trim() : "",
-    paymentMethod: paymentMethod || "Cash",
-    items: verified.map(({ item, quantity }) => ({
-      item: {
-        id: item!.id,
-        name: item!.name,
-        sku: item!.sku,
-        category: item!.category,
-        price: item!.price
-      },
-      quantity,
-      unitPrice: item!.price
-    })),
-    subtotal,
-    tax,
-    total,
-    cashier: cashier || "Authorized Cashier",
-    notes: notes || "",
-    status: "completed"
-  };
-
-  store.transactions.unshift(newTransaction);
-  saveStore(store);
-
-  broadcast({ type: "INVENTORY_UPDATED", payload: store.inventory });
-  broadcast({ type: "TRANSACTION_CREATED", payload: newTransaction });
-
-  res.status(201).json({ success: true, transaction: newTransaction });
-});
-
-app.get("/api/transactions", (req, res) => {
-  res.json(store.transactions);
-});
-
-// ==========================================
-// SETTINGS
-// ==========================================
-
-app.get("/api/settings", (req, res) => {
-  const settings = { ...store.settings };
-  if ((req as any).user.role !== "admin") delete settings.posApiKey;
-  res.json(settings);
-});
-
-app.put("/api/settings", (req, res) => {
-  store.settings = { ...store.settings, ...req.body };
-  saveStore(store);
-  res.json({ success: true, settings: store.settings });
-});
-
-app.post("/api/settings/reset", (req, res) => {
-  if (process.env.NODE_ENV === "production") return res.status(403).json({ error: "Reset is unavailable in production" });
-  store = {
-    inventory: defaultInventory,
-    users: store.users,
-    transactions: defaultTransactions,
-    settings: defaultSettings,
-    ecosystemApps: defaultEcosystemApps,
-    tickets: defaultTickets,
-    ffproRecords: defaultFFPRORecords,
-    marketingCampaigns: defaultMarketingCampaigns
-  };
-  saveStore(store);
-  broadcast({ type: "INVENTORY_UPDATED", payload: store.inventory });
-  broadcast({ type: "USERS_UPDATED", payload: store.users.map(sanitizeUser) });
-  broadcast({ type: "ECOSYSTEM_APPS_UPDATED", apps: store.ecosystemApps });
-  broadcast({ type: "TIQUET_TICKETS_UPDATED", tickets: store.tickets });
-  broadcast({ type: "FFPRO_RECORDS_UPDATED", records: store.ffproRecords });
-  broadcast({ type: "MARKETING_CAMPAIGNS_UPDATED", campaigns: store.marketingCampaigns });
-  res.json({ success: true, message: "Sample business data reset; user accounts were preserved" });
-});
-
-// ==========================================
-// SERVER-SIDE GEMINI AI FORECASTING
-// ==========================================
-
-app.post("/api/ai/forecast", async (req, res) => {
-  const inventoryData = store.inventory;
-  const recentTxns = store.transactions.slice(0, 20);
-
-  const apiKey = process.env.GEMINI_API_KEY;
-
-  if (apiKey) {
-    try {
-      const ai = new GoogleGenAI({ apiKey });
-      const prompt = `You are the lead supply chain intelligence analyst for Vision 79 (V79), a premier ICT, hardware, and POS equipment technology company in Saint Lucia.
-Analyze the following inventory snapshot and recent customer transaction orders.
-Provide a high-impact, professional inventory forecast for the next 30-60 days.
-
-Inventory Snapshot:
-${JSON.stringify(
-  inventoryData.map((item) => ({
-    name: item.name,
-    sku: item.sku,
-    category: item.category,
-    currentStock: item.quantity,
-    reorderThreshold: item.reorderThreshold,
-    unitPrice: item.price,
-    costPrice: item.costPrice
-  }))
-)}
-
-Recent Sales Volume:
-${JSON.stringify(
-  recentTxns.map((t) => ({
-    receipt: t.receiptNumber,
-    items: t.items.map((i) => `${i.quantity}x ${i.item.name}`)
-  }))
-)}
-
-Return ONLY valid JSON matching this schema:
-{
-  "summary": "Concise executive overview of current stock health and inventory velocity",
-  "healthScore": 88, // integer 0-100
-  "riskLevel": "Low" | "Medium" | "High",
-  "recommendations": [
-    {
-      "itemName": "Product Name",
-      "action": "Urgent Reorder" | "Monitor Demand" | "Promote Surplus" | "Optimal",
-      "urgency": "Critical" | "Moderate" | "Good",
-      "reason": "Clear explanation",
-      "suggestedOrder": 15
-    }
-  ],
-  "categoryInsights": [
-    "Insight on specific category demand or stockout risk"
-  ],
-  "topStockoutRisks": [
-    {
-      "name": "Item Name",
-      "daysRemaining": 7,
-      "priority": "High"
-    }
-  ]
-}`;
-
-      const aiResponse = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: prompt,
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              summary: { type: Type.STRING },
-              healthScore: { type: Type.INTEGER },
-              riskLevel: { type: Type.STRING },
-              recommendations: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    itemName: { type: Type.STRING },
-                    action: { type: Type.STRING },
-                    urgency: { type: Type.STRING },
-                    reason: { type: Type.STRING },
-                    suggestedOrder: { type: Type.INTEGER }
-                  },
-                  required: ["itemName", "action", "urgency", "reason"]
-                }
-              },
-              categoryInsights: {
-                type: Type.ARRAY,
-                items: { type: Type.STRING }
-              },
-              topStockoutRisks: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    name: { type: Type.STRING },
-                    daysRemaining: { type: Type.INTEGER },
-                    priority: { type: Type.STRING }
-                  }
-                }
-              }
-            },
-            required: ["summary", "healthScore", "riskLevel", "recommendations"]
-          }
-        }
-      });
-
-      const parsed = JSON.parse(aiResponse.text || "{}");
-      return res.json(parsed);
-    } catch (err) {
-      console.warn("Gemini API call failed or encountered error, falling back to heuristic engine:", err);
-    }
-  }
-
-  // Smart Heuristic Fallback Analysis Engine
-  const lowStock = inventoryData.filter((i) => i.quantity <= i.reorderThreshold);
-  const outOfStock = inventoryData.filter((i) => i.quantity === 0);
-  const totalValue = inventoryData.reduce((acc, i) => acc + i.quantity * i.price, 0);
-
-  const healthScore = Math.max(
-    30,
-    Math.min(98, 100 - outOfStock.length * 15 - lowStock.length * 6)
-  );
-
-  const riskLevel = outOfStock.length > 0 ? "High" : lowStock.length > 2 ? "Medium" : "Low";
-
-  const recommendations = lowStock.map((item) => ({
-    itemName: item.name,
-    action: item.quantity === 0 ? "Emergency Restock" : "Reorder Soon",
-    urgency: item.quantity === 0 ? "Critical" : "Moderate",
-    reason:
-      item.quantity === 0
-        ? `Out of stock! Threshold is ${item.reorderThreshold}. High risk of revenue loss.`
-        : `Current stock (${item.quantity}) is at or below minimum threshold (${item.reorderThreshold}).`,
-    suggestedOrder: Math.max(10, item.reorderThreshold * 3)
-  }));
-
-  // Add healthy recommendations if few low stock
-  if (recommendations.length < 3) {
-    const popularItems = inventoryData.filter((i) => i.quantity > i.reorderThreshold).slice(0, 3);
-    for (const p of popularItems) {
-      recommendations.push({
-        itemName: p.name,
-        action: "Optimal Stock",
-        urgency: "Good",
-        reason: `Holding ${p.quantity} units, well above reorder threshold (${p.reorderThreshold}). Fulfills enterprise deployment readiness.`,
-        suggestedOrder: 0
-      });
-    }
-  }
-
-  res.json({
-    summary: `Analyzed ${inventoryData.length} active inventory items and ${store.transactions.length} recorded orders. Overall catalog value is $${totalValue.toLocaleString(undefined, { minimumFractionDigits: 2 })} XCD with ${lowStock.length} items flagged for replenishment.`,
-    healthScore,
-    riskLevel,
-    recommendations,
-    categoryInsights: [
-      "High turnaround detected across Networking and POS Hardware lines.",
-      "Cabling and infrastructure products demonstrate stable turnover with zero stockouts.",
-      "Peripherals and workstation accessories maintain healthy buffer levels."
-    ],
-    topStockoutRisks: lowStock.slice(0, 4).map((i) => ({
-      name: i.name,
-      daysRemaining: i.quantity === 0 ? 0 : Math.max(2, Math.floor(i.quantity * 1.5)),
-      priority: i.quantity === 0 ? "High" : "Medium"
-    }))
-  });
 });
 
 // ==========================================
@@ -1865,129 +980,6 @@ app.post("/api/ecosystem/apps", (req, res) => {
   saveStore(store);
   broadcast({ type: "ECOSYSTEM_APPS_UPDATED", apps: store.ecosystemApps });
   res.status(201).json(newApp);
-});
-
-// --- TIQUET SUPPORT DESK ENDPOINTS ---
-app.get("/api/ecosystem/tiquet/tickets", (req, res) => {
-  if (!store.tickets) {
-    store.tickets = defaultTickets;
-    saveStore(store);
-  }
-  res.json(store.tickets);
-});
-
-app.post("/api/ecosystem/tiquet/tickets", (req, res) => {
-  const { title, clientName, clientContact, priority, linkedSku, linkedItemName, technician, notes } = req.body;
-  if (!title || !clientName) {
-    return res.status(400).json({ error: "Title and client name are required" });
-  }
-
-  const nextNumber = 4095 + store.tickets.length;
-  const newTicket: TiquetTicket = {
-    id: "tiq-" + Date.now(),
-    ticketNumber: `TIQ-${nextNumber}`,
-    title,
-    clientName,
-    clientContact: clientContact || "In-person Castries Hub",
-    priority: priority || "normal",
-    status: "open",
-    linkedSku,
-    linkedItemName,
-    technician: technician || "Darren St. Rose (Hardware Tech)",
-    createdAt: new Date().toISOString(),
-    slaDeadline: new Date(Date.now() + 4 * 3600 * 1000).toISOString(),
-    notes: notes || "Dispatched via V79 Central Operations Hub"
-  };
-
-  store.tickets.unshift(newTicket);
-  saveStore(store);
-  broadcast({ type: "TIQUET_TICKETS_UPDATED", tickets: store.tickets });
-  res.status(201).json(newTicket);
-});
-
-app.patch("/api/ecosystem/tiquet/tickets/:id", (req, res) => {
-  const { id } = req.params;
-  const { status, notes, technician } = req.body;
-  const ticket = store.tickets.find((t) => t.id === id);
-  if (!ticket) {
-    return res.status(404).json({ error: "Ticket not found" });
-  }
-
-  if (status) ticket.status = status;
-  if (notes) ticket.notes = notes;
-  if (technician) ticket.technician = technician;
-
-  saveStore(store);
-  broadcast({ type: "TIQUET_TICKETS_UPDATED", tickets: store.tickets });
-  res.json(ticket);
-});
-
-// --- FIRE FINANCE PRO (FFPRO) ENDPOINTS ---
-app.get("/api/ecosystem/ffpro/records", (req, res) => {
-  if (!store.ffproRecords) {
-    store.ffproRecords = defaultFFPRORecords;
-    saveStore(store);
-  }
-  res.json(store.ffproRecords);
-});
-
-app.post("/api/ecosystem/ffpro/sync-pos", (req, res) => {
-  const today = new Date().toISOString().split("T")[0];
-  const todayTxns = store.transactions.filter((t) => t.date.startsWith(today));
-  const todayTotal = todayTxns.reduce((sum, t) => sum + (t.status === "completed" ? t.total : 0), 0);
-
-  const syncAmount = todayTotal;
-  if (!todayTxns.length) return res.status(409).json({ error: "No completed POS transactions to reconcile" });
-  const newRecord: FFPROSyncRecord = {
-    id: "ffp-" + Date.now(),
-    date: new Date().toISOString(),
-    type: "pos_revenue",
-    title: `POS Register Closing Batch Sync (${todayTxns.length || 1} transactions)`,
-    amount: syncAmount,
-    status: "synced",
-    source: "V79 POS Register #1"
-  };
-
-  if (!store.ffproRecords) store.ffproRecords = [];
-  store.ffproRecords.unshift(newRecord);
-  saveStore(store);
-  broadcast({ type: "FFPRO_RECORDS_UPDATED", records: store.ffproRecords });
-  res.json({ message: "Successfully synced register revenue to Fire Finance Pro ledger", record: newRecord });
-});
-
-// --- V79 MARKETING SUITE ENDPOINTS ---
-app.get("/api/ecosystem/marketing/campaigns", (req, res) => {
-  if (!store.marketingCampaigns) {
-    store.marketingCampaigns = defaultMarketingCampaigns;
-    saveStore(store);
-  }
-  res.json(store.marketingCampaigns);
-});
-
-app.post("/api/ecosystem/marketing/campaigns", (req, res) => {
-  const { name, channel, discountCode, discountPercent, targetProduct, budgetXCD } = req.body;
-  if (!name || !discountCode) {
-    return res.status(400).json({ error: "Campaign name and promo code are required" });
-  }
-
-  const newCampaign: MarketingCampaign = {
-    id: "mkt-" + Date.now(),
-    name,
-    channel: channel || "WhatsApp Business",
-    discountCode: discountCode.toUpperCase(),
-    discountPercent: Number(discountPercent) || 10,
-    targetProduct: targetProduct || "All Hardware Items",
-    reach: Math.floor(Math.random() * 2000) + 1000,
-    conversions: 0,
-    status: "active",
-    budgetXCD: Number(budgetXCD) || 500
-  };
-
-  if (!store.marketingCampaigns) store.marketingCampaigns = [];
-  store.marketingCampaigns.unshift(newCampaign);
-  saveStore(store);
-  broadcast({ type: "MARKETING_CAMPAIGNS_UPDATED", campaigns: store.marketingCampaigns });
-  res.status(201).json(newCampaign);
 });
 
 // ==========================================

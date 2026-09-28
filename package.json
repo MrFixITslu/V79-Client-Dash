@@ -13,7 +13,6 @@
     "test": "node --test tests/hub-security.test.mjs"
   },
   "dependencies": {
-    "@google/genai": "^2.4.0",
     "@tailwindcss/vite": "^4.3.3",
     "@vitejs/plugin-react": "^5.1.4",
     "dotenv": "^17.2.3",
