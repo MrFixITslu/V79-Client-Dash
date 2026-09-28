@@ -33,7 +33,7 @@ interface TiquetAccount {
 }
 
 async function tiquetAdminApi<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const response = await fetch(`/api/admin/tiquet${path}`, {
+  const response = await fetch(`/api/admin/platform/tiquet${path}`, {
     ...options,
     cache: "no-store",
     headers: { ...(options.body ? { "Content-Type": "application/json" } : {}), ...(options.headers || {}) },

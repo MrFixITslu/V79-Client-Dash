@@ -34,7 +34,7 @@ interface MarketingBusiness {
 }
 
 async function marketingAdminApi<T>(path: string): Promise<T> {
-  const response = await fetch(`/api/admin/marketing${path}`, { cache: "no-store" });
+  const response = await fetch(`/api/admin/platform/marketing${path}`, { cache: "no-store" });
   const payload = await response.json().catch(() => null);
   if (!response.ok) throw new Error(payload?.error || `Marketing admin request failed (${response.status})`);
   return payload as T;

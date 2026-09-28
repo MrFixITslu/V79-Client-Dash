@@ -151,7 +151,7 @@ export function PlatformAdminOverview({ onOpen }: { onOpen: (product: Product) =
 
       <section className="grid grid-cols-1 md:grid-cols-3 gap-3">
         <Summary icon={Activity} label="Services reporting" value={busy && !data ? "…" : `${onlineCount}/5`} />
-        <Summary icon={AlertTriangle} label="Attention items" value={String(issues.length)} />
+        <Summary icon={AlertTriangle} label="Attention items" value={data ? String(issues.length) : "—"} />
         <Summary icon={CreditCard} label="Platform scope" value="5 products" />
       </section>
 
@@ -211,6 +211,8 @@ export function PlatformAdminOverview({ onOpen }: { onOpen: (product: Product) =
               </button>
             ))}
           </div>
+        ) : !data ? (
+          <div className="p-5 text-sm text-slate-500">Platform status has not been loaded yet.</div>
         ) : (
           <div className="p-5 flex items-center gap-3 text-sm text-emerald-700 bg-emerald-50/40">
             <CheckCircle2 className="w-4 h-4" />

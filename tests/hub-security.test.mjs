@@ -42,14 +42,28 @@ test('private data, retired embedded APIs and one-time app launch', {timeout:300
     res.writeHead(404).end('{"error":"not found"}');
   });
   const academyOrigin=await listen(academy);
+  const tiquetRequests=[];
+  const tiquet=createServer(async(req,res)=>{
+    let body='';for await(const chunk of req)body+=chunk;
+    const pathname=new URL(req.url,'http://tiquet.test').pathname;
+    const ok=verifyPlatformRequest({method:req.method,pathname,timestamp:req.headers['x-v79-timestamp'],signature:req.headers['x-v79-signature'],body:'',secret});
+    if(!ok){res.writeHead(401).end('{}');return;}
+    tiquetRequests.push({method:req.method,pathname,body});
+    res.setHeader('content-type','application/json');
+    if(pathname==='/api/platform/admin/stats'){res.end('{"totalAccounts":1}');return;}
+    if(pathname==='/api/platform/admin/accounts/a1/suspend' && req.method==='PUT'){res.end('{"status":"suspended"}');return;}
+    res.writeHead(404).end('{}');
+  });
+  const tiquetOrigin=await listen(tiquet);
   const probe=createServer();const origin=await listen(probe);await new Promise(resolve=>probe.close(resolve));
-  const server=spawn(process.execPath,['--import','tsx','server.ts'],{cwd:process.cwd(),env:{...process.env,NODE_ENV:'production',DATA_DIR:dir,PORT:new URL(origin).port,APP_URL:origin,V79_HUB_ADMIN_PASSWORD:'a-unique-admin-password-1234',V79_HUB_ADMIN_EMAIL:'owner@example.test',V79_PLATFORM_SHARED_SECRET:secret,V79_FFPRO_LAUNCH_SECRET:secret,V79_TIQUET_LAUNCH_SECRET:secret,V79_MARKETING_LAUNCH_SECRET:secret,POS_BASE_URL:posOrigin,POS_PUBLIC_URL:'https://pos.example.test',ACADEMY_INTERNAL_URL:academyOrigin},stdio:['ignore','pipe','pipe']});
+  const server=spawn(process.execPath,['--import','tsx','server.ts'],{cwd:process.cwd(),env:{...process.env,NODE_ENV:'production',DATA_DIR:dir,PORT:new URL(origin).port,APP_URL:origin,V79_HUB_ADMIN_PASSWORD:'a-unique-admin-password-1234',V79_HUB_ADMIN_EMAIL:'owner@example.test',V79_PLATFORM_SHARED_SECRET:secret,V79_FFPRO_LAUNCH_SECRET:secret,V79_TIQUET_LAUNCH_SECRET:secret,V79_MARKETING_LAUNCH_SECRET:secret,POS_BASE_URL:posOrigin,POS_PUBLIC_URL:'https://pos.example.test',ACADEMY_INTERNAL_URL:academyOrigin,TIQUET_INTERNAL_URL:tiquetOrigin},stdio:['ignore','pipe','pipe']});
   let errors='';server.stderr.on('data',c=>errors+=c);
   server.stdout.on('data',c=>errors+=c);
   t.after(async()=>{
     if(server.exitCode===null){const exit=new Promise(resolve=>server.once('exit',resolve));server.kill();await Promise.race([exit,new Promise(resolve=>setTimeout(resolve,1500))]);}
     pos.closeAllConnections();await new Promise(resolve=>pos.close(resolve));
     academy.closeAllConnections();await new Promise(resolve=>academy.close(resolve));
+    tiquet.closeAllConnections();await new Promise(resolve=>tiquet.close(resolve));
     await rm(dir,{recursive:true,force:true});
   });
   const request=(path,options={})=>fetch(origin+path,{redirect:'manual',...options});
@@ -74,6 +88,13 @@ test('private data, retired embedded APIs and one-time app launch', {timeout:300
   const overviewPayload=await platformOverview.json();
   assert.equal(overviewPayload.apps.academy.status,'ok');
   assert.equal(overviewPayload.apps.academy.metrics.totalCourses,4);
+  assert.equal((await request('/api/admin/platform/tiquet/stats',{headers:{Cookie:cookie}})).status,200);
+  assert.equal((await request('/api/admin/platform/tiquet/accounts/a1/suspend',{method:'PUT',headers,body:'{}'})).status,200);
+  assert.equal(tiquetRequests.some(row=>row.pathname==='/api/platform/admin/accounts/a1/suspend'),true);
+  const forwardedBefore=tiquetRequests.length;
+  assert.equal((await request('/api/admin/platform/tiquet/accounts/a1/private-data',{headers:{Cookie:cookie}})).status,404);
+  assert.equal((await request('/api/admin/tiquet/accounts/a1/private-data',{headers:{Cookie:cookie}})).status,404);
+  assert.equal(tiquetRequests.length,forwardedBefore);
   assert.equal((await request('/api/users',{headers})).status,200);
   assert.equal((await request('/api/users',{method:'POST',headers:{Cookie:cookie,'content-type':'application/json'},body:'{}'})).status,403);
   assert.equal((await request('/api/settings/reset',{method:'POST',headers})).status,410);
@@ -85,6 +106,7 @@ test('private data, retired embedded APIs and one-time app launch', {timeout:300
   assert.equal((await request('/api/pos/checkout',{method:'POST',headers:{...headers,Cookie:viewerCookie},body:'{}'})).status,410);
   assert.equal((await request('/api/apps/pos/launch',{headers:{Cookie:viewerCookie}})).status,403);
   assert.equal((await request('/api/admin/academy/courses',{headers:{Cookie:viewerCookie}})).status,403);
+  assert.equal((await request('/api/admin/platform/tiquet/stats',{headers:{Cookie:viewerCookie}})).status,403);
   const academyList=await request('/api/admin/academy/courses',{headers:{Cookie:cookie}});
   assert.equal(academyList.status,200);
   assert.equal((await academyList.json())[0].title,'Signed Academy Course');
