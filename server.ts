@@ -914,6 +914,131 @@ app.use("/api/admin/marketing", requireRole("admin"), async (req, res) => {
   });
 });
 
+
+type PlatformAdminProduct = "pos" | "tiquet" | "marketing" | "ffpro";
+
+const platformAdminSources: Record<PlatformAdminProduct, string> = {
+  pos: process.env.POS_BASE_URL || "http://v79-pos:8080",
+  tiquet: process.env.TIQUET_INTERNAL_URL || "http://v79-tiquet-manager:3050",
+  marketing: process.env.MARKETING_INTERNAL_URL || "http://v79marketing-app:3070",
+  ffpro: process.env.FFPRO_INTERNAL_URL || "http://fire-finance-app:3010",
+};
+
+const platformAdminAllowed: Record<PlatformAdminProduct, Array<{ method: string; path: RegExp }>> = {
+  pos: [
+    { method: "GET", path: /^\/api\/platform\/admin\/stats$/ },
+    { method: "GET", path: /^\/api\/platform\/admin\/tenants$/ },
+    { method: "PUT", path: /^\/api\/platform\/admin\/tenants\/[^/]+\/active\/(?:enabled|disabled)$/ },
+    { method: "PUT", path: /^\/api\/platform\/admin\/tenants\/[^/]+\/offline-sales\/(?:enabled|disabled)$/ },
+  ],
+  tiquet: [
+    { method: "GET", path: /^\/api\/platform\/admin\/stats$/ },
+    { method: "GET", path: /^\/api\/platform\/admin\/accounts$/ },
+    { method: "PUT", path: /^\/api\/platform\/admin\/accounts\/[^/]+\/(?:suspend|unsuspend)$/ },
+    { method: "PUT", path: /^\/api\/platform\/admin\/accounts\/[^/]+\/plan\/(?:trial|starter|pro|enterprise)$/ },
+  ],
+  marketing: [
+    { method: "GET", path: /^\/api\/platform\/admin\/stats$/ },
+    { method: "GET", path: /^\/api\/platform\/admin\/businesses$/ },
+  ],
+  ffpro: [
+    { method: "GET", path: /^\/api\/platform\/admin\/stats$/ },
+    { method: "GET", path: /^\/api\/platform\/admin\/accounts$/ },
+  ],
+};
+
+async function callPlatformAdmin(product: PlatformAdminProduct, method: string, pathname: string, requestBody?: unknown) {
+  if (posSecret.length < 32) {
+    return { status: 503, headers: new Headers({ "content-type": "application/json" }), body: Buffer.from(JSON.stringify({ error: "Platform integration is not configured." })) };
+  }
+
+  const allowed = platformAdminAllowed[product].some(rule => rule.method === method && rule.path.test(pathname));
+  if (!allowed) {
+    return { status: 404, headers: new Headers({ "content-type": "application/json" }), body: Buffer.from(JSON.stringify({ error: "Platform admin route is not exposed through Hub." })) };
+  }
+
+  const timestamp = String(Date.now());
+  const isRead = method === "GET" || method === "HEAD";
+  // Tiquet's platform contract intentionally signs an empty body for all methods.
+  // POS signs the serialized JSON body for writes.
+  const serializedBody = isRead ? "" : (product === "tiquet" ? "" : JSON.stringify(requestBody ?? {}));
+  const signature = signPlatformRequest({
+    method,
+    pathname,
+    timestamp,
+    body: serializedBody,
+    secret: posSecret,
+  });
+
+  const headers: Record<string, string> = {
+    "x-v79-service-id": "v79-hub",
+    "x-v79-timestamp": timestamp,
+    "x-v79-signature": signature,
+    "accept": "application/json",
+  };
+  let body: string | undefined;
+  if (!isRead && product !== "tiquet") {
+    body = JSON.stringify(requestBody ?? {});
+    headers["content-type"] = "application/json";
+  }
+
+  try {
+    const upstream = await fetch(new URL(pathname, platformAdminSources[product]), {
+      method,
+      headers,
+      body,
+      redirect: "manual",
+      signal: AbortSignal.timeout(10_000),
+    });
+    return {
+      status: upstream.status,
+      headers: upstream.headers,
+      body: Buffer.from(await upstream.arrayBuffer()),
+    };
+  } catch {
+    return {
+      status: 503,
+      headers: new Headers({ "content-type": "application/json" }),
+      body: Buffer.from(JSON.stringify({ error: product + " platform service is unavailable." })),
+    };
+  }
+}
+
+app.get("/api/admin/platform/overview", requireRole("admin"), async (_req, res) => {
+  const products: PlatformAdminProduct[] = ["pos", "tiquet", "marketing", "ffpro"];
+  const entries = await Promise.all(products.map(async product => {
+    const response = await callPlatformAdmin(product, "GET", "/api/platform/admin/stats");
+    let data: any = null;
+    try { data = JSON.parse(response.body.toString("utf8")); } catch { /* no-op */ }
+    return [product, {
+      status: response.status === 200 ? "ok" : "error",
+      httpStatus: response.status,
+      metrics: response.status === 200 ? data : null,
+      error: response.status === 200 ? null : (data?.error || "Platform stats unavailable."),
+    }] as const;
+  }));
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ generatedAt: new Date().toISOString(), apps: Object.fromEntries(entries) });
+});
+
+app.use("/api/admin/platform/:product", requireRole("admin"), async (req, res) => {
+  const product = String(req.params.product || "") as PlatformAdminProduct;
+  if (!(product in platformAdminSources)) return res.status(404).json({ error: "Unknown platform product." });
+
+  const prefix = `/api/admin/platform/${product}`;
+  const originalPath = new URL(req.originalUrl, "http://hub.internal").pathname;
+  const suffix = originalPath.slice(prefix.length);
+  const pathname = `/api/platform/admin${suffix || "/"}`;
+  const method = req.method.toUpperCase();
+
+  const response = await callPlatformAdmin(product, method, pathname, req.body);
+  res.status(response.status);
+  const contentType = response.headers.get("content-type");
+  if (contentType) res.setHeader("content-type", contentType);
+  res.setHeader("Cache-Control", "no-store");
+  res.send(response.body);
+});
+
 const retiredEmbeddedAppPaths = [
   "/api/inventory",
   "/api/transactions",

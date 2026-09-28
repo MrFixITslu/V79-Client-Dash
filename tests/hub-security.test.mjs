@@ -52,7 +52,7 @@ test('private data, retired embedded APIs and one-time app launch', {timeout:300
     await rm(dir,{recursive:true,force:true});
   });
   const request=(path,options={})=>fetch(origin+path,{redirect:'manual',...options});
-  for(let i=0;i<60;i++){try{if((await request('/api/health')).ok)break;}catch{}await new Promise(r=>setTimeout(r,100));}
+  for(let i=0;i<150;i++){try{if((await request('/api/health')).ok)break;}catch{}await new Promise(r=>setTimeout(r,100));}
   let health;try{health=await request('/api/health');}catch{throw new Error(`Hub failed to start: ${errors}`);}
   assert.equal(health.status,200,errors);
   assert.equal((await request('/api/inventory')).status,401);
