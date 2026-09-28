@@ -1,0 +1,127 @@
+name: Deploy V79 Ecosystem
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/deploy-ecosystem.yml"
+      - "scripts/deploy-ecosystem-release.sh"
+      - "scripts/smoke-launches.mjs"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-v79-ecosystem
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy Hub, Tiquet, Marketing and FFPRO
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 90
+    steps:
+      - name: Checkout Hub
+        uses: actions/checkout@v4
+        with:
+          path: hub
+
+      - name: Checkout Tiquet
+        uses: actions/checkout@v4
+        with:
+          repository: MrFixITslu/V79Tiquet
+          ref: main
+          path: tiquet
+
+      - name: Checkout Marketing
+        uses: actions/checkout@v4
+        with:
+          repository: MrFixITslu/V79Marketing
+          ref: main
+          path: marketing
+
+      - name: Checkout FFPRO
+        uses: actions/checkout@v4
+        with:
+          repository: MrFixITslu/FFPRO2
+          ref: main
+          path: ffpro
+
+      - name: Build source bundles
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -C hub --exclude=.git --exclude=.env --exclude=data --exclude=dist --exclude=node_modules \
+            -czf "$RUNNER_TEMP/v79-ecosystem-hub.tar.gz" .
+          tar -C tiquet --exclude=.git --exclude=.env --exclude='.env.*' --exclude=data --exclude=uploads --exclude=backups --exclude=dist --exclude=node_modules \
+            -czf "$RUNNER_TEMP/v79-ecosystem-tiquet.tar.gz" .
+          tar -C marketing --exclude=.git --exclude=.env --exclude='.env.*' --exclude=data --exclude=uploads --exclude=backups --exclude=dist --exclude=node_modules \
+            -czf "$RUNNER_TEMP/v79-ecosystem-marketing.tar.gz" .
+          tar -C ffpro --exclude=.git --exclude=.env --exclude='.env.*' --exclude=data --exclude=uploads --exclude=backups --exclude=build --exclude=node_modules \
+            -czf "$RUNNER_TEMP/v79-ecosystem-ffpro.tar.gz" .
+
+      - name: Join deployment tailnet
+        uses: tailscale/github-action@v4
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+          ping: ${{ secrets.DEPLOY_HOST }}
+
+      - name: Configure pinned SSH access
+        shell: bash
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          test -n "$DEPLOY_SSH_KEY" || { echo "Missing DEPLOY_SSH_KEY" >&2; exit 1; }
+          test -n "$DEPLOY_KNOWN_HOSTS" || { echo "Missing DEPLOY_KNOWN_HOSTS" >&2; exit 1; }
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+          ssh-keygen -y -f "$HOME/.ssh/id_ed25519" >/dev/null
+
+      - name: Transfer all releases
+        shell: bash
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_PORT: ${{ vars.DEPLOY_SSH_PORT }}
+        run: |
+          set -euo pipefail
+          test -n "$DEPLOY_HOST" && test -n "$DEPLOY_USER"
+          port="${DEPLOY_SSH_PORT:-22}"
+          [[ "$port" =~ ^[0-9]+$ ]]
+          target="${DEPLOY_USER}@${DEPLOY_HOST}"
+          for app in hub tiquet marketing ffpro; do
+            scp -P "$port" -o StrictHostKeyChecking=yes \
+              "$RUNNER_TEMP/v79-ecosystem-${app}.tar.gz" \
+              "$target:v79-ecosystem-${app}.tar.gz"
+          done
+
+      - name: Deploy and health-check ecosystem
+        shell: bash
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_PORT: ${{ vars.DEPLOY_SSH_PORT }}
+        run: |
+          set -euo pipefail
+          port="${DEPLOY_SSH_PORT:-22}"
+          target="${DEPLOY_USER}@${DEPLOY_HOST}"
+          ssh -p "$port" -o StrictHostKeyChecking=yes "$target" bash -s < hub/scripts/deploy-ecosystem-release.sh
+
+      - name: Smoke-test Hub app launches
+        shell: bash
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_PORT: ${{ vars.DEPLOY_SSH_PORT }}
+        run: |
+          set -euo pipefail
+          port="${DEPLOY_SSH_PORT:-22}"
+          target="${DEPLOY_USER}@${DEPLOY_HOST}"
+          ssh -p "$port" -o StrictHostKeyChecking=yes "$target" \
+            docker exec v79-hub node /app/scripts/smoke-launches.mjs
