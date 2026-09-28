@@ -610,13 +610,13 @@ function requireRole(...roles: StoredUser["role"][]) {
   };
 }
 
-const allowedHubPermissions = new Set(["overview", "connections", "team", "security", "billing", "users"]);
+const allowedHubPermissions = new Set(["overview", "connections", "team", "security", "billing", "admin", "users"]);
 function normalizePermissions(value: unknown, role: StoredUser["role"]) {
   const requested = Array.isArray(value)
     ? value.filter(permission => typeof permission === "string" && allowedHubPermissions.has(permission))
     : [];
   if (requested.length > 0) return [...new Set(requested)];
-  if (role === "admin") return ["overview", "connections", "team", "security", "billing", "users"];
+  if (role === "admin") return ["overview", "connections", "team", "security", "billing", "admin", "users"];
   if (role === "manager") return ["overview", "connections", "team", "security", "billing"];
   if (role === "staff") return ["overview", "connections"];
   return ["overview"];
@@ -806,6 +806,7 @@ app.use("/api/admin/academy", requireRole("admin"), async (req, res) => {
       secret: posSecret,
     }),
     "accept": String(req.get("accept") || "application/json"),
+    "x-user-role": "Admin",
   };
   if (body) headers["content-type"] = "application/json";
 

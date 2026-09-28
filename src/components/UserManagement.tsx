@@ -45,6 +45,7 @@ const ALL_VIEWS: { id: ViewState; label: string; desc: string }[] = [
   { id: "team", label: "Team", desc: "View organisation members and roles" },
   { id: "security", label: "Security", desc: "Review workspace security controls" },
   { id: "billing", label: "Billing", desc: "View plan and subscription information" },
+  { id: "admin", label: "Admin Console", desc: "Manage V79 platform applications and administration" },
   { id: "users", label: "User Management", desc: "Create and manage Hub users" },
 ];
 
@@ -102,7 +103,7 @@ export function UserManagement({
   const handleRoleChange = (role: UserRole) => {
     let perms: ViewState[] = [];
     if (role === "admin") {
-      perms = ["overview", "connections", "team", "security", "billing", "users"];
+      perms = ["overview", "connections", "team", "security", "billing", "admin", "users"];
     } else if (role === "manager") {
       perms = ["overview", "connections", "team", "security", "billing"];
     } else if (role === "staff") {

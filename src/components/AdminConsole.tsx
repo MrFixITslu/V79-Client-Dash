@@ -1,0 +1,623 @@
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Archive, BookOpen, ChevronDown, ChevronRight, Copy, FileText,
+  GraduationCap, Layers3, Loader2, Plus, RefreshCw, Save,
+  Search, Send, Settings2, Trash2, X,
+} from "lucide-react";
+import { EcosystemApp } from "../types";
+
+type CourseStatus = "Draft" | "Review" | "Ready for Upload" | "Uploaded" | "Imported" | "Published" | "Archived";
+type PricingType = "free" | "free_trial" | "premium" | "subscription";
+
+interface Course {
+  id: string;
+  title: string;
+  shortDescription?: string;
+  fullDescription?: string;
+  category?: string;
+  difficultyLevel?: string;
+  instructor?: string;
+  courseVersion?: string;
+  thumbnail?: string;
+  estimatedDuration?: string;
+  prerequisites?: string[];
+  learningObjectives?: string[];
+  status: CourseStatus;
+  pricingType: PricingType;
+  price: number;
+  moduleCount?: number;
+  lessonCount?: number;
+  websiteAppId?: number;
+  updatedAt?: string;
+}
+
+interface Module {
+  id: string;
+  courseId: string;
+  title: string;
+  description?: string;
+  orderNumber: number;
+}
+
+interface Lesson {
+  id: string;
+  moduleId: string;
+  courseId: string;
+  title: string;
+  description?: string;
+  learningObjectives?: string[];
+  estimatedTime?: string;
+  lessonContent?: string;
+  videoUrl?: string;
+  audioUrl?: string;
+  exercisePrompt?: string;
+  orderNumber: number;
+}
+
+interface AdminConsoleProps {
+  ecosystemApps: EcosystemApp[];
+}
+
+type AdminSection = "academy" | "platform";
+const API = "/api/admin/academy";
+
+async function academyApi<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const response = await fetch(`${API}${path}`, {
+    ...options,
+    cache: "no-store",
+    headers: {
+      ...(options.body ? { "Content-Type": "application/json" } : {}),
+      ...(options.headers || {}),
+    },
+  });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    const message = payload?.error || `Academy request failed (${response.status})`;
+    const details = Array.isArray(payload?.details) ? "\n" + payload.details.join("\n") : "";
+    throw new Error(message + details);
+  }
+  return payload as T;
+}
+
+const emptyCourse = (): Partial<Course> => ({
+  title: "",
+  shortDescription: "",
+  fullDescription: "",
+  category: "General",
+  difficultyLevel: "Beginner",
+  instructor: "V79 Academy Instructor",
+  courseVersion: "1.0.0",
+  estimatedDuration: "2.0 hours",
+  prerequisites: [],
+  learningObjectives: [],
+  status: "Draft",
+  pricingType: "free",
+  price: 0,
+});
+
+const statusClass: Record<string, string> = {
+  Published: "bg-emerald-50 text-emerald-700 border-emerald-200",
+  Uploaded: "bg-emerald-50 text-emerald-700 border-emerald-200",
+  Draft: "bg-slate-100 text-slate-600 border-slate-200",
+  Review: "bg-amber-50 text-amber-700 border-amber-200",
+  Imported: "bg-cyan-50 text-cyan-700 border-cyan-200",
+  Archived: "bg-rose-50 text-rose-700 border-rose-200",
+};
+
+export function AdminConsole({ ecosystemApps }: AdminConsoleProps) {
+  const [section, setSection] = useState<AdminSection>("academy");
+  const [courses, setCourses] = useState<Course[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [draft, setDraft] = useState<Partial<Course> | null>(null);
+  const [modules, setModules] = useState<Module[]>([]);
+  const [lessonsByModule, setLessonsByModule] = useState<Record<string, Lesson[]>>({});
+  const [expandedModules, setExpandedModules] = useState<Set<string>>(new Set());
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("All");
+  const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
+  const flash = (text: string, type: "success" | "error" = "success") => {
+    setMessage({ text, type });
+    window.setTimeout(() => setMessage(null), 5000);
+  };
+
+  const loadCourses = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await academyApi<Course[]>("/courses");
+      setCourses(data);
+      if (selectedId) {
+        const current = data.find((course) => course.id === selectedId);
+        if (current) setDraft(current);
+      }
+    } catch (error) {
+      flash(error instanceof Error ? error.message : "Could not load Academy courses", "error");
+    } finally {
+      setLoading(false);
+    }
+  }, [selectedId]);
+
+  useEffect(() => {
+    void loadCourses();
+  }, []);
+
+  const selectCourse = async (course: Course) => {
+    setSelectedId(course.id);
+    setDraft(course);
+    setModules([]);
+    setLessonsByModule({});
+    setExpandedModules(new Set());
+    try {
+      setModules(await academyApi<Module[]>(`/courses/${course.id}/modules`));
+    } catch (error) {
+      flash(error instanceof Error ? error.message : "Could not load course modules", "error");
+    }
+  };
+
+  const startNewCourse = () => {
+    setSelectedId(null);
+    setDraft(emptyCourse());
+    setModules([]);
+    setLessonsByModule({});
+    setExpandedModules(new Set());
+  };
+
+  const saveCourse = async () => {
+    if (!draft?.title?.trim()) return flash("A course title is required.", "error");
+    setBusy(true);
+    try {
+      const payload = {
+        ...draft,
+        prerequisites: draft.prerequisites || [],
+        learningObjectives: draft.learningObjectives || [],
+        price: ["subscription", "premium"].includes(draft.pricingType || "free") ? Number(draft.price || 0) : 0,
+      };
+      const wasExisting = Boolean(selectedId);
+      const saved = selectedId
+        ? await academyApi<Course>(`/courses/${selectedId}`, { method: "PUT", body: JSON.stringify(payload) })
+        : await academyApi<Course>("/courses", { method: "POST", body: JSON.stringify(payload) });
+      setSelectedId(saved.id);
+      setDraft(saved);
+      await loadCourses();
+      flash(wasExisting ? "Course changes saved." : "Course created.");
+    } catch (error) {
+      flash(error instanceof Error ? error.message : "Course could not be saved", "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const publishCourse = async () => {
+    if (!selectedId) return;
+    setBusy(true);
+    try {
+      const result = await academyApi<{ course: Course }>(`/courses/${selectedId}/publish`, {
+        method: "POST",
+        body: JSON.stringify({ userRole: "Admin" }),
+      });
+      setDraft(result.course);
+      await loadCourses();
+      flash("Course published successfully.");
+    } catch (error) {
+      flash(error instanceof Error ? error.message : "Course could not be published", "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const duplicateCourse = async () => {
+    if (!selectedId) return;
+    setBusy(true);
+    try {
+      const copy = await academyApi<Course>(`/courses/${selectedId}/duplicate`, { method: "POST" });
+      await loadCourses();
+      await selectCourse(copy);
+      flash("Course duplicated.");
+    } catch (error) {
+      flash(error instanceof Error ? error.message : "Course could not be duplicated", "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const archiveCourse = async () => {
+    if (!selectedId || !draft) return;
+    setBusy(true);
+    try {
+      const saved = await academyApi<Course>(`/courses/${selectedId}`, {
+        method: "PUT",
+        body: JSON.stringify({ ...draft, status: "Archived", userRole: "Admin" }),
+      });
+      setDraft(saved);
+      await loadCourses();
+      flash("Course archived.");
+    } catch (error) {
+      flash(error instanceof Error ? error.message : "Course could not be archived", "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const deleteCourse = async () => {
+    if (!selectedId || !draft) return;
+    if (!window.confirm(`Delete "${draft.title}" and all associated course content? This cannot be undone.`)) return;
+    setBusy(true);
+    try {
+      await academyApi(`/courses/${selectedId}`, { method: "DELETE" });
+      setSelectedId(null);
+      setDraft(null);
+      setModules([]);
+      await loadCourses();
+      flash("Course deleted.");
+    } catch (error) {
+      flash(error instanceof Error ? error.message : "Course could not be deleted", "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const addModule = async () => {
+    if (!selectedId) return;
+    try {
+      const row = await academyApi<Module>(`/courses/${selectedId}/modules`, {
+        method: "POST",
+        body: JSON.stringify({ title: "New Module", description: "" }),
+      });
+      setModules((current) => [...current, row]);
+      flash("Module added.");
+    } catch (error) {
+      flash(error instanceof Error ? error.message : "Module could not be added", "error");
+    }
+  };
+
+  const updateModule = async (module: Module, patch: Partial<Module>) => {
+    try {
+      const updated = await academyApi<Module>(`/modules/${module.id}`, {
+        method: "PUT",
+        body: JSON.stringify(patch),
+      });
+      setModules((current) => current.map((row) => row.id === updated.id ? updated : row));
+    } catch (error) {
+      flash(error instanceof Error ? error.message : "Module could not be saved", "error");
+    }
+  };
+
+  const deleteModule = async (module: Module) => {
+    if (!window.confirm(`Delete module "${module.title}" and all of its lessons?`)) return;
+    try {
+      await academyApi(`/modules/${module.id}`, { method: "DELETE" });
+      setModules((current) => current.filter((row) => row.id !== module.id));
+      setLessonsByModule((current) => {
+        const next = { ...current };
+        delete next[module.id];
+        return next;
+      });
+      flash("Module deleted.");
+    } catch (error) {
+      flash(error instanceof Error ? error.message : "Module could not be deleted", "error");
+    }
+  };
+
+  const toggleModule = async (module: Module) => {
+    const next = new Set(expandedModules);
+    if (next.has(module.id)) {
+      next.delete(module.id);
+      setExpandedModules(next);
+      return;
+    }
+    next.add(module.id);
+    setExpandedModules(next);
+    if (!lessonsByModule[module.id]) {
+      try {
+        const lessons = await academyApi<Lesson[]>(`/modules/${module.id}/lessons`);
+        setLessonsByModule((current) => ({ ...current, [module.id]: lessons }));
+      } catch (error) {
+        flash(error instanceof Error ? error.message : "Lessons could not be loaded", "error");
+      }
+    }
+  };
+
+  const addLesson = async (module: Module) => {
+    try {
+      const lesson = await academyApi<Lesson>(`/modules/${module.id}/lessons`, {
+        method: "POST",
+        body: JSON.stringify({ title: "New Lesson", estimatedTime: "20 mins" }),
+      });
+      setLessonsByModule((current) => ({
+        ...current,
+        [module.id]: [...(current[module.id] || []), lesson],
+      }));
+      setExpandedModules((current) => new Set(current).add(module.id));
+      flash("Lesson added.");
+    } catch (error) {
+      flash(error instanceof Error ? error.message : "Lesson could not be added", "error");
+    }
+  };
+
+  const updateLesson = async (lesson: Lesson, patch: Partial<Lesson>) => {
+    try {
+      const updated = await academyApi<Lesson>(`/lessons/${lesson.id}`, {
+        method: "PUT",
+        body: JSON.stringify(patch),
+      });
+      setLessonsByModule((current) => ({
+        ...current,
+        [lesson.moduleId]: (current[lesson.moduleId] || []).map((row) => row.id === updated.id ? updated : row),
+      }));
+    } catch (error) {
+      flash(error instanceof Error ? error.message : "Lesson could not be saved", "error");
+      throw error;
+    }
+  };
+
+  const deleteLesson = async (lesson: Lesson) => {
+    if (!window.confirm(`Delete lesson "${lesson.title}"?`)) return;
+    try {
+      await academyApi(`/lessons/${lesson.id}`, { method: "DELETE" });
+      setLessonsByModule((current) => ({
+        ...current,
+        [lesson.moduleId]: (current[lesson.moduleId] || []).filter((row) => row.id !== lesson.id),
+      }));
+      flash("Lesson deleted.");
+    } catch (error) {
+      flash(error instanceof Error ? error.message : "Lesson could not be deleted", "error");
+    }
+  };
+
+  const filteredCourses = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    return courses.filter((course) => {
+      const matchesSearch = !term || [course.title, course.category, course.instructor].some((value) => String(value || "").toLowerCase().includes(term));
+      const matchesStatus = statusFilter === "All" || course.status === statusFilter;
+      return matchesSearch && matchesStatus;
+    });
+  }, [courses, search, statusFilter]);
+
+  const publishedCount = courses.filter((course) => course.status === "Published" || course.status === "Uploaded").length;
+  const draftCount = courses.filter((course) => course.status === "Draft" || course.status === "Review").length;
+  const connectedApps = ecosystemApps.filter((app) => app.status !== "maintenance").length;
+
+  return (
+    <div className="w-full max-w-[1500px] mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
+      <section className="bg-[#0B1528] border border-slate-800 rounded-2xl p-6 text-white">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-5">
+          <div>
+            <div className="text-cyan-400 text-[11px] font-bold uppercase tracking-wider">Platform administration</div>
+            <h1 className="text-2xl font-extrabold mt-1">V79 Admin Console</h1>
+            <p className="text-sm text-slate-300 mt-2 max-w-2xl">
+              Platform-owned controls live here. Business and personal settings remain inside each app.
+            </p>
+          </div>
+          <div className="grid grid-cols-3 gap-2 min-w-[330px]">
+            <Metric label="Connected apps" value={String(connectedApps)} />
+            <Metric label="Academy courses" value={String(courses.length)} />
+            <Metric label="Published" value={String(publishedCount)} />
+          </div>
+        </div>
+      </section>
+
+      {message && (
+        <div className={`rounded-xl border px-4 py-3 text-sm font-medium ${message.type === "success" ? "bg-emerald-50 border-emerald-200 text-emerald-800" : "bg-rose-50 border-rose-200 text-rose-800"}`}>
+          {message.text}
+        </div>
+      )}
+
+      <div className="flex gap-2 border-b border-slate-200">
+        <Tab active={section === "academy"} onClick={() => setSection("academy")} icon={GraduationCap} label="Academy" />
+        <Tab active={section === "platform"} onClick={() => setSection("platform")} icon={Settings2} label="Platform" />
+      </div>
+
+      {section === "platform" ? (
+        <section className="bg-white border border-slate-200 rounded-2xl p-6">
+          <h2 className="font-bold text-slate-900">Platform controls</h2>
+          <p className="text-sm text-slate-500 mt-2">
+            Cross-application health, subscriptions, feature flags, maintenance and audit controls will be added here as each product admin API is migrated into Hub.
+          </p>
+        </section>
+      ) : (
+        <div className="grid grid-cols-1 xl:grid-cols-[420px_minmax(0,1fr)] gap-5">
+          <section className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+            <div className="p-4 border-b border-slate-200 space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h2 className="font-bold text-slate-900">Course catalogue</h2>
+                  <p className="text-xs text-slate-500 mt-0.5">{publishedCount} published · {draftCount} in progress</p>
+                </div>
+                <button onClick={startNewCourse} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-950 text-white text-xs font-semibold">
+                  <Plus className="w-3.5 h-3.5" /> New course
+                </button>
+              </div>
+              <div className="flex gap-2">
+                <label className="relative flex-1">
+                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+                  <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search courses" className="admin-input pl-9" />
+                </label>
+                <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="rounded-lg border border-slate-200 px-2 text-xs bg-white">
+                  {["All", "Published", "Draft", "Review", "Imported", "Archived"].map((value) => <option key={value}>{value}</option>)}
+                </select>
+                <button onClick={() => void loadCourses()} className="p-2 border border-slate-200 rounded-lg text-slate-500 hover:bg-slate-50" title="Refresh">
+                  <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
+                </button>
+              </div>
+            </div>
+            <div className="max-h-[720px] overflow-y-auto divide-y divide-slate-100">
+              {filteredCourses.map((course) => (
+                <button key={course.id} onClick={() => void selectCourse(course)} className={`w-full text-left p-4 hover:bg-slate-50 transition-colors ${selectedId === course.id ? "bg-cyan-50/70 border-l-2 border-cyan-500" : "border-l-2 border-transparent"}`}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="font-semibold text-sm text-slate-900 truncate">{course.title}</div>
+                      <div className="text-[11px] text-slate-500 mt-1">{course.category || "General"} · {course.difficultyLevel || "Beginner"}</div>
+                    </div>
+                    <span className={`text-[9px] px-2 py-1 rounded-full border font-bold ${statusClass[course.status] || "bg-slate-100 border-slate-200 text-slate-600"}`}>{course.status}</span>
+                  </div>
+                  <div className="flex gap-4 mt-3 text-[10px] text-slate-400">
+                    <span>{course.moduleCount || 0} modules</span>
+                    <span>{course.lessonCount || 0} lessons</span>
+                    <span>{course.pricingType === "free" ? "Free" : "Subscription"}</span>
+                  </div>
+                </button>
+              ))}
+              {!loading && filteredCourses.length === 0 && <div className="p-8 text-center text-sm text-slate-400">No courses match your filters.</div>}
+            </div>
+          </section>
+
+          <section className="min-w-0 space-y-5">
+            {!draft ? (
+              <div className="bg-white border border-slate-200 rounded-2xl p-10 text-center">
+                <BookOpen className="w-10 h-10 text-slate-300 mx-auto" />
+                <h3 className="font-bold text-slate-800 mt-3">Select or create a course</h3>
+                <p className="text-sm text-slate-500 mt-1">Course Builder administration now lives here in Hub Admin.</p>
+              </div>
+            ) : (
+              <>
+                <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
+                  <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 mb-5">
+                    <div>
+                      <div className="text-[10px] uppercase tracking-wider text-slate-400 font-bold">{selectedId ? "Edit course" : "Create course"}</div>
+                      <h2 className="text-lg font-bold text-slate-900 mt-0.5">{draft.title || "Untitled course"}</h2>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {selectedId && <ActionButton onClick={duplicateCourse} icon={Copy} label="Duplicate" />}
+                      {selectedId && draft.status !== "Archived" && <ActionButton onClick={archiveCourse} icon={Archive} label="Archive" />}
+                      {selectedId && <ActionButton onClick={publishCourse} icon={Send} label="Publish" primary />}
+                      <ActionButton onClick={saveCourse} icon={busy ? Loader2 : Save} label={busy ? "Saving..." : "Save"} primary disabled={busy} spin={busy} />
+                      {selectedId && <ActionButton onClick={deleteCourse} icon={Trash2} label="Delete" danger />}
+                      {!selectedId && <button onClick={() => setDraft(null)} className="p-2 rounded-lg border border-slate-200 text-slate-500"><X className="w-4 h-4" /></button>}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <Field label="Course title"><input value={draft.title || ""} onChange={(e) => setDraft({ ...draft, title: e.target.value })} className="admin-input" /></Field>
+                    <Field label="Category"><input value={draft.category || ""} onChange={(e) => setDraft({ ...draft, category: e.target.value })} className="admin-input" /></Field>
+                    <Field label="Difficulty">
+                      <select value={draft.difficultyLevel || "Beginner"} onChange={(e) => setDraft({ ...draft, difficultyLevel: e.target.value })} className="admin-input">
+                        {["Beginner", "Intermediate", "Advanced"].map((value) => <option key={value}>{value}</option>)}
+                      </select>
+                    </Field>
+                    <Field label="Instructor"><input value={draft.instructor || ""} onChange={(e) => setDraft({ ...draft, instructor: e.target.value })} className="admin-input" /></Field>
+                    <Field label="Version"><input value={draft.courseVersion || ""} onChange={(e) => setDraft({ ...draft, courseVersion: e.target.value })} className="admin-input" /></Field>
+                    <Field label="Estimated duration"><input value={draft.estimatedDuration || ""} onChange={(e) => setDraft({ ...draft, estimatedDuration: e.target.value })} className="admin-input" /></Field>
+                    <Field label="Access">
+                      <select value={draft.pricingType || "free"} onChange={(e) => setDraft({ ...draft, pricingType: e.target.value as PricingType, price: e.target.value === "free" ? 0 : draft.price })} className="admin-input">
+                        <option value="free">Free</option>
+                        <option value="subscription">Subscription</option>
+                        <option value="premium">Legacy premium</option>
+                        <option value="free_trial">Legacy trial</option>
+                      </select>
+                    </Field>
+                    <Field label="Price"><input type="number" min="0" step="0.01" disabled={draft.pricingType === "free"} value={draft.price || 0} onChange={(e) => setDraft({ ...draft, price: Number(e.target.value) })} className="admin-input disabled:bg-slate-100" /></Field>
+                    <Field label="Short description" wide><textarea value={draft.shortDescription || ""} onChange={(e) => setDraft({ ...draft, shortDescription: e.target.value })} rows={2} className="admin-input" /></Field>
+                    <Field label="Full description" wide><textarea value={draft.fullDescription || ""} onChange={(e) => setDraft({ ...draft, fullDescription: e.target.value })} rows={5} className="admin-input" /></Field>
+                    <Field label="Learning objectives — one per line" wide><textarea value={(draft.learningObjectives || []).join("\n")} onChange={(e) => setDraft({ ...draft, learningObjectives: e.target.value.split("\n").map((v) => v.trim()).filter(Boolean) })} rows={4} className="admin-input" /></Field>
+                    <Field label="Prerequisites — one per line" wide><textarea value={(draft.prerequisites || []).join("\n")} onChange={(e) => setDraft({ ...draft, prerequisites: e.target.value.split("\n").map((v) => v.trim()).filter(Boolean) })} rows={3} className="admin-input" /></Field>
+                    <Field label="Thumbnail URL" wide><input value={draft.thumbnail || ""} onChange={(e) => setDraft({ ...draft, thumbnail: e.target.value })} className="admin-input" /></Field>
+                  </div>
+                </div>
+
+                {selectedId && (
+                  <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+                    <div className="p-5 border-b border-slate-200 flex items-center justify-between">
+                      <div>
+                        <h3 className="font-bold text-slate-900">Modules & lessons</h3>
+                        <p className="text-xs text-slate-500 mt-0.5">Build the course structure without leaving Hub.</p>
+                      </div>
+                      <button onClick={() => void addModule()} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-200 text-xs font-semibold hover:bg-slate-50">
+                        <Plus className="w-3.5 h-3.5" /> Add module
+                      </button>
+                    </div>
+                    <div className="divide-y divide-slate-100">
+                      {modules.map((module) => (
+                        <div key={module.id}>
+                          <div className="p-4 flex items-center gap-3">
+                            <button onClick={() => void toggleModule(module)} className="p-1 text-slate-500">
+                              {expandedModules.has(module.id) ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                            </button>
+                            <Layers3 className="w-4 h-4 text-cyan-600 shrink-0" />
+                            <input defaultValue={module.title} onBlur={(e) => e.target.value !== module.title && void updateModule(module, { title: e.target.value })} className="flex-1 text-sm font-semibold bg-transparent border-0 outline-none focus:ring-0" />
+                            <span className="text-[10px] text-slate-400">{(lessonsByModule[module.id] || []).length || "—"} lessons</span>
+                            <button onClick={() => void addLesson(module)} className="p-1.5 text-slate-500 hover:text-cyan-700" title="Add lesson"><Plus className="w-4 h-4" /></button>
+                            <button onClick={() => void deleteModule(module)} className="p-1.5 text-slate-400 hover:text-rose-600" title="Delete module"><Trash2 className="w-4 h-4" /></button>
+                          </div>
+                          {expandedModules.has(module.id) && (
+                            <div className="bg-slate-50 border-t border-slate-100 px-4 py-3 space-y-3">
+                              {(lessonsByModule[module.id] || []).map((lesson) => <LessonEditor key={lesson.id} lesson={lesson} onSave={updateLesson} onDelete={deleteLesson} />)}
+                              {(lessonsByModule[module.id] || []).length === 0 && <div className="text-xs text-slate-400 px-8 py-4">No lessons in this module yet.</div>}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                      {modules.length === 0 && <div className="p-8 text-center text-sm text-slate-400">No modules yet. Add the first module to start building the course.</div>}
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+          </section>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return <div className="bg-[#101D35] border border-slate-700/60 rounded-xl px-3 py-3 text-center"><div className="text-xl font-extrabold">{value}</div><div className="text-[9px] text-slate-400 mt-0.5">{label}</div></div>;
+}
+
+function Tab({ active, onClick, icon: Icon, label }: { active: boolean; onClick: () => void; icon: React.ComponentType<{ className?: string }>; label: string }) {
+  return <button onClick={onClick} className={`inline-flex items-center gap-2 px-4 py-3 text-xs font-semibold border-b-2 ${active ? "border-cyan-500 text-cyan-700" : "border-transparent text-slate-500 hover:text-slate-800"}`}><Icon className="w-4 h-4" />{label}</button>;
+}
+
+function Field({ label, children, wide = false }: { label: string; children: React.ReactNode; wide?: boolean }) {
+  return <label className={`space-y-1.5 ${wide ? "md:col-span-2" : ""}`}><span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{label}</span>{children}</label>;
+}
+
+function ActionButton({ onClick, icon: Icon, label, primary, danger, disabled, spin }: { onClick: () => void | Promise<void>; icon: React.ComponentType<{ className?: string }>; label: string; primary?: boolean; danger?: boolean; disabled?: boolean; spin?: boolean }) {
+  const style = danger ? "border-rose-200 text-rose-700 hover:bg-rose-50" : primary ? "bg-slate-950 border-slate-950 text-white hover:bg-slate-800" : "border-slate-200 text-slate-700 hover:bg-slate-50";
+  return <button onClick={() => void onClick()} disabled={disabled} className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border text-xs font-semibold disabled:opacity-50 ${style}`}><Icon className={`w-3.5 h-3.5 ${spin ? "animate-spin" : ""}`} />{label}</button>;
+}
+
+function LessonEditor({ lesson, onSave, onDelete }: { lesson: Lesson; onSave: (lesson: Lesson, patch: Partial<Lesson>) => Promise<void>; onDelete: (lesson: Lesson) => Promise<void> }) {
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState(lesson);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => setDraft(lesson), [lesson]);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await onSave(lesson, draft);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+      <div className="flex items-center gap-3 px-3 py-2.5">
+        <button onClick={() => setOpen(!open)} className="p-1 text-slate-400">{open ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}</button>
+        <FileText className="w-4 h-4 text-indigo-500" />
+        <div className="flex-1 min-w-0"><div className="text-xs font-semibold text-slate-800 truncate">{lesson.title}</div><div className="text-[10px] text-slate-400">{lesson.estimatedTime || "20 mins"}</div></div>
+        <button onClick={() => void onDelete(lesson)} className="p-1.5 text-slate-400 hover:text-rose-600"><Trash2 className="w-3.5 h-3.5" /></button>
+      </div>
+      {open && (
+        <div className="border-t border-slate-100 p-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+          <Field label="Lesson title"><input value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} className="admin-input" /></Field>
+          <Field label="Estimated time"><input value={draft.estimatedTime || ""} onChange={(e) => setDraft({ ...draft, estimatedTime: e.target.value })} className="admin-input" /></Field>
+          <Field label="Description" wide><textarea rows={2} value={draft.description || ""} onChange={(e) => setDraft({ ...draft, description: e.target.value })} className="admin-input" /></Field>
+          <Field label="Lesson content" wide><textarea rows={8} value={draft.lessonContent || ""} onChange={(e) => setDraft({ ...draft, lessonContent: e.target.value })} className="admin-input font-mono text-[11px]" /></Field>
+          <Field label="Video URL"><input value={draft.videoUrl || ""} onChange={(e) => setDraft({ ...draft, videoUrl: e.target.value })} className="admin-input" /></Field>
+          <Field label="Audio URL"><input value={draft.audioUrl || ""} onChange={(e) => setDraft({ ...draft, audioUrl: e.target.value })} className="admin-input" /></Field>
+          <Field label="Learning objectives — one per line" wide><textarea rows={3} value={(draft.learningObjectives || []).join("\n")} onChange={(e) => setDraft({ ...draft, learningObjectives: e.target.value.split("\n").map((value) => value.trim()).filter(Boolean) })} className="admin-input" /></Field>
+          <Field label="Exercise prompt" wide><textarea rows={3} value={draft.exercisePrompt || ""} onChange={(e) => setDraft({ ...draft, exercisePrompt: e.target.value })} className="admin-input" /></Field>
+          <div className="md:col-span-2 flex justify-end">
+            <button onClick={() => void save()} disabled={saving} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-950 text-white text-xs font-semibold disabled:opacity-50">
+              {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />} Save lesson
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

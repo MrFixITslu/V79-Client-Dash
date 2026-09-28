@@ -6,6 +6,7 @@ export type ViewState =
   | 'team'
   | 'security'
   | 'billing'
+  | 'admin'
   | 'dashboard'
   | 'users';
 

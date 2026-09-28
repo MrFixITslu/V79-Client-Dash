@@ -5,6 +5,7 @@ import {
   Users,
   Shield,
   CreditCard,
+  Settings2,
   LogOut,
 } from "lucide-react";
 import { ViewState, User } from "../types";
@@ -111,6 +112,25 @@ export function Sidebar({ currentView, onViewChange, onLogout, user }: SidebarPr
             </button>
           </div>
         </div>
+
+        {user.role === "admin" && (
+          <div>
+            <div className="px-3 mb-2 text-[10px] font-bold uppercase tracking-wider text-slate-500">
+              ADMINISTRATION
+            </div>
+            <button
+              onClick={() => onViewChange("admin")}
+              className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl font-medium text-xs transition-all ${
+                currentView === "admin"
+                  ? "bg-teal-900/40 text-teal-300 border border-teal-500/40 shadow-sm"
+                  : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 border border-transparent"
+              }`}
+            >
+              <Settings2 className="w-4 h-4" />
+              <span>Admin Console</span>
+            </button>
+          </div>
+        )}
       </nav>
 
       {/* ACTIVE ORGANISATION Footer matching screenshot */}
