@@ -25,6 +25,8 @@ test -f "$stage/docker-compose.yml" && test -f "$stage/Dockerfile"
 rsync -a --delete --exclude='/.env' --exclude='/data/' \
   --exclude='/backups/' --exclude='/.incoming.*/' "$stage/" "$root/"
 cd "$root"
+docker compose --project-name v79-hub build v79-hub
+docker compose --project-name v79-hub run --rm --no-deps --entrypoint node v79-hub scripts/preflight-organization.mjs
 docker compose --project-name v79-hub up -d --build --wait --wait-timeout 120
 container_id="$(docker compose --project-name v79-hub ps -q v79-hub)"
 test -n "$container_id"
