@@ -10,6 +10,8 @@ import { AcademyLearners } from "./AcademyLearners";
 import { AcademyPublishing } from "./AcademyPublishing";
 import { AcademyImport } from "./AcademyImport";
 import { AcademyJuniorAdmin } from "./AcademyJuniorAdmin";
+import { TiquetPlatformAdmin } from "./TiquetPlatformAdmin";
+import { MarketingPlatformAdmin } from "./MarketingPlatformAdmin";
 
 type CourseStatus = "Draft" | "Review" | "Ready for Upload" | "Uploaded" | "Imported" | "Published" | "Archived";
 type PricingType = "free" | "free_trial" | "premium" | "subscription";
@@ -82,6 +84,7 @@ interface AdminConsoleProps {
 }
 
 type AdminSection = "academy" | "platform";
+type PlatformView = "tiquet" | "marketing";
 type AcademyView = "courses" | "learners" | "publishing" | "import" | "junior";
 const emptyCourse = (): Partial<Course> => ({
   title: "",
@@ -111,6 +114,7 @@ const statusClass: Record<string, string> = {
 export function AdminConsole({ ecosystemApps }: AdminConsoleProps) {
   const [section, setSection] = useState<AdminSection>("academy");
   const [academyView, setAcademyView] = useState<AcademyView>("courses");
+  const [platformView, setPlatformView] = useState<PlatformView>("tiquet");
   const [courses, setCourses] = useState<Course[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState<Partial<Course> | null>(null);
@@ -415,12 +419,29 @@ export function AdminConsole({ ecosystemApps }: AdminConsoleProps) {
       </div>
 
       {section === "platform" ? (
-        <section className="bg-white border border-slate-200 rounded-2xl p-6">
-          <h2 className="font-bold text-slate-900">Platform controls</h2>
-          <p className="text-sm text-slate-500 mt-2">
-            Cross-application health, subscriptions, feature flags, maintenance and audit controls will be added here as each product admin API is migrated into Hub.
-          </p>
-        </section>
+        <div className="space-y-4">
+          <div className="flex flex-wrap gap-2">
+            {[
+              ["tiquet", "Tiquet"],
+              ["marketing", "Marketing"],
+            ].map(([id, label]) => (
+              <button
+                key={id}
+                onClick={() => setPlatformView(id as PlatformView)}
+                className={`px-3 py-2 rounded-lg border text-xs font-semibold ${
+                  platformView === id
+                    ? "bg-slate-950 border-slate-950 text-white"
+                    : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+            <span className="px-3 py-2 text-[10px] text-slate-400">POS and FFPRO platform controls are next.</span>
+          </div>
+
+          {platformView === "marketing" ? <MarketingPlatformAdmin /> : <TiquetPlatformAdmin />}
+        </div>
       ) : (
         <div className="space-y-4">
           <div className="flex flex-wrap gap-2">

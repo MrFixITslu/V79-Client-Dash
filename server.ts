@@ -834,6 +834,86 @@ app.use("/api/admin/academy", requireRole("admin"), async (req, res) => {
   }
 });
 
+
+async function proxySignedPlatformAdmin(
+  req: express.Request,
+  res: express.Response,
+  options: { baseUrl: string; hubPrefix: string; allowed: string[]; serviceLabel: string }
+) {
+  if (posSecret.length < 32) {
+    return res.status(503).json({ error: `${options.serviceLabel} platform integration is not configured.` });
+  }
+
+  const suffix = req.originalUrl.slice(options.hubPrefix.length) || "/";
+  const cleanSuffix = suffix.split("?")[0];
+  if (!options.allowed.some(prefix => cleanSuffix === prefix || cleanSuffix.startsWith(prefix + "/"))) {
+    return res.status(404).json({ error: `${options.serviceLabel} admin route is not exposed through Hub.` });
+  }
+
+  let target: URL;
+  try {
+    target = new URL(`/api/platform/admin${suffix}`, options.baseUrl);
+  } catch {
+    return res.status(400).json({ error: `Invalid ${options.serviceLabel} admin request.` });
+  }
+
+  const method = req.method.toUpperCase();
+  const body = ["GET", "HEAD", "OPTIONS"].includes(method)
+    ? ""
+    : (req.body === undefined ? "" : JSON.stringify(req.body));
+  const timestamp = String(Date.now());
+  const headers: Record<string, string> = {
+    "x-v79-service-id": "v79-hub",
+    "x-v79-timestamp": timestamp,
+    "x-v79-signature": signPlatformRequest({
+      method,
+      pathname: target.pathname,
+      timestamp,
+      body,
+      secret: posSecret,
+    }),
+    "accept": "application/json",
+  };
+  if (body) headers["content-type"] = "application/json";
+
+  try {
+    const upstream = await fetch(target, {
+      method,
+      headers,
+      body: body || undefined,
+      redirect: "manual",
+      signal: AbortSignal.timeout(15_000),
+    });
+    res.status(upstream.status);
+    res.setHeader("Cache-Control", "no-store");
+    const contentType = upstream.headers.get("content-type");
+    if (contentType) res.setHeader("content-type", contentType);
+    if (upstream.status === 204 || method === "HEAD") return res.end();
+    return res.send(Buffer.from(await upstream.arrayBuffer()));
+  } catch {
+    return res.status(503).json({ error: `${options.serviceLabel} administration service is unavailable.` });
+  }
+}
+
+app.use("/api/admin/tiquet", requireRole("admin"), async (req, res) => {
+  return proxySignedPlatformAdmin(req, res, {
+    baseUrl: dashboardSources.tiquet,
+    hubPrefix: "/api/admin/tiquet",
+    allowed: ["/stats", "/accounts"],
+    serviceLabel: "Tiquet",
+  });
+});
+
+app.use("/api/admin/marketing", requireRole("admin"), async (req, res) => {
+  if (req.method !== "GET") return res.status(405).json({ error: "Marketing platform administration is read-only in Hub right now." });
+  return proxySignedPlatformAdmin(req, res, {
+    baseUrl: dashboardSources.marketing,
+    hubPrefix: "/api/admin/marketing",
+    allowed: ["/stats", "/businesses"],
+    serviceLabel: "Marketing",
+  });
+});
+
 const retiredEmbeddedAppPaths = [
   "/api/inventory",
   "/api/transactions",
