@@ -747,13 +747,45 @@ async function readDashboardSummary(product: DashboardProduct) {
   }
 }
 
-app.get("/api/dashboard/summary", async (_req, res) => {
+app.get("/api/dashboard/summary", async (req, res) => {
   const products: DashboardProduct[] = ["pos", "ffpro", "tiquet", "marketing", "academy"];
-  const results = await Promise.all(products.map(async product => [product, await readDashboardSummary(product)] as const));
+  const canViewFinance = (req as any).user.role === "admin";
+  const results = await Promise.all(products.map(async product => [product,
+    product === "ffpro" && !canViewFinance
+      ? { status: "restricted", metrics: {}, generatedAt: null }
+      : await readDashboardSummary(product)
+  ] as const));
+  res.setHeader("Cache-Control", "no-store");
   res.json({
     generatedAt: new Date().toISOString(),
     apps: Object.fromEntries(results),
   });
+});
+
+const serviceHealthPaths: Record<DashboardProduct, string> = {
+  pos: "/health",
+  ffpro: "/api/health",
+  tiquet: "/health",
+  marketing: "/api/health",
+  academy: "/healthz",
+};
+
+app.get("/api/connections/status", async (_req, res) => {
+  const products = Object.keys(serviceHealthPaths) as DashboardProduct[];
+  const results = await Promise.all(products.map(async product => {
+    const started = performance.now();
+    try {
+      const response = await fetch(new URL(serviceHealthPaths[product], dashboardSources[product]), {
+        redirect: "manual",
+        signal: AbortSignal.timeout(3000),
+      });
+      return [product, { status: response.ok ? "online" : "unavailable", responseMs: Math.round(performance.now() - started) }] as const;
+    } catch {
+      return [product, { status: "unavailable", responseMs: null }] as const;
+    }
+  }));
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ checkedAt: new Date().toISOString(), apps: Object.fromEntries(results) });
 });
 
 const academyAdminBaseUrl = process.env.ACADEMY_INTERNAL_URL || "http://v79_course_builder:3030";

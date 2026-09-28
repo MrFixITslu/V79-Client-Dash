@@ -22,6 +22,7 @@ test('private data, retired embedded APIs and one-time app launch', {timeout:300
   }));
   let provision;
   const pos=createServer(async(req,res)=>{
+    if(req.url==='/health'){res.writeHead(200).end('ok');return;}
     let body='';for await(const chunk of req)body+=chunk;
     const ok=verifyPlatformRequest({method:req.method,pathname:req.url,timestamp:req.headers['x-v79-timestamp'],signature:req.headers['x-v79-signature'],body,secret});
     if(!ok){res.writeHead(401).end('{}');return;}
@@ -31,6 +32,7 @@ test('private data, retired embedded APIs and one-time app launch', {timeout:300
   const posOrigin=await listen(pos);
   const academyRequests=[];
   const academy=createServer(async(req,res)=>{
+    if(req.url==='/healthz'){res.writeHead(200).end('ok');return;}
     let body='';for await(const chunk of req)body+=chunk;
     const ok=verifyPlatformRequest({method:req.method,pathname:new URL(req.url,'http://academy.test').pathname,timestamp:req.headers['x-v79-timestamp'],signature:req.headers['x-v79-signature'],body,secret});
     if(!ok){res.writeHead(401,{'content-type':'application/json'}).end('{"error":"bad signature"}');return;}
@@ -44,6 +46,7 @@ test('private data, retired embedded APIs and one-time app launch', {timeout:300
   const academyOrigin=await listen(academy);
   const tiquetRequests=[];
   const tiquet=createServer(async(req,res)=>{
+    if(req.url==='/health'){res.writeHead(200).end('ok');return;}
     let body='';for await(const chunk of req)body+=chunk;
     const pathname=new URL(req.url,'http://tiquet.test').pathname;
     const ok=verifyPlatformRequest({method:req.method,pathname,timestamp:req.headers['x-v79-timestamp'],signature:req.headers['x-v79-signature'],body:'',secret});
@@ -55,8 +58,20 @@ test('private data, retired embedded APIs and one-time app launch', {timeout:300
     res.writeHead(404).end('{}');
   });
   const tiquetOrigin=await listen(tiquet);
+  let financeSummaryCalls=0;
+  const ffpro=createServer(async(req,res)=>{
+    if(req.url==='/api/health'){res.writeHead(200).end('ok');return;}
+    if(req.url?.startsWith('/api/platform/summary/')){
+      financeSummaryCalls++;
+      res.setHeader('content-type','application/json');
+      res.end('{"metrics":{"currentMonthNet":123456,"currentMonthIncome":200000},"generatedAt":"2026-09-28T00:00:00Z"}');
+      return;
+    }
+    res.writeHead(404).end('{}');
+  });
+  const ffproOrigin=await listen(ffpro);
   const probe=createServer();const origin=await listen(probe);await new Promise(resolve=>probe.close(resolve));
-  const server=spawn(process.execPath,['--import','tsx','server.ts'],{cwd:process.cwd(),env:{...process.env,NODE_ENV:'production',DATA_DIR:dir,PORT:new URL(origin).port,APP_URL:origin,V79_HUB_ADMIN_PASSWORD:'a-unique-admin-password-1234',V79_HUB_ADMIN_EMAIL:'owner@example.test',V79_PLATFORM_SHARED_SECRET:secret,V79_FFPRO_LAUNCH_SECRET:secret,V79_TIQUET_LAUNCH_SECRET:secret,V79_MARKETING_LAUNCH_SECRET:secret,POS_BASE_URL:posOrigin,POS_PUBLIC_URL:'https://pos.example.test',ACADEMY_INTERNAL_URL:academyOrigin,TIQUET_INTERNAL_URL:tiquetOrigin},stdio:['ignore','pipe','pipe']});
+  const server=spawn(process.execPath,['--import','tsx','server.ts'],{cwd:process.cwd(),env:{...process.env,NODE_ENV:'production',DATA_DIR:dir,PORT:new URL(origin).port,APP_URL:origin,V79_HUB_ADMIN_PASSWORD:'a-unique-admin-password-1234',V79_HUB_ADMIN_EMAIL:'owner@example.test',V79_PLATFORM_SHARED_SECRET:secret,V79_FFPRO_LAUNCH_SECRET:secret,V79_TIQUET_LAUNCH_SECRET:secret,V79_MARKETING_LAUNCH_SECRET:secret,POS_BASE_URL:posOrigin,POS_PUBLIC_URL:'https://pos.example.test',ACADEMY_INTERNAL_URL:academyOrigin,TIQUET_INTERNAL_URL:tiquetOrigin,FFPRO_INTERNAL_URL:ffproOrigin},stdio:['ignore','pipe','pipe']});
   let errors='';server.stderr.on('data',c=>errors+=c);
   server.stdout.on('data',c=>errors+=c);
   t.after(async()=>{
@@ -64,6 +79,7 @@ test('private data, retired embedded APIs and one-time app launch', {timeout:300
     pos.closeAllConnections();await new Promise(resolve=>pos.close(resolve));
     academy.closeAllConnections();await new Promise(resolve=>academy.close(resolve));
     tiquet.closeAllConnections();await new Promise(resolve=>tiquet.close(resolve));
+    ffpro.closeAllConnections();await new Promise(resolve=>ffpro.close(resolve));
     await rm(dir,{recursive:true,force:true});
   });
   const request=(path,options={})=>fetch(origin+path,{redirect:'manual',...options});
@@ -71,6 +87,7 @@ test('private data, retired embedded APIs and one-time app launch', {timeout:300
   let health;try{health=await request('/api/health');}catch{throw new Error(`Hub failed to start: ${errors}`);}
   assert.equal(health.status,200,errors);
   assert.equal((await request('/api/inventory')).status,401);
+  assert.equal((await request('/api/connections/status')).status,401);
   assert.equal((await request('/api/users')).status,401);
   assert.equal((await request('/api/auth/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({username:'admin',password:'password123'})})).status,401);
   const login=await request('/api/auth/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({username:'admin',password:'a-unique-admin-password-1234'})});
@@ -83,6 +100,13 @@ test('private data, retired embedded APIs and one-time app launch', {timeout:300
   assert.equal('token' in (await login.clone().json()),false);
   const cookie=login.headers.get('set-cookie').split(';')[0];
   const headers={Cookie:cookie,Origin:origin,'content-type':'application/json'};
+  const ownerSummary=await (await request('/api/dashboard/summary',{headers:{Cookie:cookie}})).json();
+  assert.equal(ownerSummary.apps.ffpro.metrics.currentMonthNet,123456);
+  const connectionCheck=await (await request('/api/connections/status',{headers:{Cookie:cookie}})).json();
+  assert.equal(connectionCheck.apps.ffpro.status,'online');
+  assert.equal(connectionCheck.apps.academy.status,'online');
+  assert.equal(connectionCheck.apps.marketing.status,'unavailable');
+  assert.equal('metrics' in connectionCheck.apps.ffpro,false);
   const platformOverview=await request('/api/admin/platform/overview',{headers:{Cookie:cookie}});
   assert.equal(platformOverview.status,200);
   const overviewPayload=await platformOverview.json();
@@ -102,6 +126,11 @@ test('private data, retired embedded APIs and one-time app launch', {timeout:300
   assert.equal(create.status,201);
   const viewerLogin=await request('/api/auth/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({username:'viewer',password:'viewer-password-1234'})});
   const viewerCookie=viewerLogin.headers.get('set-cookie').split(';')[0];
+  const financeCallsBeforeViewer=financeSummaryCalls;
+  const viewerSummary=await (await request('/api/dashboard/summary',{headers:{Cookie:viewerCookie}})).json();
+  assert.equal(viewerSummary.apps.ffpro.status,'restricted');
+  assert.deepEqual(viewerSummary.apps.ffpro.metrics,{});
+  assert.equal(financeSummaryCalls,financeCallsBeforeViewer);
   assert.equal((await request('/api/users',{headers:{Cookie:viewerCookie}})).status,403);
   assert.equal((await request('/api/pos/checkout',{method:'POST',headers:{...headers,Cookie:viewerCookie},body:'{}'})).status,410);
   assert.equal((await request('/api/apps/pos/launch',{headers:{Cookie:viewerCookie}})).status,403);
