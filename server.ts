@@ -756,6 +756,83 @@ app.get("/api/dashboard/summary", async (_req, res) => {
   });
 });
 
+const academyAdminBaseUrl = process.env.ACADEMY_INTERNAL_URL || "http://v79_course_builder:3030";
+const academyAdminAllowedPaths = [
+  "/api/courses",
+  "/api/modules",
+  "/api/lessons",
+  "/api/content-blocks",
+  "/api/assets",
+  "/api/assignments",
+  "/api/downloads",
+  "/api/media",
+  "/api/import-histories",
+  "/api/publishing-logs",
+  "/api/gemini/assist",
+  "/api/learners",
+  "/api/junior-admin",
+];
+
+app.use("/api/admin/academy", requireRole("admin"), async (req, res) => {
+  if (posSecret.length < 32) {
+    return res.status(503).json({ error: "Academy platform integration is not configured." });
+  }
+
+  const suffix = req.originalUrl.slice("/api/admin/academy".length) || "/";
+  let target: URL;
+  try {
+    target = new URL(`/api${suffix}`, academyAdminBaseUrl);
+  } catch {
+    return res.status(400).json({ error: "Invalid Academy admin request." });
+  }
+
+  if (!academyAdminAllowedPaths.some(prefix => target.pathname === prefix || target.pathname.startsWith(prefix + "/"))) {
+    return res.status(404).json({ error: "Academy admin route is not exposed through Hub." });
+  }
+
+  const method = req.method.toUpperCase();
+  const body = ["GET", "HEAD", "OPTIONS"].includes(method)
+    ? ""
+    : (req.body === undefined ? "" : JSON.stringify(req.body));
+  const timestamp = String(Date.now());
+  const headers: Record<string, string> = {
+    "x-v79-service-id": "v79-hub",
+    "x-v79-timestamp": timestamp,
+    "x-v79-signature": signPlatformRequest({
+      method,
+      pathname: target.pathname,
+      timestamp,
+      body,
+      secret: posSecret,
+    }),
+    "accept": String(req.get("accept") || "application/json"),
+  };
+  if (body) headers["content-type"] = "application/json";
+
+  try {
+    const upstream = await fetch(target, {
+      method,
+      headers,
+      body: body || undefined,
+      redirect: "manual",
+      signal: AbortSignal.timeout(60_000),
+    });
+
+    res.status(upstream.status);
+    for (const name of ["content-type", "content-disposition", "etag", "last-modified"]) {
+      const value = upstream.headers.get(name);
+      if (value) res.setHeader(name, value);
+    }
+    res.setHeader("Cache-Control", "no-store");
+
+    if (upstream.status === 204 || method === "HEAD") return res.end();
+    const payload = Buffer.from(await upstream.arrayBuffer());
+    return res.send(payload);
+  } catch {
+    return res.status(503).json({ error: "Academy management service is unavailable." });
+  }
+});
+
 const retiredEmbeddedAppPaths = [
   "/api/inventory",
   "/api/transactions",
