@@ -555,7 +555,7 @@ const defaultEcosystemApps: EcosystemApp[] = [
     description: "Public training stays independent; businesses can link learner progress to their Hub.",
     category: "team",
     status: "active",
-    appUrl: "https://academy.v79sl.com",
+    appUrl: "https://v79academy.v79sl.com/academy",
     githubRepo: "https://github.com/MrFixITslu/V79Academy",
     iconName: "GraduationCap",
     colorScheme: {

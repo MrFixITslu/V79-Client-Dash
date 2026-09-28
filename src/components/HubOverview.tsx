@@ -110,7 +110,7 @@ const appCards: Array<{
     shortName: "Academy",
     title: "V79 Academy",
     category: "Learning & capability",
-    fallback: "https://academy.v79sl.com",
+    fallback: "https://v79academy.v79sl.com/academy",
     icon: GraduationCap,
     accent: "text-indigo-600",
     description: "Learning progress, course access and certifications.",
