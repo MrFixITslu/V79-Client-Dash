@@ -97,6 +97,13 @@ test('private data, retired embedded APIs and one-time app launch', {timeout:300
   assert.equal(preservedStore.settings.companyName,'Legacy Organisation');
   assert.equal(preservedStore.legacyCustomData.keep,true);
   assert.equal(preservedStore.workspace.companyName,'Legacy Organisation');
+  assert.equal(preservedStore.organizations.length,1);
+  assert.equal(preservedStore.organizations[0].name,'Legacy Organisation');
+  assert.equal(preservedStore.memberships.length,1);
+  assert.equal(preservedStore.memberships[0].role,'owner');
+  const migrationBackup=JSON.parse(await readFile(join(dir,'v79_store_pre_organizations.json'),'utf8'));
+  assert.equal(migrationBackup.legacyCustomData.keep,true);
+  assert.equal(migrationBackup.organizations.length,0);
   assert.equal('token' in (await login.clone().json()),false);
   const cookie=login.headers.get('set-cookie').split(';')[0];
   const headers={Cookie:cookie,Origin:origin,'content-type':'application/json'};
@@ -124,6 +131,9 @@ test('private data, retired embedded APIs and one-time app launch', {timeout:300
   assert.equal((await request('/api/settings/reset',{method:'POST',headers})).status,410);
   const create=await request('/api/users',{method:'POST',headers,body:JSON.stringify({username:'viewer',password:'viewer-password-1234',role:'viewer'})});
   assert.equal(create.status,201);
+  const createdUser=await create.clone().json();
+  const afterInvite=JSON.parse(await readFile(storeFile,'utf8'));
+  assert.equal(afterInvite.memberships.some(member=>member.userId===createdUser.id),true);
   const viewerLogin=await request('/api/auth/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({username:'viewer',password:'viewer-password-1234'})});
   const viewerCookie=viewerLogin.headers.get('set-cookie').split(';')[0];
   const financeCallsBeforeViewer=financeSummaryCalls;
@@ -183,6 +193,12 @@ test('private data, retired embedded APIs and one-time app launch', {timeout:300
     assert.equal(identity.organization.id,provision.organization.id);
     assert.equal((await request('/api/platform/session/consume',signed)).status,401);
   }
+  const ownerId=preservedStore.memberships[0].userId;
+  assert.equal((await request(`/api/users/${ownerId}`,{method:'DELETE',headers})).status,400);
+  assert.equal((await request(`/api/users/${ownerId}`,{method:'PUT',headers,body:JSON.stringify({role:'staff'})})).status,400);
+  assert.equal((await request(`/api/users/${createdUser.id}`,{method:'DELETE',headers})).status,200);
+  const afterRemoval=JSON.parse(await readFile(storeFile,'utf8'));
+  assert.equal(afterRemoval.memberships.some(member=>member.userId===createdUser.id),false);
 });
 
 test('administrator password recovery preserves Hub records and old hash is replaced', async t => {

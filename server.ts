@@ -7,6 +7,7 @@ import { fileURLToPath } from "url";
 import fs from "fs";
 import crypto from "crypto";
 import { signPlatformRequest, verifyPlatformRequest } from "./server/platform-contract.mjs";
+import { migrateLegacyOrganization } from "./server/organization-store.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -48,6 +49,22 @@ interface WorkspaceProfile {
   companyName: string;
 }
 
+interface Organization {
+  id: string;
+  name: string;
+  slug: string;
+  status: "active" | "suspended";
+  createdAt: string;
+}
+
+interface Membership {
+  organizationId: string;
+  userId: string;
+  role: StoredUser["role"] | "owner";
+  status: "active" | "revoked";
+  createdAt: string;
+}
+
 interface EcosystemApp {
   id: string;
   name: string;
@@ -82,6 +99,8 @@ interface AppStore {
   users: StoredUser[];
   workspace: WorkspaceProfile;
   ecosystemApps: EcosystemApp[];
+  organizations: Organization[];
+  memberships: Membership[];
 }
 
 // Initial Seed Data
@@ -376,6 +395,10 @@ function loadStore(): AppStore {
       const workspaceCompanyName = typeof parsed?.workspace?.companyName === "string"
         ? parsed.workspace.companyName.trim()
         : "";
+      if ((parsed.organizations !== undefined && !Array.isArray(parsed.organizations)) ||
+          (parsed.memberships !== undefined && !Array.isArray(parsed.memberships))) {
+        throw new Error("Organization records are malformed.");
+      }
 
       return {
         users: Array.isArray(parsed.users) ? parsed.users : defaultUsers,
@@ -383,6 +406,8 @@ function loadStore(): AppStore {
           companyName: workspaceCompanyName || legacyCompanyName || defaultWorkspace.companyName,
         },
         ecosystemApps: normalizeEcosystemApps(parsed.ecosystemApps),
+        organizations: Array.isArray(parsed.organizations) ? parsed.organizations : [],
+        memberships: Array.isArray(parsed.memberships) ? parsed.memberships : [],
       };
     }
   } catch (err) {
@@ -393,6 +418,8 @@ function loadStore(): AppStore {
     users: defaultUsers,
     workspace: { ...defaultWorkspace },
     ecosystemApps: defaultEcosystemApps.map(app => ({ ...app })),
+    organizations: [],
+    memberships: [],
   };
   saveStore(initialStore);
   return initialStore;
@@ -414,6 +441,8 @@ function saveStore(store: AppStore): void {
     users: store.users,
     workspace: store.workspace,
     ecosystemApps: store.ecosystemApps,
+    organizations: store.organizations,
+    memberships: store.memberships,
   };
   const tempFile = STORE_FILE + ".tmp";
   fs.writeFileSync(tempFile, JSON.stringify(persisted, null, 2), { encoding: "utf-8", mode: 0o600 });
@@ -475,6 +504,8 @@ function sessionFromToken(token: string) {
   }
   const user = store.users.find(u => u.id === session.userId);
   if (!user) return null;
+  if (!store.memberships.some(member => member.userId === user.id && member.organizationId === posIdentity.organizationId && member.status === "active") ||
+      !store.organizations.some(org => org.id === posIdentity.organizationId && org.status === "active")) return null;
   session.role = user.role;
   return session;
 }
@@ -496,6 +527,20 @@ const posIdentity = (() => {
   fs.writeFileSync(posIdentityPath, JSON.stringify(identity), { mode: 0o600, flag: "wx" });
   return identity;
 })();
+const organizationMigration = posIdentity.ownerUserId
+  ? migrateLegacyOrganization(store, posIdentity.organizationId, posIdentity.ownerUserId)
+  : null;
+if (process.env.NODE_ENV === "production" && !organizationMigration) throw new Error("The Hub owner identity is missing.");
+if (organizationMigration?.changed) {
+  const backupPath = path.join(DATA_DIR, "v79_store_pre_organizations.json");
+  if (!fs.existsSync(backupPath)) {
+    fs.copyFileSync(STORE_FILE, backupPath, fs.constants.COPYFILE_EXCL);
+    fs.chmodSync(backupPath, 0o600);
+  }
+  store.organizations = organizationMigration.organizations;
+  store.memberships = organizationMigration.memberships;
+  saveStore(store);
+}
 const posKeyPath = path.join(DATA_DIR, "pos-signing-ed25519.pem");
 if (!fs.existsSync(posKeyPath)) {
   const pair = crypto.generateKeyPairSync("ed25519");
@@ -640,7 +685,8 @@ app.post("/api/auth/login", (req, res) => {
   if (attempts && attempts.count >= 10 && attempts.until > Date.now()) return res.status(429).json({ error: "Too many login attempts. Try again later." });
 
   const foundUser = store.users.find(
-    (u) => u.username.toLowerCase() === String(username).trim().toLowerCase() && checkPassword(password, u.password)
+    (u) => u.username.toLowerCase() === String(username).trim().toLowerCase() && checkPassword(password, u.password) &&
+      store.memberships.some(member => member.userId === u.id && member.organizationId === posIdentity.organizationId && member.status === "active")
   );
 
   if (!foundUser) {
@@ -1091,6 +1137,7 @@ app.post("/api/users", (req, res) => {
   };
 
   store.users.push(newUser);
+  store.memberships.push({ organizationId: posIdentity.organizationId, userId: newUser.id, role: newUser.role, status: "active", createdAt: newUser.createdAt });
   saveStore(store);
   broadcast({ type: "USERS_UPDATED", payload: store.users.map(sanitizeUser) });
   res.status(201).json(sanitizeUser(newUser));
@@ -1108,6 +1155,7 @@ app.put("/api/users/:id", (req, res) => {
   const current = store.users[userIndex];
   if (password !== undefined && (typeof password !== "string" || password.length < 12)) return res.status(400).json({ error: "Password must contain at least 12 characters" });
   if (role !== undefined && !["admin", "manager", "staff", "viewer"].includes(role)) return res.status(400).json({ error: "Invalid role" });
+  if (id === posIdentity.ownerUserId && role && role !== "admin") return res.status(400).json({ error: "Cannot demote the workspace owner" });
   if (current.role === "admin" && role && role !== "admin" && store.users.filter(u => u.role === "admin").length === 1) return res.status(400).json({ error: "Cannot demote the sole administrator" });
   store.users[userIndex] = {
     ...current,
@@ -1117,6 +1165,10 @@ app.put("/api/users/:id", (req, res) => {
     role: role !== undefined ? role : current.role,
     permissions: normalizePermissions(Array.isArray(permissions) ? permissions : current.permissions, role !== undefined ? role : current.role)
   };
+  if (role !== undefined) {
+    const member = store.memberships.find(m => m.organizationId === posIdentity.organizationId && m.userId === id);
+    if (member && member.role !== "owner") member.role = role;
+  }
 
   saveStore(store);
   if (password || (role && role !== current.role)) for (const [token, session] of sessions) if (session.userId === id) sessions.delete(token);
@@ -1130,11 +1182,14 @@ app.delete("/api/users/:id", (req, res) => {
   const adminCount = store.users.filter((u) => u.role === "admin").length;
   const userToDelete = store.users.find((u) => u.id === id);
 
+  if (id === posIdentity.ownerUserId) return res.status(400).json({ error: "Cannot delete the workspace owner" });
+
   if (userToDelete?.role === "admin" && adminCount <= 1) {
     return res.status(400).json({ error: "Cannot delete the sole administrator account" });
   }
 
   store.users = store.users.filter((u) => u.id !== id);
+  store.memberships = store.memberships.filter(m => m.userId !== id);
   for (const [token, session] of sessions) if (session.userId === id) sessions.delete(token);
   saveStore(store);
   broadcast({ type: "USERS_UPDATED", payload: store.users.map(sanitizeUser) });

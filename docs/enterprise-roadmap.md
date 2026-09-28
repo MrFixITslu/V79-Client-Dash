@@ -8,6 +8,8 @@ The first multi-workspace beta is **invite-only**. A V79 operator approves each 
 
 The current Hub has one global JSON store and one configured owner organization. This is a migration plan, not a claim that multi-tenant access is implemented.
 
+The first code stage records the legacy V79 organization and memberships with a pre-migration store copy. It still serves only the existing V79 workspace. Do not enable invitations or new SMB logins until every Hub route and connected-app launch is scoped to the authenticated organization and isolation tests pass. A transactional database migration is still needed before general multi-tenant operation.
+
 ## Release sequence
 
 1. **Protect existing data and access.** Keep current signed launches working. Restrict finance summaries by role, replace simulated service checks, remove tracked runtime data from Tiquet, and review historical exposure separately.
