@@ -25,7 +25,7 @@ test('private data, retired embedded APIs and one-time app launch', {timeout:300
     let body='';for await(const chunk of req)body+=chunk;
     const ok=verifyPlatformRequest({method:req.method,pathname:req.url,timestamp:req.headers['x-v79-timestamp'],signature:req.headers['x-v79-signature'],body,secret});
     if(!ok){res.writeHead(401).end('{}');return;}
-    provision=JSON.parse(body);
+    if(body) provision=JSON.parse(body);
     res.setHeader('content-type','application/json');res.end('{"provisioned":true}');
   });
   const posOrigin=await listen(pos);
@@ -37,6 +37,7 @@ test('private data, retired embedded APIs and one-time app launch', {timeout:300
     academyRequests.push({method:req.method,url:req.url,body});
     res.setHeader('content-type','application/json');
     if(req.method==='GET' && req.url==='/api/courses'){res.end('[{"id":"academy-course-1","title":"Signed Academy Course"}]');return;}
+    if(req.method==='GET' && req.url==='/api/platform/admin/stats'){res.end('{"totalCourses":4,"publishedCourses":2,"draftCourses":2,"totalLearners":3,"activeMemberships":2,"totalEnrolments":5,"certificates":1}');return;}
     if(req.method==='POST' && req.url==='/api/courses'){res.writeHead(201).end(body||'{}');return;}
     res.writeHead(404).end('{"error":"not found"}');
   });
@@ -68,6 +69,11 @@ test('private data, retired embedded APIs and one-time app launch', {timeout:300
   assert.equal('token' in (await login.clone().json()),false);
   const cookie=login.headers.get('set-cookie').split(';')[0];
   const headers={Cookie:cookie,Origin:origin,'content-type':'application/json'};
+  const platformOverview=await request('/api/admin/platform/overview',{headers:{Cookie:cookie}});
+  assert.equal(platformOverview.status,200);
+  const overviewPayload=await platformOverview.json();
+  assert.equal(overviewPayload.apps.academy.status,'ok');
+  assert.equal(overviewPayload.apps.academy.metrics.totalCourses,4);
   assert.equal((await request('/api/users',{headers})).status,200);
   assert.equal((await request('/api/users',{method:'POST',headers:{Cookie:cookie,'content-type':'application/json'},body:'{}'})).status,403);
   assert.equal((await request('/api/settings/reset',{method:'POST',headers})).status,410);

@@ -14,6 +14,7 @@ import { TiquetPlatformAdmin } from "./TiquetPlatformAdmin";
 import { MarketingPlatformAdmin } from "./MarketingPlatformAdmin";
 import { POSPlatformAdmin } from "./POSPlatformAdmin";
 import { FFPROPlatformAdmin } from "./FFPROPlatformAdmin";
+import { PlatformAdminOverview } from "./PlatformAdminOverview";
 
 type CourseStatus = "Draft" | "Review" | "Ready for Upload" | "Uploaded" | "Imported" | "Published" | "Archived";
 type PricingType = "free" | "free_trial" | "premium" | "subscription";
@@ -86,7 +87,7 @@ interface AdminConsoleProps {
 }
 
 type AdminSection = "academy" | "platform";
-type PlatformView = "pos" | "ffpro" | "tiquet" | "marketing";
+type PlatformView = "overview" | "pos" | "ffpro" | "tiquet" | "marketing";
 type AcademyView = "courses" | "learners" | "publishing" | "import" | "junior";
 const emptyCourse = (): Partial<Course> => ({
   title: "",
@@ -116,7 +117,7 @@ const statusClass: Record<string, string> = {
 export function AdminConsole({ ecosystemApps }: AdminConsoleProps) {
   const [section, setSection] = useState<AdminSection>("academy");
   const [academyView, setAcademyView] = useState<AcademyView>("courses");
-  const [platformView, setPlatformView] = useState<PlatformView>("tiquet");
+  const [platformView, setPlatformView] = useState<PlatformView>("overview");
   const [courses, setCourses] = useState<Course[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState<Partial<Course> | null>(null);
@@ -424,6 +425,7 @@ export function AdminConsole({ ecosystemApps }: AdminConsoleProps) {
         <div className="space-y-4">
           <div className="flex flex-wrap gap-2">
             {[
+              ["overview", "Overview"],
               ["pos", "POS"],
               ["ffpro", "FFPRO"],
               ["tiquet", "Tiquet"],
@@ -443,7 +445,16 @@ export function AdminConsole({ ecosystemApps }: AdminConsoleProps) {
             ))}
           </div>
 
-          {platformView === "pos" ? (
+          {platformView === "overview" ? (
+            <PlatformAdminOverview onOpen={(product) => {
+              if (product === "academy") {
+                setSection("academy");
+                setAcademyView("courses");
+              } else {
+                setPlatformView(product);
+              }
+            }} />
+          ) : platformView === "pos" ? (
             <POSPlatformAdmin />
           ) : platformView === "ffpro" ? (
             <FFPROPlatformAdmin />

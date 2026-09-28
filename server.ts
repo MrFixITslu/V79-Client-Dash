@@ -915,13 +915,14 @@ app.use("/api/admin/marketing", requireRole("admin"), async (req, res) => {
 });
 
 
-type PlatformAdminProduct = "pos" | "tiquet" | "marketing" | "ffpro";
+type PlatformAdminProduct = "pos" | "tiquet" | "marketing" | "ffpro" | "academy";
 
 const platformAdminSources: Record<PlatformAdminProduct, string> = {
   pos: process.env.POS_BASE_URL || "http://v79-pos:8080",
   tiquet: process.env.TIQUET_INTERNAL_URL || "http://v79-tiquet-manager:3050",
   marketing: process.env.MARKETING_INTERNAL_URL || "http://v79marketing-app:3070",
   ffpro: process.env.FFPRO_INTERNAL_URL || "http://fire-finance-app:3010",
+  academy: process.env.ACADEMY_INTERNAL_URL || "http://v79_course_builder:3030",
 };
 
 const platformAdminAllowed: Record<PlatformAdminProduct, Array<{ method: string; path: RegExp }>> = {
@@ -944,6 +945,9 @@ const platformAdminAllowed: Record<PlatformAdminProduct, Array<{ method: string;
   ffpro: [
     { method: "GET", path: /^\/api\/platform\/admin\/stats$/ },
     { method: "GET", path: /^\/api\/platform\/admin\/accounts$/ },
+  ],
+  academy: [
+    { method: "GET", path: /^\/api\/platform\/admin\/stats$/ },
   ],
 };
 
@@ -1005,7 +1009,7 @@ async function callPlatformAdmin(product: PlatformAdminProduct, method: string, 
 }
 
 app.get("/api/admin/platform/overview", requireRole("admin"), async (_req, res) => {
-  const products: PlatformAdminProduct[] = ["pos", "tiquet", "marketing", "ffpro"];
+  const products: PlatformAdminProduct[] = ["pos", "tiquet", "marketing", "ffpro", "academy"];
   const entries = await Promise.all(products.map(async product => {
     const response = await callPlatformAdmin(product, "GET", "/api/platform/admin/stats");
     let data: any = null;
