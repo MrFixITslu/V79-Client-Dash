@@ -7,6 +7,7 @@ on:
     paths:
       - ".github/workflows/deploy-ecosystem.yml"
       - "scripts/deploy-ecosystem-release.sh"
+      - "scripts/smoke-launches.mjs"
 
 permissions:
   contents: read
@@ -111,3 +112,16 @@ jobs:
           port="${DEPLOY_SSH_PORT:-22}"
           target="${DEPLOY_USER}@${DEPLOY_HOST}"
           ssh -p "$port" -o StrictHostKeyChecking=yes "$target" bash -s < hub/scripts/deploy-ecosystem-release.sh
+
+      - name: Smoke-test Hub app launches
+        shell: bash
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_PORT: ${{ vars.DEPLOY_SSH_PORT }}
+        run: |
+          set -euo pipefail
+          port="${DEPLOY_SSH_PORT:-22}"
+          target="${DEPLOY_USER}@${DEPLOY_HOST}"
+          ssh -p "$port" -o StrictHostKeyChecking=yes "$target" \
+            docker exec v79-hub node /app/scripts/smoke-launches.mjs
