@@ -29,13 +29,26 @@ test('private data, retired embedded APIs and one-time app launch', {timeout:300
     res.setHeader('content-type','application/json');res.end('{"provisioned":true}');
   });
   const posOrigin=await listen(pos);
+  const academyRequests=[];
+  const academy=createServer(async(req,res)=>{
+    let body='';for await(const chunk of req)body+=chunk;
+    const ok=verifyPlatformRequest({method:req.method,pathname:new URL(req.url,'http://academy.test').pathname,timestamp:req.headers['x-v79-timestamp'],signature:req.headers['x-v79-signature'],body,secret});
+    if(!ok){res.writeHead(401,{'content-type':'application/json'}).end('{"error":"bad signature"}');return;}
+    academyRequests.push({method:req.method,url:req.url,body});
+    res.setHeader('content-type','application/json');
+    if(req.method==='GET' && req.url==='/api/courses'){res.end('[{"id":"academy-course-1","title":"Signed Academy Course"}]');return;}
+    if(req.method==='POST' && req.url==='/api/courses'){res.writeHead(201).end(body||'{}');return;}
+    res.writeHead(404).end('{"error":"not found"}');
+  });
+  const academyOrigin=await listen(academy);
   const probe=createServer();const origin=await listen(probe);await new Promise(resolve=>probe.close(resolve));
-  const server=spawn(process.execPath,['--import','tsx','server.ts'],{cwd:process.cwd(),env:{...process.env,NODE_ENV:'production',DATA_DIR:dir,PORT:new URL(origin).port,APP_URL:origin,V79_HUB_ADMIN_PASSWORD:'a-unique-admin-password-1234',V79_HUB_ADMIN_EMAIL:'owner@example.test',V79_PLATFORM_SHARED_SECRET:secret,V79_FFPRO_LAUNCH_SECRET:secret,V79_TIQUET_LAUNCH_SECRET:secret,V79_MARKETING_LAUNCH_SECRET:secret,POS_BASE_URL:posOrigin,POS_PUBLIC_URL:'https://pos.example.test'},stdio:['ignore','pipe','pipe']});
+  const server=spawn(process.execPath,['--import','tsx','server.ts'],{cwd:process.cwd(),env:{...process.env,NODE_ENV:'production',DATA_DIR:dir,PORT:new URL(origin).port,APP_URL:origin,V79_HUB_ADMIN_PASSWORD:'a-unique-admin-password-1234',V79_HUB_ADMIN_EMAIL:'owner@example.test',V79_PLATFORM_SHARED_SECRET:secret,V79_FFPRO_LAUNCH_SECRET:secret,V79_TIQUET_LAUNCH_SECRET:secret,V79_MARKETING_LAUNCH_SECRET:secret,POS_BASE_URL:posOrigin,POS_PUBLIC_URL:'https://pos.example.test',ACADEMY_INTERNAL_URL:academyOrigin},stdio:['ignore','pipe','pipe']});
   let errors='';server.stderr.on('data',c=>errors+=c);
   server.stdout.on('data',c=>errors+=c);
   t.after(async()=>{
     if(server.exitCode===null){const exit=new Promise(resolve=>server.once('exit',resolve));server.kill();await Promise.race([exit,new Promise(resolve=>setTimeout(resolve,1500))]);}
     pos.closeAllConnections();await new Promise(resolve=>pos.close(resolve));
+    academy.closeAllConnections();await new Promise(resolve=>academy.close(resolve));
     await rm(dir,{recursive:true,force:true});
   });
   const request=(path,options={})=>fetch(origin+path,{redirect:'manual',...options});
@@ -65,6 +78,15 @@ test('private data, retired embedded APIs and one-time app launch', {timeout:300
   assert.equal((await request('/api/users',{headers:{Cookie:viewerCookie}})).status,403);
   assert.equal((await request('/api/pos/checkout',{method:'POST',headers:{...headers,Cookie:viewerCookie},body:'{}'})).status,410);
   assert.equal((await request('/api/apps/pos/launch',{headers:{Cookie:viewerCookie}})).status,403);
+  assert.equal((await request('/api/admin/academy/courses',{headers:{Cookie:viewerCookie}})).status,403);
+  const academyList=await request('/api/admin/academy/courses',{headers:{Cookie:cookie}});
+  assert.equal(academyList.status,200);
+  assert.equal((await academyList.json())[0].title,'Signed Academy Course');
+  const academyCreate=await request('/api/admin/academy/courses',{method:'POST',headers,body:JSON.stringify({title:'Created through Hub Admin'})});
+  assert.equal(academyCreate.status,201);
+  assert.equal((await academyCreate.json()).title,'Created through Hub Admin');
+  assert.equal(academyRequests.some(row=>row.method==='POST' && JSON.parse(row.body).title==='Created through Hub Admin'),true);
+  assert.equal((await request('/api/admin/academy/admin/change-password',{headers:{Cookie:cookie}})).status,404);
   for (const path of ['/api/inventory','/api/transactions','/api/ecosystem/tiquet/tickets','/api/ecosystem/ffpro/records','/api/ecosystem/marketing/campaigns']) {
     assert.equal((await request(path,{headers:{Cookie:cookie}})).status,410,`${path} should be retired from Hub`);
   }
