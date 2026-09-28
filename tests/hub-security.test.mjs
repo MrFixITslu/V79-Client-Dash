@@ -11,7 +11,7 @@ import { verifyPlatformRequest, signPlatformRequest } from '../server/platform-c
 const secret='test-shared-secret-long-enough-for-platform';
 async function listen(server) { await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve)); return `http://127.0.0.1:${server.address().port}`; }
 
-test('private data, roles, checkout integrity and one-time POS launch', {timeout:30000}, async t => {
+test('private data, retired embedded APIs and one-time app launch', {timeout:30000}, async t => {
   const dir=await mkdtemp(join(tmpdir(),'v79-hub-security-'));
   let provision;
   const pos=createServer(async(req,res)=>{
@@ -45,23 +45,17 @@ test('private data, roles, checkout integrity and one-time POS launch', {timeout
   const headers={Cookie:cookie,Origin:origin,'content-type':'application/json'};
   assert.equal((await request('/api/users',{headers})).status,200);
   assert.equal((await request('/api/users',{method:'POST',headers:{Cookie:cookie,'content-type':'application/json'},body:'{}'})).status,403);
-  assert.equal((await request('/api/settings/reset',{method:'POST',headers})).status,403);
+  assert.equal((await request('/api/settings/reset',{method:'POST',headers})).status,410);
   const create=await request('/api/users',{method:'POST',headers,body:JSON.stringify({username:'viewer',password:'viewer-password-1234',role:'viewer'})});
   assert.equal(create.status,201);
   const viewerLogin=await request('/api/auth/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({username:'viewer',password:'viewer-password-1234'})});
   const viewerCookie=viewerLogin.headers.get('set-cookie').split(';')[0];
   assert.equal((await request('/api/users',{headers:{Cookie:viewerCookie}})).status,403);
-  assert.equal((await request('/api/pos/checkout',{method:'POST',headers:{...headers,Cookie:viewerCookie},body:'{}'})).status,403);
+  assert.equal((await request('/api/pos/checkout',{method:'POST',headers:{...headers,Cookie:viewerCookie},body:'{}'})).status,410);
   assert.equal((await request('/api/apps/pos/launch',{headers:{Cookie:viewerCookie}})).status,403);
-  const item=await request('/api/inventory',{method:'POST',headers,body:JSON.stringify({name:'Test item',sku:'T1',quantity:1,price:10,costPrice:4})});
-  const created=await item.json();
-  const cart=[{item:{id:created.id,price:0.01},quantity:2}];
-  assert.equal((await request('/api/pos/checkout',{method:'POST',headers,body:JSON.stringify({cart})})).status,409);
-  cart[0].quantity=1;
-  const sale=await request('/api/pos/checkout',{method:'POST',headers,body:JSON.stringify({cart})});
-  assert.equal(sale.status,201);
-  assert.equal((await sale.json()).transaction.subtotal,10);
-  assert.equal((await request('/api/pos/checkout',{method:'POST',headers,body:JSON.stringify({cart})})).status,409);
+  for (const path of ['/api/inventory','/api/transactions','/api/ecosystem/tiquet/tickets','/api/ecosystem/ffpro/records','/api/ecosystem/marketing/campaigns']) {
+    assert.equal((await request(path,{headers:{Cookie:cookie}})).status,410,`${path} should be retired from Hub`);
+  }
   const launch=await request('/api/apps/pos/launch',{headers:{Cookie:cookie}});
   assert.equal(launch.status,302);
   assert.equal(provision.role,'owner');

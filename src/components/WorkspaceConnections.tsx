@@ -13,6 +13,7 @@ import {
   Zap,
 } from "lucide-react";
 import { EcosystemApp, ViewState } from "../types";
+import { appLaunchUrl, isManagedHubApp } from "../lib/appLaunch";
 
 interface WorkspaceConnectionsProps {
   apps: EcosystemApp[];
@@ -120,9 +121,9 @@ export function WorkspaceConnections({ apps, onNavigate, authToken }: WorkspaceC
               </div>
 
               <a
-                href={app.id === "app-v79pos" ? "/api/apps/pos/launch" : app.appUrl}
-                target="_blank"
-                rel="noopener noreferrer"
+                href={appLaunchUrl(app) || "#"}
+                target={isManagedHubApp(app) ? undefined : "_blank"}
+                rel={isManagedHubApp(app) ? undefined : "noopener noreferrer"}
                 className="inline-flex items-center gap-1 text-slate-700 hover:text-cyan-700 font-semibold"
               >
                 <span>Launch</span>

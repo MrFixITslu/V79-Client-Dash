@@ -1160,7 +1160,89 @@ app.post("/api/auth/logout", requireAuth, (req, res) => {
   res.json({ success: true });
 });
 
+
 app.use("/api", requireAuth);
+
+type DashboardProduct = "pos" | "ffpro" | "tiquet" | "marketing" | "academy";
+const dashboardSources: Record<DashboardProduct, string> = {
+  pos: posServiceUrl,
+  ffpro: process.env.FFPRO_INTERNAL_URL || "http://fire-finance-app:3010",
+  tiquet: process.env.TIQUET_INTERNAL_URL || "http://v79-tiquet-manager:3050",
+  marketing: process.env.MARKETING_INTERNAL_URL || "http://v79marketing-app:3070",
+  academy: process.env.ACADEMY_INTERNAL_URL || "http://v79_course_builder:3030",
+};
+
+async function readDashboardSummary(product: DashboardProduct) {
+  if (posSecret.length < 32) {
+    return { status: "misconfigured", error: "Platform summary signing is not configured." };
+  }
+
+  const ownerEmail = String(process.env.V79_HUB_ADMIN_EMAIL || "").trim().toLowerCase();
+  const subject = product === "academy" ? ownerEmail : posIdentity.organizationId;
+  if (!subject || (product === "academy" && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(subject))) {
+    return { status: "misconfigured", error: "Dashboard subject is not configured." };
+  }
+
+  const pathname = `/api/platform/summary/${encodeURIComponent(subject)}`;
+  const timestamp = String(Date.now());
+  const signature = signPlatformRequest({
+    method: "GET",
+    pathname,
+    timestamp,
+    body: "",
+    secret: posSecret,
+  });
+
+  try {
+    const response = await fetch(new URL(pathname, dashboardSources[product]), {
+      headers: {
+        "x-v79-service-id": "v79-hub",
+        "x-v79-timestamp": timestamp,
+        "x-v79-signature": signature,
+      },
+      signal: AbortSignal.timeout(5000),
+    });
+    const payload = await response.json().catch(() => ({})) as any;
+
+    if (response.status === 404) {
+      return { status: "needs_setup", httpStatus: 404, metrics: {}, generatedAt: null };
+    }
+    if (!response.ok) {
+      return { status: "unavailable", httpStatus: response.status, metrics: {}, error: "Product summary unavailable." };
+    }
+
+    return {
+      status: "ok",
+      httpStatus: response.status,
+      metrics: payload && typeof payload.metrics === "object" && payload.metrics ? payload.metrics : {},
+      generatedAt: typeof payload.generatedAt === "string" ? payload.generatedAt : new Date().toISOString(),
+    };
+  } catch {
+    return { status: "unavailable", metrics: {}, error: "Product service is unavailable." };
+  }
+}
+
+app.get("/api/dashboard/summary", async (_req, res) => {
+  const products: DashboardProduct[] = ["pos", "ffpro", "tiquet", "marketing", "academy"];
+  const results = await Promise.all(products.map(async product => [product, await readDashboardSummary(product)] as const));
+  res.json({
+    generatedAt: new Date().toISOString(),
+    apps: Object.fromEntries(results),
+  });
+});
+
+const retiredEmbeddedAppPaths = [
+  "/api/inventory",
+  "/api/transactions",
+  "/api/pos",
+  "/api/settings",
+  "/api/ecosystem/tiquet",
+  "/api/ecosystem/ffpro",
+  "/api/ecosystem/marketing",
+];
+app.use(retiredEmbeddedAppPaths, (_req, res) => {
+  res.status(410).json({ error: "This embedded Hub app-data API has been retired. Use the dedicated V79 application." });
+});
 app.use("/api/users", requireRole("admin"));
 app.use("/api/settings", (req, res, next) => req.method === "GET" ? next() : requireRole("admin")(req, res, next));
 app.use("/api/inventory", (req, res, next) => ["GET", "HEAD"].includes(req.method) ? next() : requireRole("admin", "manager", "staff")(req, res, next));
@@ -1924,14 +2006,18 @@ async function startServer() {
     app.use(express.static(distDir, {
       setHeaders(res, filePath) {
         if (filePath.endsWith("index.html")) {
-          res.setHeader("Cache-Control", "no-store");
+          res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0");
+          res.setHeader("Pragma", "no-cache");
+          res.setHeader("Expires", "0");
         } else if (filePath.includes(`${path.sep}assets${path.sep}`)) {
           res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
         }
       },
     }));
     app.get("*", (_req, res) => {
-      res.setHeader("Cache-Control", "no-store");
+      res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0");
+      res.setHeader("Pragma", "no-cache");
+      res.setHeader("Expires", "0");
       res.sendFile(path.join(distDir, "index.html"));
     });
   }
