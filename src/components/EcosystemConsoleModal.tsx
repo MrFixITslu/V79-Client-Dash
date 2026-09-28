@@ -7,6 +7,7 @@ import {
   InventoryItem,
   Transaction,
 } from "../types";
+import { managedLaunchPath } from "../lib/appLaunch";
 import {
   X,
   ExternalLink,
@@ -186,8 +187,12 @@ export function EcosystemConsoleModal({
   };
 
   const launchWithSSO = () => {
-    const ssoUrl = app.id === "app-v79pos" ? "/api/apps/pos/launch" : app.appUrl;
-    window.open(ssoUrl, "_blank");
+    const managedUrl = managedLaunchPath(app);
+    if (managedUrl) {
+      window.location.assign(managedUrl);
+      return;
+    }
+    if (app.appUrl) window.open(app.appUrl, "_blank", "noopener,noreferrer");
   };
 
   return (
@@ -920,7 +925,7 @@ export function EcosystemConsoleModal({
                       className="px-5 py-2.5 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white shadow-md shadow-indigo-600/30 flex items-center gap-2"
                     >
                       <ExternalLink className="w-4 h-4" />
-                      <span>Open {app.shortName} in New Window</span>
+                      <span>Open {app.shortName}</span>
                     </button>
                     {app.githubRepo && (
                       <a
