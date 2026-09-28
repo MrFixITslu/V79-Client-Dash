@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   Link2,
   CheckCircle2,
@@ -22,16 +22,32 @@ interface WorkspaceConnectionsProps {
 }
 
 export function WorkspaceConnections({ apps, onNavigate, authToken }: WorkspaceConnectionsProps) {
-  const [testingPingId, setTestingPingId] = useState<string | null>(null);
-  const [pingStatus, setPingStatus] = useState<Record<string, "ok" | "pending">>({});
-
-  const handleTestPing = (appId: string) => {
-    setTestingPingId(appId);
-    setTimeout(() => {
-      setPingStatus((prev) => ({ ...prev, [appId]: "ok" }));
-      setTestingPingId(null);
-    }, 600);
+  const [checking, setChecking] = useState(false);
+  const [serviceStatus, setServiceStatus] = useState<Record<string, { status: "online" | "unavailable"; responseMs: number | null }>>({});
+  const [checkedAt, setCheckedAt] = useState("");
+  const [checkError, setCheckError] = useState("");
+  const productByAppId: Record<string, string> = {
+    "app-v79pos": "pos", "app-ffpro": "ffpro", "app-tiquet": "tiquet",
+    "app-marketing": "marketing", "app-academy": "academy",
   };
+
+  const checkServices = async () => {
+    setChecking(true);
+    setCheckError("");
+    try {
+      const response = await fetch("/api/connections/status", { cache: "no-store" });
+      if (!response.ok) throw new Error(`Service check failed (${response.status})`);
+      const data = await response.json();
+      setServiceStatus(data.apps || {});
+      setCheckedAt(data.checkedAt || "");
+    } catch (error) {
+      setCheckError(error instanceof Error ? error.message : "Service check unavailable");
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  useEffect(() => { void checkServices(); }, []);
 
   return (
     <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
@@ -45,7 +61,7 @@ export function WorkspaceConnections({ apps, onNavigate, authToken }: WorkspaceC
             Connected V79 Services
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
-            Manage authenticated integrations, SSO tokens, and cross-application permissions.
+            See service availability and open your connected applications.
           </p>
         </div>
         <button
@@ -61,19 +77,23 @@ export function WorkspaceConnections({ apps, onNavigate, authToken }: WorkspaceC
         <Shield className="w-5 h-5 text-teal-600 shrink-0 mt-0.5" />
         <div>
           <h4 className="text-xs font-bold text-slate-900">
-            Aurora Identity & Signed Single Sign-On (SSO)
+            How sign-in works
           </h4>
           <p className="text-xs text-slate-600 mt-0.5 leading-relaxed">
-            All connected applications in the <code className="text-teal-800 font-mono">*.v79sl.com</code> domain
-            share secure session context. When you launch any connected product from the Hub, your signed identity token
-            is verified without requiring re-authentication.
+            POS, FFPRO, Tiquet and Marketing use signed Hub launch tickets for the workspace owner.
+            Academy has a separate learner account. Other links open their own sign-in pages.
           </p>
         </div>
       </div>
 
+      {checkError && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700">{checkError}</div>}
+      {checkedAt && <p className="text-xs text-slate-500">Last service check: {new Date(checkedAt).toLocaleString()}. Online means the service responded; it does not confirm account access or every feature.</p>}
       {/* Connected Services Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-        {apps.map((app) => (
+        {apps.map((app) => {
+          const product = productByAppId[app.id];
+          const check = product ? serviceStatus[product] : undefined;
+          return (
           <div
             key={app.id}
             className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-4 hover:border-slate-300 transition-all"
@@ -91,8 +111,8 @@ export function WorkspaceConnections({ apps, onNavigate, authToken }: WorkspaceC
                 </div>
               </div>
 
-              <span className="text-[10px] font-semibold text-teal-700 bg-teal-50 px-2 py-0.5 rounded-full border border-teal-200">
-                Connected
+              <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${check?.status === "online" ? "text-teal-700 bg-teal-50 border-teal-200" : check?.status === "unavailable" ? "text-rose-700 bg-rose-50 border-rose-200" : "text-slate-600 bg-slate-50 border-slate-200"}`}>
+                {check?.status === "online" ? "Online" : check?.status === "unavailable" ? "Unavailable" : product && checking ? "Checking" : "Not monitored"}
               </span>
             </div>
 
@@ -101,21 +121,18 @@ export function WorkspaceConnections({ apps, onNavigate, authToken }: WorkspaceC
             <div className="pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
               <div className="flex items-center gap-2">
                 <button
-                  onClick={() => handleTestPing(app.id)}
-                  disabled={testingPingId === app.id}
+                  onClick={() => void checkServices()}
+                  disabled={checking}
                   className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-600 hover:text-slate-900 bg-slate-50 hover:bg-slate-100 px-2.5 py-1 rounded-lg border border-slate-200 transition-colors"
                 >
                   <RefreshCw
                     className={`w-3 h-3 text-slate-400 ${
-                      testingPingId === app.id ? "animate-spin" : ""
+                      checking ? "animate-spin" : ""
                     }`}
                   />
                   <span>
-                    {testingPingId === app.id
-                      ? "Testing..."
-                      : pingStatus[app.id] === "ok"
-                      ? "Latency: 28ms"
-                      : "Ping Service"}
+                    {checking ? "Checking..." : check?.status === "online" && check.responseMs != null
+                      ? `Response: ${check.responseMs}ms` : "Check services"}
                   </span>
                 </button>
               </div>
@@ -131,7 +148,7 @@ export function WorkspaceConnections({ apps, onNavigate, authToken }: WorkspaceC
               </a>
             </div>
           </div>
-        ))}
+        ); })}
       </div>
     </div>
   );

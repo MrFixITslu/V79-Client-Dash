@@ -16,7 +16,7 @@ import { EcosystemApp, ViewState } from "../types";
 import { appLaunchUrl, isManagedHubApp } from "../lib/appLaunch";
 
 type ProductKey = "pos" | "ffpro" | "tiquet" | "marketing" | "academy";
-type ProductStatus = "ok" | "needs_setup" | "unavailable" | "misconfigured";
+type ProductStatus = "ok" | "needs_setup" | "unavailable" | "misconfigured" | "restricted";
 
 interface ProductSummary {
   status: ProductStatus;
@@ -141,6 +141,7 @@ const appCards: Array<{
 function statusStyle(summary?: ProductSummary) {
   if (!summary) return { label: "Loading", className: "bg-slate-100 text-slate-600 border-slate-200" };
   if (summary.status === "ok") return { label: "Connected", className: "bg-emerald-50 text-emerald-700 border-emerald-200" };
+  if (summary.status === "restricted") return { label: "Restricted", className: "bg-slate-100 text-slate-600 border-slate-200" };
   if (summary.status === "needs_setup") return { label: "Ready to activate", className: "bg-amber-50 text-amber-700 border-amber-200" };
   if (summary.status === "misconfigured") return { label: "Configuration needed", className: "bg-amber-50 text-amber-700 border-amber-200" };
   return { label: "Unavailable", className: "bg-rose-50 text-rose-700 border-rose-200" };
@@ -299,7 +300,10 @@ export function HubOverview({ ecosystemApps, onNavigate }: HubOverviewProps) {
             const app = appFor(card.id, card.shortName);
             const summary = summaries?.[card.key];
             const status = statusStyle(summary);
-            const metrics = card.metrics(summary?.metrics || {});
+            const metrics = card.metrics(summary?.metrics || {}).map(metric => ({
+              ...metric,
+              value: summary?.status === "ok" ? metric.value : "—",
+            }));
             const managed = isManagedHubApp(app, card.fallback);
             const Icon = card.icon;
             return (
