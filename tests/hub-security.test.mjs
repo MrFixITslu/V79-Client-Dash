@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createPublicKey, verify } from 'node:crypto';
@@ -13,6 +13,13 @@ async function listen(server) { await new Promise(resolve=>server.listen(0,'127.
 
 test('private data, retired embedded APIs and one-time app launch', {timeout:30000}, async t => {
   const dir=await mkdtemp(join(tmpdir(),'v79-hub-security-'));
+  const storeFile=join(dir,'v79_store.json');
+  await writeFile(storeFile,JSON.stringify({
+    users:[],
+    inventory:[{id:'legacy-stock-must-survive'}],
+    settings:{companyName:'Legacy Organisation',taxRate:12.5},
+    legacyCustomData:{keep:true}
+  }));
   let provision;
   const pos=createServer(async(req,res)=>{
     let body='';for await(const chunk of req)body+=chunk;
@@ -40,6 +47,11 @@ test('private data, retired embedded APIs and one-time app launch', {timeout:300
   assert.equal((await request('/api/auth/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({username:'admin',password:'password123'})})).status,401);
   const login=await request('/api/auth/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({username:'admin',password:'a-unique-admin-password-1234'})});
   assert.equal(login.status,200,errors);
+  const preservedStore=JSON.parse(await readFile(storeFile,'utf8'));
+  assert.equal(preservedStore.inventory[0].id,'legacy-stock-must-survive');
+  assert.equal(preservedStore.settings.companyName,'Legacy Organisation');
+  assert.equal(preservedStore.legacyCustomData.keep,true);
+  assert.equal(preservedStore.workspace.companyName,'Legacy Organisation');
   assert.equal('token' in (await login.clone().json()),false);
   const cookie=login.headers.get('set-cookie').split(';')[0];
   const headers={Cookie:cookie,Origin:origin,'content-type':'application/json'};
