@@ -12,6 +12,7 @@ import {
   ArrowUpRight,
 } from "lucide-react";
 import { EcosystemApp, ViewState, User } from "../types";
+import { appLaunchUrl, isManagedHubApp } from "../lib/appLaunch";
 
 interface HubOverviewProps {
   ecosystemApps: EcosystemApp[];
@@ -44,7 +45,7 @@ export function HubOverview({
   );
 
   const getLaunchUrl = (app: EcosystemApp | undefined, fallback: string) => {
-    return app?.id === "app-v79pos" || fallback === "https://pos.v79sl.com" ? "/api/apps/pos/launch" : app?.appUrl || fallback;
+    return appLaunchUrl(app, fallback) || fallback;
   };
 
   return (
@@ -126,8 +127,8 @@ export function HubOverview({
           {/* Card 1: V79 Tiquet */}
           <a
             href={getLaunchUrl(tiquetApp, "https://tiquet.v79sl.com")}
-            target="_blank"
-            rel="noopener noreferrer"
+            target={isManagedHubApp(tiquetApp, "https://tiquet.v79sl.com") ? undefined : "_blank"}
+            rel={isManagedHubApp(tiquetApp, "https://tiquet.v79sl.com") ? undefined : "noopener noreferrer"}
             className="bg-white border border-slate-200/90 rounded-2xl p-5 hover:border-sky-300 hover:shadow-md transition-all flex flex-col justify-between group no-underline text-inherit cursor-pointer"
           >
             <div>
@@ -181,8 +182,8 @@ export function HubOverview({
           {/* Card 2: FFPRO */}
           <a
             href={getLaunchUrl(ffproApp, "https://ffpro.v79sl.com")}
-            target="_blank"
-            rel="noopener noreferrer"
+            target={isManagedHubApp(ffproApp, "https://ffpro.v79sl.com") ? undefined : "_blank"}
+            rel={isManagedHubApp(ffproApp, "https://ffpro.v79sl.com") ? undefined : "noopener noreferrer"}
             className="bg-white border border-slate-200/90 rounded-2xl p-5 hover:border-amber-300 hover:shadow-md transition-all flex flex-col justify-between group no-underline text-inherit cursor-pointer"
           >
             <div>
@@ -236,8 +237,8 @@ export function HubOverview({
           {/* Card 3: V79 Marketing */}
           <a
             href={getLaunchUrl(marketingApp, "https://marketing.v79sl.com")}
-            target="_blank"
-            rel="noopener noreferrer"
+            target={isManagedHubApp(marketingApp, "https://marketing.v79sl.com") ? undefined : "_blank"}
+            rel={isManagedHubApp(marketingApp, "https://marketing.v79sl.com") ? undefined : "noopener noreferrer"}
             className="bg-white border border-slate-200/90 rounded-2xl p-5 hover:border-pink-300 hover:shadow-md transition-all flex flex-col justify-between group no-underline text-inherit cursor-pointer"
           >
             <div>
@@ -365,8 +366,8 @@ export function HubOverview({
           {/* Card 5: V79 POS (Live Card matching the rest!) */}
           <a
             href={getLaunchUrl(posApp, "https://pos.v79sl.com")}
-            target="_blank"
-            rel="noopener noreferrer"
+            target={isManagedHubApp(posApp, "https://pos.v79sl.com") ? undefined : "_blank"}
+            rel={isManagedHubApp(posApp, "https://pos.v79sl.com") ? undefined : "noopener noreferrer"}
             className="bg-white border border-slate-200/90 rounded-2xl p-5 hover:border-purple-300 hover:shadow-md transition-all flex flex-col justify-between group no-underline text-inherit cursor-pointer"
           >
             <div>
