@@ -4,6 +4,8 @@
 
 Each SMB has one Hub organization with its own members, roles, plan, entitlements, and linked app tenants. V79 platform operators have a separate administration scope. Academy learners can retain their standalone learner accounts; linking one to a Hub identity is optional and explicit.
 
+The first multi-workspace beta is **invite-only**. A V79 operator approves each business and issues a single-use, expiring owner invitation. Open signup and paid checkout remain off until isolation, recovery, and billing tests pass.
+
 The current Hub has one global JSON store and one configured owner organization. This is a migration plan, not a claim that multi-tenant access is implemented.
 
 ## Release sequence
@@ -19,6 +21,7 @@ The current Hub has one global JSON store and one configured owner organization.
 
 - Migrated V79 owner signs in and sees the same app records and linked tenants after migration; rollback restores the prior data.
 - Two unrelated SMB owners and their staff cannot view or change each other's Hub data, app tenants, invoices, or launch tickets.
+- An uninvited visitor cannot create an organization; an expired or already used owner invitation cannot be redeemed.
 - A staff member without finance permission receives no FFPRO figures from Hub APIs or cached responses.
 - A permitted member launches each entitled app, returns to the same Hub organization, and cannot reuse the ticket.
 - Revoked membership, expired entitlement, suspended tenant, and canceled subscription deny new launches according to documented policy.
