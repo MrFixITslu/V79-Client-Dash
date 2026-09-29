@@ -2,13 +2,14 @@ import "dotenv/config";
 import express from "express";
 import fs from "node:fs";
 import { run } from "@openai/agents";
-import { localOwnerAgent, managerAgent } from "./agents.js";
+import { managerAgent } from "./agents.js";
 import { BUSINESS_SYSTEMS } from "./business.js";
 import { checkApproval, type ActionRisk } from "./policy.js";
 import { isValidOwnerContext, type AgentContext } from "./context.js";
 import { agentModelRuntime } from "./model-runtime.js";
 import { readBusinessSnapshot } from "./tools.js";
 import { compactOwnerSnapshot } from "./grounding.js";
+import { runOllamaOwnerAssistant } from "./ollama-native.js";
 
 const app = express();
 const port = Number(process.env.PORT || 3055);
@@ -114,15 +115,27 @@ app.post("/api/agent/chat", async (req, res) => {
       "Use the trusted snapshot for current business facts. Do not invent missing values.",
       "If a requested fact is not present, say it is not available in the current snapshot.",
     ].join("\n");
-    const selectedAgent = localFastPath ? localOwnerAgent : managerAgent;
-    const result = await run(selectedAgent, groundedMessage, { context });
+    if (localFastPath) {
+      const result = await runOllamaOwnerAssistant(groundedMessage);
+      return res.json({
+        output: result.output,
+        specialist: "Vision79 Owner Assistant Local",
+        mode: "read-only",
+        modelProvider: result.provider,
+        model: result.model,
+      });
+    }
+
+    const result = await run(managerAgent, groundedMessage, { context });
     return res.json({
       output:
         typeof result.finalOutput === "string"
           ? result.finalOutput
           : JSON.stringify(result.finalOutput),
-      specialist: result.lastAgent?.name || selectedAgent.name,
+      specialist: result.lastAgent?.name || managerAgent.name,
       mode: "read-only",
+      modelProvider: "openai",
+      model: agentModelRuntime.model,
     });
   } catch (error) {
     console.error("agent run failed", error);
