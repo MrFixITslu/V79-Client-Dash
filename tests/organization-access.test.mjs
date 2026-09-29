@@ -9,6 +9,7 @@ const store = {
     { organizationId: 'business-b', userId: 'owner-b', role: 'owner', status: 'active' },
     { organizationId: 'v79', userId: 'revoked', role: 'staff', status: 'revoked' },
   ],
+  appEntitlements: [{ organizationId: 'v79', appId: 'app-v79pos', enabled: true }],
 };
 
 test('a second business cannot enter the legacy global workspace', () => {
@@ -24,6 +25,10 @@ test('launch tickets require the active owner and exact legacy tenant', () => {
   assert.equal(validLegacyLaunch(store, entry('owner-b', 'business-b'), 'pos', 'v79', 'owner-a'), false);
   assert.equal(validLegacyLaunch(store, entry('owner-a', 'business-b'), 'pos', 'v79', 'owner-a'), false);
   assert.equal(validLegacyLaunch(store, entry('owner-a', 'v79'), 'tiquet', 'v79', 'owner-a'), false);
+  assert.equal(validLegacyLaunch(store, entry('owner-a', 'v79'), 'unknown', 'v79', 'owner-a'), false);
+  store.appEntitlements[0].enabled = false;
+  assert.equal(validLegacyLaunch(store, entry('owner-a', 'v79'), 'pos', 'v79', 'owner-a'), false);
+  store.appEntitlements[0].enabled = true;
   assert.equal(activeMembership(store, 'revoked', 'v79'), null);
   store.organizations[0].status = 'suspended';
   assert.equal(validLegacyLaunch(store, entry('owner-a', 'v79'), 'pos', 'v79', 'owner-a'), false);

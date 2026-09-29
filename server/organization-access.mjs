@@ -13,9 +13,11 @@ export function legacyWorkspaceAccess(store, userId, organizationId, legacyOrgan
 }
 
 export function validLegacyLaunch(store, entry, product, legacyOrganizationId, ownerUserId) {
-  return Boolean(entry && entry.product === product && entry.expiresAt >= Date.now() &&
+  const appId = { pos: 'app-v79pos', ffpro: 'app-ffpro', tiquet: 'app-tiquet', marketing: 'app-marketing' }[product];
+  return Boolean(appId && entry && entry.product === product && entry.expiresAt >= Date.now() &&
     entry.tenantId === legacyOrganizationId && entry.userId === ownerUserId &&
-    activeMembership(store, entry.userId, entry.tenantId)?.role === 'owner');
+    activeMembership(store, entry.userId, entry.tenantId)?.role === 'owner' &&
+    organizationCanAccessApp(store, entry.tenantId, appId));
 }
 
 

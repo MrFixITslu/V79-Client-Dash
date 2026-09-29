@@ -400,6 +400,23 @@ const defaultEcosystemApps: EcosystemApp[] = [
   }
 ];
 
+// Custom catalog entries are outbound links, never Hub SSO clients.
+function catalogHttpsUrl(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  try {
+    const url = new URL(value.trim());
+    return url.protocol === "https:" && url.hostname && !url.username && !url.password ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+function catalogText(value: unknown, maxLength: number): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed && trimmed.length <= maxLength ? trimmed : null;
+}
+
 // Store loader and writer
 function normalizeEcosystemApps(value: unknown): EcosystemApp[] {
   let loadedApps: EcosystemApp[] = Array.isArray(value) && value.length > 0
@@ -1327,6 +1344,7 @@ app.use("/api/ecosystem/apps", (req, res, next) => req.method === "GET" ? next()
 app.get("/api/apps/pos/launch", requireRole("admin"), async (req, res) => {
   if (posSecret.length < 32) return res.status(503).json({ error: "POS shared secret is not configured" });
   const session = (req as any).user;
+  if (!organizationCanAccessApp(store, session.organizationId, "app-v79pos")) return res.status(403).json({ error: "POS is not enabled for this Hub organization" });
   if (session.organizationId !== posIdentity.organizationId || session.userId !== posIdentity.ownerUserId ||
       activeMembership(store, session.userId, session.organizationId)?.role !== "owner") return res.status(403).json({ error: "Only the workspace owner can launch POS" });
   const pathname = "/api/platform/provision";
@@ -1382,10 +1400,11 @@ app.get("/api/users", (req, res) => {
 });
 
 app.post("/api/users", (req, res) => {
-  const { username, password, fullName, role, permissions } = req.body;
+  const { username, password, fullName, role, permissions } = req.body || {};
   if (typeof username !== "string" || !username.trim() || typeof password !== "string" || password.length < 12 || !["admin", "manager", "staff", "viewer"].includes(role || "staff")) {
     return res.status(400).json({ error: "Valid username, role and password of at least 12 characters are required" });
   }
+  if (fullName !== undefined && (typeof fullName !== "string" || !fullName.trim())) return res.status(400).json({ error: "Full name cannot be empty" });
 
   const existing = store.users.find((u) => u.username.toLowerCase() === username.trim().toLowerCase());
   if (existing) {
@@ -1396,7 +1415,7 @@ app.post("/api/users", (req, res) => {
     id: crypto.randomUUID(),
     username: username.trim(),
     password: hashPassword(password),
-    fullName: fullName || username,
+    fullName: fullName?.trim() || username.trim(),
     role: role || "staff",
     permissions: normalizePermissions(permissions, role || "staff"),
     createdAt: new Date().toISOString(),
@@ -1412,7 +1431,7 @@ app.post("/api/users", (req, res) => {
 
 app.put("/api/users/:id", (req, res) => {
   const { id } = req.params;
-  const { username, password, fullName, role, permissions } = req.body;
+  const { username, password, fullName, role, permissions } = req.body || {};
 
   const userIndex = store.users.findIndex((u) => u.id === id && activeMembership(store, u.id, (req as any).user.organizationId));
   if (userIndex === -1) {
@@ -1420,6 +1439,9 @@ app.put("/api/users/:id", (req, res) => {
   }
 
   const current = store.users[userIndex];
+  if (username !== undefined && (typeof username !== "string" || !username.trim())) return res.status(400).json({ error: "Username cannot be empty" });
+  if (username !== undefined && store.users.some(user => user.id !== id && user.username.toLowerCase() === username.trim().toLowerCase())) return res.status(409).json({ error: "Username already exists" });
+  if (fullName !== undefined && (typeof fullName !== "string" || !fullName.trim())) return res.status(400).json({ error: "Full name cannot be empty" });
   if (password !== undefined && (typeof password !== "string" || password.length < 12)) return res.status(400).json({ error: "Password must contain at least 12 characters" });
   if (role !== undefined && !["admin", "manager", "staff", "viewer"].includes(role)) return res.status(400).json({ error: "Invalid role" });
   if (id === posIdentity.ownerUserId && role && role !== "admin") return res.status(400).json({ error: "Cannot demote the workspace owner" });
@@ -1428,7 +1450,7 @@ app.put("/api/users/:id", (req, res) => {
     ...current,
     username: username !== undefined ? username.trim() : current.username,
     password: password ? hashPassword(password) : current.password,
-    fullName: fullName !== undefined ? fullName : current.fullName,
+    fullName: fullName !== undefined ? fullName.trim() : current.fullName,
     role: role !== undefined ? role : current.role,
     permissions: normalizePermissions(Array.isArray(permissions) ? permissions : current.permissions, role !== undefined ? role : current.role)
   };
@@ -1504,11 +1526,37 @@ app.put("/api/ecosystem/apps/:id", (req, res) => {
     return res.status(404).json({ error: "Ecosystem app not found" });
   }
 
-  store.ecosystemApps[index] = {
-    ...store.ecosystemApps[index],
-    ...req.body,
-    lastSync: new Date().toISOString()
-  };
+  const fields = req.body;
+  if (!fields || typeof fields !== "object" || Array.isArray(fields)) return res.status(400).json({ error: "App changes must be an object" });
+  const allowed = new Set(["name", "shortName", "tagline", "description", "category", "status", "appUrl", "githubRepo"]);
+  if (!Object.keys(fields).length || Object.keys(fields).some(key => !allowed.has(key))) return res.status(400).json({ error: "Unsupported app field" });
+  if ("appUrl" in fields && !id.startsWith("app-custom-")) return res.status(400).json({ error: "Managed app links cannot be changed" });
+  const changes: Record<string, string | undefined> = {};
+  for (const key of ["name", "shortName", "tagline", "description"] as const) {
+    if (key in fields) {
+      const value = catalogText(fields[key], key === "description" ? 1000 : 120);
+      if (!value) return res.status(400).json({ error: `Invalid ${key}` });
+      changes[key] = value;
+    }
+  }
+  if ("category" in fields) {
+    if (!["finance", "support", "marketing", "operations", "analytics", "team"].includes(fields.category)) return res.status(400).json({ error: "Invalid category" });
+    changes.category = fields.category;
+  }
+  if ("status" in fields) {
+    if (!["active", "syncing", "maintenance", "beta"].includes(fields.status)) return res.status(400).json({ error: "Invalid status" });
+    changes.status = fields.status;
+  }
+  if ("appUrl" in fields) {
+    const url = catalogHttpsUrl(fields.appUrl);
+    if (!url) return res.status(400).json({ error: "App URL must be HTTPS without credentials" });
+    changes.appUrl = url;
+  }
+  if ("githubRepo" in fields) {
+    if (fields.githubRepo !== null && fields.githubRepo !== "" && !catalogHttpsUrl(fields.githubRepo)) return res.status(400).json({ error: "Repository URL must be HTTPS" });
+    changes.githubRepo = fields.githubRepo ? catalogHttpsUrl(fields.githubRepo)! : undefined;
+  }
+  store.ecosystemApps[index] = { ...store.ecosystemApps[index], ...changes, lastSync: new Date().toISOString() };
 
   saveStore(store);
   broadcast({ type: "ECOSYSTEM_APPS_UPDATED", apps: store.ecosystemApps });
@@ -1517,21 +1565,28 @@ app.put("/api/ecosystem/apps/:id", (req, res) => {
 
 // Register a custom ecosystem app
 app.post("/api/ecosystem/apps", (req, res) => {
-  const { name, shortName, tagline, description, category, appUrl, githubRepo } = req.body;
-  if (!name || !appUrl) {
-    return res.status(400).json({ error: "App name and launch URL are required" });
+  const { name, shortName, tagline, description, category, appUrl, githubRepo } = req.body || {};
+  const safeName = catalogText(name, 120);
+  const safeUrl = catalogHttpsUrl(appUrl);
+  const safeShortName = shortName === undefined ? safeName?.slice(0, 8) : catalogText(shortName, 120);
+  const safeTagline = tagline === undefined ? "Custom Ecosystem Module" : catalogText(tagline, 120);
+  const safeDescription = description === undefined ? "External application link for this workspace." : catalogText(description, 1000);
+  const safeRepo = githubRepo === undefined || githubRepo === "" ? undefined : catalogHttpsUrl(githubRepo);
+  if (!safeName || !safeUrl || !safeShortName || !safeTagline || !safeDescription ||
+      (safeRepo === null) || (category !== undefined && !["finance", "support", "marketing", "operations", "analytics", "team"].includes(category))) {
+    return res.status(400).json({ error: "Valid app details and HTTPS launch URL are required" });
   }
 
   const newApp: EcosystemApp = {
-    id: "app-custom-" + Date.now(),
-    name,
-    shortName: shortName || name.slice(0, 8),
-    tagline: tagline || "Custom Ecosystem Module",
-    description: description || "Integrated external tool within Vision 79 workspace.",
+    id: "app-custom-" + crypto.randomUUID(),
+    name: safeName,
+    shortName: safeShortName,
+    tagline: safeTagline,
+    description: safeDescription,
     category: category || "operations",
     status: "active",
-    appUrl,
-    githubRepo: githubRepo || undefined,
+    appUrl: safeUrl,
+    githubRepo: safeRepo,
     iconName: "Boxes",
     colorScheme: {
       primary: "from-indigo-600 to-cyan-600",
@@ -1541,8 +1596,8 @@ app.post("/api/ecosystem/apps", (req, res) => {
       border: "border-indigo-500/30 hover:border-indigo-500/60"
     },
     metrics: [{ label: "Status", value: "Connected", sublabel: "Custom integration" }],
-    features: ["Custom Web App Launch", "SSO Token Bridge", "Direct Workspace Access"],
-    ssoSupported: true,
+    features: ["External application link"],
+    ssoSupported: false,
     isFlagship: false,
     version: "v1.0.0",
     lastSync: new Date().toISOString()

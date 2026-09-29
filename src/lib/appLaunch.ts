@@ -33,7 +33,16 @@ export function appLaunchUrl(
   app?: Pick<EcosystemApp, "id" | "appUrl"> | null,
   fallback = "",
 ): string | null {
-  return managedLaunchPath(app, fallback) || app?.appUrl || fallback || null;
+  const external = [app?.appUrl, fallback].find(candidate => {
+    if (!candidate) return false;
+    try {
+      const url = new URL(candidate);
+      return url.protocol === "https:" && !url.username && !url.password;
+    } catch {
+      return false;
+    }
+  });
+  return managedLaunchPath(app, fallback) || external || null;
 }
 
 export function isManagedHubApp(
