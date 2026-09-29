@@ -641,6 +641,13 @@ const posPublicKey = crypto.createPublicKey(posPrivateKey);
 const posKeyId = crypto.createHash("sha256").update(posPublicKey.export({ format: "der", type: "spki" })).digest("hex").slice(0, 20);
 type LaunchProduct = "pos" | "ffpro" | "tiquet" | "marketing";
 const launchTickets = new Map<string, { userId: string; tenantId: string; product: LaunchProduct; expiresAt: number }>();
+function pruneAuthState(now = Date.now()) {
+  for (const [token, session] of sessions) if (session.expiresAt <= now) sessions.delete(token);
+  for (const [key, attempt] of loginAttempts) if (attempt.until <= now) loginAttempts.delete(key);
+  for (const [ticket, entry] of launchTickets) if (entry.expiresAt <= now) launchTickets.delete(ticket);
+}
+const authCleanup = setInterval(pruneAuthState, 60_000);
+authCleanup.unref();
 const managedLaunch = {
   ffpro: { serviceId: "v79-ffpro", secretEnv: "V79_FFPRO_LAUNCH_SECRET", publicEnv: "FFPRO_PUBLIC_URL", defaultUrl: "https://ffpro.v79sl.com" },
   tiquet: { serviceId: "v79-tiquet", secretEnv: "V79_TIQUET_LAUNCH_SECRET", publicEnv: "TIQUET_PUBLIC_URL", defaultUrl: "https://tiquet.v79sl.com" },
@@ -778,8 +785,8 @@ function sanitizeUser(u: StoredUser) {
 
 app.post("/api/auth/login", (req, res) => {
   const { username, password } = req.body || {};
-  if (typeof username !== "string" || typeof password !== "string" || !username || !password) {
-    return res.status(400).json({ error: "Username and password required" });
+  if (typeof username !== "string" || typeof password !== "string" || !username.trim() || username.length > 120 || !password || password.length > 1024) {
+    return res.status(400).json({ error: "Valid username and password required" });
   }
   const attemptKey = `${req.ip}:${username.trim().toLowerCase()}`;
   const attempts = loginAttempts.get(attemptKey);
@@ -791,6 +798,11 @@ app.post("/api/auth/login", (req, res) => {
   );
 
   if (!foundUser) {
+    // A stream of distinct invalid usernames must not retain unbounded keys.
+    if (!loginAttempts.has(attemptKey) && loginAttempts.size >= 10_000) {
+      const oldest = loginAttempts.keys().next().value;
+      if (oldest !== undefined) loginAttempts.delete(oldest);
+    }
     loginAttempts.set(attemptKey, { count: (attempts?.until && attempts.until > Date.now() ? attempts.count : 0) + 1, until: Date.now() + 15 * 60_000 });
     return res.status(401).json({ error: "Invalid username or password" });
   }
@@ -800,6 +812,11 @@ app.post("/api/auth/login", (req, res) => {
   const token = "v79_tok_" + crypto.randomBytes(24).toString("hex");
   const expiresAt = Date.now() + 12 * 60 * 60 * 1000;
 
+  pruneAuthState();
+  if (sessions.size >= 5_000) {
+    const oldest = sessions.keys().next().value;
+    if (oldest !== undefined) sessions.delete(oldest);
+  }
   sessions.set(token, {
     userId: foundUser.id,
     organizationId: posIdentity.organizationId,
@@ -1401,10 +1418,10 @@ app.get("/api/users", (req, res) => {
 
 app.post("/api/users", (req, res) => {
   const { username, password, fullName, role, permissions } = req.body || {};
-  if (typeof username !== "string" || !username.trim() || typeof password !== "string" || password.length < 12 || !["admin", "manager", "staff", "viewer"].includes(role || "staff")) {
+  if (typeof username !== "string" || !username.trim() || username.trim().length > 120 || typeof password !== "string" || password.length < 12 || password.length > 1024 || !["admin", "manager", "staff", "viewer"].includes(role || "staff")) {
     return res.status(400).json({ error: "Valid username, role and password of at least 12 characters are required" });
   }
-  if (fullName !== undefined && (typeof fullName !== "string" || !fullName.trim())) return res.status(400).json({ error: "Full name cannot be empty" });
+  if (fullName !== undefined && (typeof fullName !== "string" || !fullName.trim() || fullName.trim().length > 120)) return res.status(400).json({ error: "Full name must be 1 to 120 characters" });
 
   const existing = store.users.find((u) => u.username.toLowerCase() === username.trim().toLowerCase());
   if (existing) {
@@ -1439,10 +1456,10 @@ app.put("/api/users/:id", (req, res) => {
   }
 
   const current = store.users[userIndex];
-  if (username !== undefined && (typeof username !== "string" || !username.trim())) return res.status(400).json({ error: "Username cannot be empty" });
+  if (username !== undefined && (typeof username !== "string" || !username.trim() || username.trim().length > 120)) return res.status(400).json({ error: "Username must be 1 to 120 characters" });
   if (username !== undefined && store.users.some(user => user.id !== id && user.username.toLowerCase() === username.trim().toLowerCase())) return res.status(409).json({ error: "Username already exists" });
-  if (fullName !== undefined && (typeof fullName !== "string" || !fullName.trim())) return res.status(400).json({ error: "Full name cannot be empty" });
-  if (password !== undefined && (typeof password !== "string" || password.length < 12)) return res.status(400).json({ error: "Password must contain at least 12 characters" });
+  if (fullName !== undefined && (typeof fullName !== "string" || !fullName.trim() || fullName.trim().length > 120)) return res.status(400).json({ error: "Full name must be 1 to 120 characters" });
+  if (password !== undefined && (typeof password !== "string" || password.length < 12 || password.length > 1024)) return res.status(400).json({ error: "Password must be 12 to 1024 characters" });
   if (role !== undefined && !["admin", "manager", "staff", "viewer"].includes(role)) return res.status(400).json({ error: "Invalid role" });
   if (id === posIdentity.ownerUserId && role && role !== "admin") return res.status(400).json({ error: "Cannot demote the workspace owner" });
   if (current.role === "admin" && role && role !== "admin" && store.users.filter(u => u.role === "admin").length === 1) return res.status(400).json({ error: "Cannot demote the sole administrator" });

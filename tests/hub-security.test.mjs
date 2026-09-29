@@ -91,6 +91,8 @@ test('private data, retired embedded APIs and one-time app launch', {timeout:300
   assert.equal((await request('/api/connections/status')).status,401);
   assert.equal((await request('/api/users')).status,401);
   assert.equal((await request('/api/auth/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({username:'admin',password:'password123'})})).status,401);
+  assert.equal((await request('/api/auth/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({username:'x'.repeat(121),password:'wrong'})})).status,400);
+  assert.equal((await request('/api/auth/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({username:'admin',password:'x'.repeat(1025)})})).status,400);
   const login=await request('/api/auth/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({username:'admin',password:'a-unique-admin-password-1234'})});
   assert.equal(login.status,200,errors);
   const preservedStore=JSON.parse(await readFile(storeFile,'utf8'));
@@ -112,6 +114,7 @@ test('private data, retired embedded APIs and one-time app launch', {timeout:300
   const headers={Cookie:cookie,Origin:origin,'content-type':'application/json'};
   const catalogPost=(body)=>request('/api/ecosystem/apps',{method:'POST',headers,body:JSON.stringify(body)});
   assert.equal((await catalogPost({name:'Bad link',appUrl:'javascript:alert(1)'})).status,400);
+  assert.equal((await request('/api/users',{method:'POST',headers,body:JSON.stringify({username:'x'.repeat(121),password:'valid-password-1234'})})).status,400);
   assert.equal((await catalogPost({name:'Bad credentials',appUrl:'https://user:password@example.test/'})).status,400);
   const customApp=await catalogPost({name:'External tool',appUrl:'https://example.test/tool'});
   assert.equal(customApp.status,201);
@@ -170,6 +173,7 @@ test('private data, retired embedded APIs and one-time app launch', {timeout:300
   assert.equal((await updateOther({username:'  '})).status,400);
   assert.equal((await updateOther({username:'VIEWER'})).status,409);
   assert.equal((await updateOther({username:42})).status,400);
+  assert.equal((await updateOther({username:'x'.repeat(121)})).status,400);
   assert.equal((await updateOther({fullName:{unexpected:true}})).status,400);
   assert.equal((await request('/api/users',{method:'POST',headers,body:JSON.stringify({username:'bad-name',password:'valid-password-1234',fullName:{unexpected:true}})})).status,400);
   const persistedAfterRejects=JSON.parse(await readFile(storeFile,'utf8'));
