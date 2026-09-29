@@ -7,6 +7,7 @@ import { BUSINESS_SYSTEMS } from "./business.js";
 import { checkApproval, type ActionRisk } from "./policy.js";
 import { isValidOwnerContext, type AgentContext } from "./context.js";
 import { agentModelRuntime } from "./model-runtime.js";
+import { readBusinessSnapshot } from "./tools.js";
 
 const app = express();
 const port = Number(process.env.PORT || 3055);
@@ -94,7 +95,23 @@ app.post("/api/agent/chat", async (req, res) => {
     return res.status(403).json({ error: "Vision79 Owner Assistant access required." });
   }
   try {
-    const result = await run(managerAgent, message, { context });
+    const snapshot = await readBusinessSnapshot(context);
+    const snapshotText = JSON.stringify(snapshot);
+    const maxSnapshotChars = 50000;
+    const trustedSnapshot = snapshotText.length > maxSnapshotChars
+      ? snapshotText.slice(0, maxSnapshotChars) + "...[truncated]"
+      : snapshotText;
+    const groundedMessage = [
+      "TRUSTED CURRENT V79 BUSINESS SNAPSHOT:",
+      trustedSnapshot,
+      "",
+      "OWNER REQUEST:",
+      message,
+      "",
+      "Use the trusted snapshot for current business facts. Do not invent missing values.",
+      "If a requested fact is not present, say it is not available in the current snapshot.",
+    ].join("\n");
+    const result = await run(managerAgent, groundedMessage, { context });
     return res.json({
       output:
         typeof result.finalOutput === "string"
