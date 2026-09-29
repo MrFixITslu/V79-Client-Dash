@@ -8,6 +8,7 @@ import {
   CreditCard,
   TrendingUp,
   Sparkles,
+  Target,
   ArrowRight,
 } from "lucide-react";
 import { EcosystemApp } from "../types";
@@ -56,6 +57,8 @@ export function AppSwitcher({
         return <CreditCard className="w-4 h-4 text-white" />;
       case "TrendingUp":
         return <TrendingUp className="w-4 h-4 text-white" />;
+      case "Target":
+        return <Target className="w-4 h-4 text-white" />;
       default:
         return <Sparkles className="w-4 h-4 text-white" />;
     }

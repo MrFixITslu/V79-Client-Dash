@@ -8,7 +8,8 @@ import fs from "fs";
 import crypto from "crypto";
 import { signPlatformRequest, verifyPlatformRequest } from "./server/platform-contract.mjs";
 import { migrateLegacyOrganization } from "./server/organization-store.mjs";
-import { activeMembership, legacyWorkspaceAccess, validLegacyLaunch } from "./server/organization-access.mjs";
+import { activeMembership, enabledAppIds, legacyWorkspaceAccess, organizationCanAccessApp, validLegacyLaunch } from "./server/organization-access.mjs";
+import { hasOwnerAssistantAccess, normalizeEmail } from "./server/agent-access.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -40,6 +41,7 @@ interface StoredUser {
   username: string;
   password: string;
   fullName: string;
+  email?: string;
   role: "admin" | "manager" | "staff" | "viewer";
   permissions: string[];
   lastLogin?: string;
@@ -63,6 +65,13 @@ interface Membership {
   userId: string;
   role: StoredUser["role"] | "owner";
   status: "active" | "revoked";
+  createdAt: string;
+}
+
+interface AppEntitlement {
+  organizationId: string;
+  appId: string;
+  enabled: boolean;
   createdAt: string;
 }
 
@@ -102,6 +111,7 @@ interface AppStore {
   ecosystemApps: EcosystemApp[];
   organizations: Organization[];
   memberships: Membership[];
+  appEntitlements: AppEntitlement[];
 }
 
 // Initial Seed Data
@@ -288,6 +298,37 @@ const defaultEcosystemApps: EcosystemApp[] = [
     lastSync: new Date(Date.now() - 5 * 60 * 1000).toISOString()
   },
   {
+    id: "app-lasertag",
+    name: "CombatZone SLU",
+    shortName: "CombatZone",
+    tagline: "Mobile Combat Laser Tag Operations",
+    description: "Bookings, event operations, payments, customer engagement and store activity for CombatZone SLU.",
+    category: "operations",
+    status: "active",
+    appUrl: "https://combatzone.v79sl.com",
+    githubRepo: "https://github.com/MrFixITslu/Lasertag",
+    iconName: "Target",
+    colorScheme: {
+      primary: "from-orange-500 to-red-600",
+      bgGradient: "bg-gradient-to-br from-orange-500/10 via-red-500/5 to-transparent",
+      badgeBg: "bg-orange-500/15 border-orange-500/30",
+      badgeText: "text-orange-400",
+      border: "border-orange-500/30 hover:border-orange-500/60"
+    },
+    metrics: [],
+    features: [
+      "Booking & Event Operations",
+      "Team Registration & Check-in",
+      "Payments & Revenue Tracking",
+      "Equipment & Incident Management",
+      "CombatZone Store"
+    ],
+    ssoSupported: false,
+    isFlagship: true,
+    version: "v0.1.0",
+    lastSync: new Date().toISOString()
+  },
+  {
     id: "app-analytics",
     name: "V79 Analytics & BI",
     shortName: "Analytics",
@@ -367,6 +408,7 @@ function normalizeEcosystemApps(value: unknown): EcosystemApp[] {
 
   const v79posApp = defaultEcosystemApps.find(app => app.id === "app-v79pos")!;
   const academyApp = defaultEcosystemApps.find(app => app.id === "app-academy")!;
+  const laserTagApp = defaultEcosystemApps.find(app => app.id === "app-lasertag")!;
 
   loadedApps = loadedApps.map((app) => {
     if (app.id === "app-ffpro" || app.shortName === "FFPRO") return { ...app, appUrl: "https://ffpro.v79sl.com" };
@@ -374,6 +416,7 @@ function normalizeEcosystemApps(value: unknown): EcosystemApp[] {
     if (app.id === "app-marketing" || app.shortName === "Marketing") return { ...app, appUrl: "https://marketing.v79sl.com" };
     if (app.id === "app-v79pos" || app.shortName === "V79 POS") return { ...app, appUrl: "https://pos.v79sl.com" };
     if (app.id === "app-academy" || app.shortName === "Academy") return { ...app, appUrl: "https://v79academy.v79sl.com/academy" };
+    if (app.id === "app-lasertag" || app.shortName === "CombatZone") return { ...app, appUrl: "https://combatzone.v79sl.com" };
     if (app.id === "app-ordely" || app.shortName === "Ordely" || app.name?.toLowerCase().includes("ordely")) return { ...v79posApp };
     return app;
   });
@@ -383,6 +426,7 @@ function normalizeEcosystemApps(value: unknown): EcosystemApp[] {
     const posIndex = loadedApps.findIndex(app => app.id === "app-v79pos");
     loadedApps.splice(posIndex >= 0 ? posIndex : loadedApps.length, 0, { ...academyApp });
   }
+  if (!loadedApps.some(app => app.id === "app-lasertag")) loadedApps.push({ ...laserTagApp });
   return loadedApps;
 }
 
@@ -397,7 +441,8 @@ function loadStore(): AppStore {
         ? parsed.workspace.companyName.trim()
         : "";
       if ((parsed.organizations !== undefined && !Array.isArray(parsed.organizations)) ||
-          (parsed.memberships !== undefined && !Array.isArray(parsed.memberships))) {
+          (parsed.memberships !== undefined && !Array.isArray(parsed.memberships)) ||
+          (parsed.appEntitlements !== undefined && !Array.isArray(parsed.appEntitlements))) {
         throw new Error("Organization records are malformed.");
       }
 
@@ -409,6 +454,7 @@ function loadStore(): AppStore {
         ecosystemApps: normalizeEcosystemApps(parsed.ecosystemApps),
         organizations: Array.isArray(parsed.organizations) ? parsed.organizations : [],
         memberships: Array.isArray(parsed.memberships) ? parsed.memberships : [],
+        appEntitlements: Array.isArray(parsed.appEntitlements) ? parsed.appEntitlements : [],
       };
     }
   } catch (err) {
@@ -421,6 +467,7 @@ function loadStore(): AppStore {
     ecosystemApps: defaultEcosystemApps.map(app => ({ ...app })),
     organizations: [],
     memberships: [],
+    appEntitlements: [],
   };
   saveStore(initialStore);
   return initialStore;
@@ -444,6 +491,7 @@ function saveStore(store: AppStore): void {
     ecosystemApps: store.ecosystemApps,
     organizations: store.organizations,
     memberships: store.memberships,
+    appEntitlements: store.appEntitlements,
   };
   const tempFile = STORE_FILE + ".tmp";
   fs.writeFileSync(tempFile, JSON.stringify(persisted, null, 2), { encoding: "utf-8", mode: 0o600 });
@@ -480,7 +528,7 @@ if (adminPassword) {
   const username = process.env.V79_HUB_ADMIN_USERNAME || "admin";
   let admin = store.users.find(u => u.username.toLowerCase() === username.toLowerCase());
   if (!admin) {
-    admin = { id: crypto.randomUUID(), username, password: "", fullName: "Hub Administrator", role: "admin", permissions: ["overview","connections","team","security","billing","users"], createdAt: new Date().toISOString() };
+    admin = { id: crypto.randomUUID(), username, password: "", fullName: "Hub Administrator", email: normalizeEmail(process.env.V79_HUB_ADMIN_EMAIL), role: "admin", permissions: ["overview","connections","team","security","billing","users"], createdAt: new Date().toISOString() };
     store.users.push(admin);
   }
   // Only replace a password when initially bootstrapping; subsequent edits in
@@ -490,6 +538,11 @@ if (adminPassword) {
     usersChanged = true;
   }
   admin.role = "admin";
+  const configuredOwnerEmail = normalizeEmail(process.env.V79_HUB_ADMIN_EMAIL);
+  if (configuredOwnerEmail && admin.email !== configuredOwnerEmail) {
+    admin.email = configuredOwnerEmail;
+    usersChanged = true;
+  }
 }
 if (usersChanged) saveStore(store);
 
@@ -541,6 +594,25 @@ if (organizationMigration?.changed) {
   store.organizations = organizationMigration.organizations;
   store.memberships = organizationMigration.memberships;
   saveStore(store);
+}
+
+if (!Array.isArray(store.appEntitlements)) store.appEntitlements = [];
+const ownerEntitlements = store.appEntitlements.filter(entry => entry.organizationId === posIdentity.organizationId);
+if (ownerEntitlements.length === 0) {
+  const now = new Date().toISOString();
+  store.appEntitlements.push(...store.ecosystemApps.map(app => ({
+    organizationId: posIdentity.organizationId,
+    appId: app.id,
+    enabled: true,
+    createdAt: now,
+  })));
+  saveStore(store);
+}
+for (const appId of ["app-lasertag"]) {
+  if (!store.appEntitlements.some(entry => entry.organizationId === posIdentity.organizationId && entry.appId === appId)) {
+    store.appEntitlements.push({ organizationId: posIdentity.organizationId, appId, enabled: true, createdAt: new Date().toISOString() });
+    saveStore(store);
+  }
 }
 const posKeyPath = path.join(DATA_DIR, "pos-signing-ed25519.pem");
 if (!fs.existsSync(posKeyPath)) {
@@ -725,7 +797,9 @@ app.post("/api/auth/login", (req, res) => {
 
   res.setHeader("Set-Cookie", sessionCookie(token, 12 * 60 * 60));
   res.setHeader("Cache-Control", "no-store");
-  res.json({ user: { ...sanitizeUser(foundUser), platformOperator: foundUser.id === posIdentity.ownerUserId }, organization: store.organizations.find(org => org.id === posIdentity.organizationId) });
+  const membership = activeMembership(store, foundUser.id, posIdentity.organizationId);
+  const ownerAgent = hasOwnerAssistantAccess({ user: foundUser, membership, organizationId: posIdentity.organizationId, ownerOrganizationId: posIdentity.organizationId, ownerUserId: posIdentity.ownerUserId, ownerEmail: process.env.V79_HUB_ADMIN_EMAIL });
+  res.json({ user: { ...sanitizeUser(foundUser), platformOperator: foundUser.id === posIdentity.ownerUserId, ownerAgent }, organization: store.organizations.find(org => org.id === posIdentity.organizationId) });
 });
 
 app.get("/api/auth/me", requireAuth, (req, res) => {
@@ -734,7 +808,9 @@ app.get("/api/auth/me", requireAuth, (req, res) => {
   if (!user) {
     return res.status(404).json({ error: "User record not found" });
   }
-  res.json({ user: { ...sanitizeUser(user), platformOperator: user.id === posIdentity.ownerUserId }, organization: store.organizations.find(org => org.id === session.organizationId) });
+  const membership = activeMembership(store, user.id, session.organizationId);
+  const ownerAgent = hasOwnerAssistantAccess({ user, membership, organizationId: session.organizationId, ownerOrganizationId: posIdentity.organizationId, ownerUserId: posIdentity.ownerUserId, ownerEmail: process.env.V79_HUB_ADMIN_EMAIL });
+  res.json({ user: { ...sanitizeUser(user), platformOperator: user.id === posIdentity.ownerUserId, ownerAgent }, organization: store.organizations.find(org => org.id === session.organizationId) });
 });
 
 app.post("/api/auth/logout", requireAuth, (req, res) => {
@@ -747,13 +823,16 @@ app.post("/api/auth/logout", requireAuth, (req, res) => {
 
 app.use("/api", requireAuth);
 
-type DashboardProduct = "pos" | "ffpro" | "tiquet" | "marketing" | "academy";
+type DashboardProduct = "pos" | "ffpro" | "tiquet" | "marketing" | "academy" | "lasertag" | "website" | "games";
 const dashboardSources: Record<DashboardProduct, string> = {
   pos: posServiceUrl,
   ffpro: process.env.FFPRO_INTERNAL_URL || "http://fire-finance-app:3010",
   tiquet: process.env.TIQUET_INTERNAL_URL || "http://v79-tiquet-manager:3050",
   marketing: process.env.MARKETING_INTERNAL_URL || "http://v79marketing-app:3070",
   academy: process.env.ACADEMY_INTERNAL_URL || "http://v79_course_builder:3030",
+  lasertag: process.env.LASERTAG_INTERNAL_URL || "http://lasertag:5173",
+  website: process.env.WEBSITE_INTERNAL_URL || "http://V79website:3000",
+  games: process.env.GAMES_INTERNAL_URL || "http://gaming-studio-j:80",
 };
 
 async function readDashboardSummary(product: DashboardProduct) {
@@ -807,7 +886,7 @@ async function readDashboardSummary(product: DashboardProduct) {
 }
 
 app.get("/api/dashboard/summary", async (req, res) => {
-  const products: DashboardProduct[] = ["pos", "ffpro", "tiquet", "marketing", "academy"];
+  const products: DashboardProduct[] = ["pos", "ffpro", "tiquet", "marketing", "academy", "lasertag", "website", "games"];
   const canViewFinance = (req as any).user.role === "admin";
   const results = await Promise.all(products.map(async product => [product,
     product === "ffpro" && !canViewFinance
@@ -827,6 +906,9 @@ const serviceHealthPaths: Record<DashboardProduct, string> = {
   tiquet: "/health",
   marketing: "/api/health",
   academy: "/healthz",
+  lasertag: "/health",
+  website: "/api/health",
+  games: "/healthz",
 };
 
 app.get("/api/connections/status", async (_req, res) => {
@@ -926,7 +1008,7 @@ app.use("/api/admin/academy", requirePlatformOperator, async (req, res) => {
 });
 
 
-type PlatformAdminProduct = "pos" | "tiquet" | "marketing" | "ffpro" | "academy";
+type PlatformAdminProduct = "pos" | "tiquet" | "marketing" | "ffpro" | "academy" | "lasertag" | "website" | "games";
 
 // Retire the older broad proxy paths so stale clients cannot fall through to the SPA.
 app.use(["/api/admin/tiquet", "/api/admin/marketing"], requirePlatformOperator, (_req, res) => {
@@ -939,6 +1021,9 @@ const platformAdminSources: Record<PlatformAdminProduct, string> = {
   marketing: process.env.MARKETING_INTERNAL_URL || "http://v79marketing-app:3070",
   ffpro: process.env.FFPRO_INTERNAL_URL || "http://fire-finance-app:3010",
   academy: process.env.ACADEMY_INTERNAL_URL || "http://v79_course_builder:3030",
+  lasertag: process.env.LASERTAG_INTERNAL_URL || "http://lasertag:5173",
+  website: process.env.WEBSITE_INTERNAL_URL || "http://V79website:3000",
+  games: process.env.GAMES_INTERNAL_URL || "http://gaming-studio-j:80",
 };
 
 const platformAdminAllowed: Record<PlatformAdminProduct, Array<{ method: string; path: RegExp }>> = {
@@ -963,6 +1048,15 @@ const platformAdminAllowed: Record<PlatformAdminProduct, Array<{ method: string;
     { method: "GET", path: /^\/api\/platform\/admin\/accounts$/ },
   ],
   academy: [
+    { method: "GET", path: /^\/api\/platform\/admin\/stats$/ },
+  ],
+  lasertag: [
+    { method: "GET", path: /^\/api\/platform\/admin\/stats$/ },
+  ],
+  website: [
+    { method: "GET", path: /^\/api\/platform\/admin\/stats$/ },
+  ],
+  games: [
     { method: "GET", path: /^\/api\/platform\/admin\/stats$/ },
   ],
 };
@@ -1025,7 +1119,7 @@ async function callPlatformAdmin(product: PlatformAdminProduct, method: string, 
 }
 
 app.get("/api/admin/platform/overview", requirePlatformOperator, async (_req, res) => {
-  const products: PlatformAdminProduct[] = ["pos", "tiquet", "marketing", "ffpro", "academy"];
+  const products: PlatformAdminProduct[] = ["pos", "tiquet", "marketing", "ffpro", "academy", "lasertag", "website", "games"];
   const entries = await Promise.all(products.map(async product => {
     const response = await callPlatformAdmin(product, "GET", "/api/platform/admin/stats");
     let data: any = null;
@@ -1072,6 +1166,141 @@ const retiredEmbeddedAppPaths = [
 app.use(retiredEmbeddedAppPaths, (_req, res) => {
   res.status(410).json({ error: "This embedded Hub app-data API has been retired. Use the dedicated V79 application." });
 });
+const agentInternalUrl = process.env.V79_AGENT_INTERNAL_URL || "http://v79-business-agent:3055";
+const agentApiToken = process.env.V79_AGENT_API_TOKEN || "";
+const ownerAgentSystems = ["hub", "website", "lasertag", "marketing", "pos", "tiquet", "ffpro", "academy", "games"];
+
+function ownerAssistantContext(req: Request) {
+  const session = (req as any).user;
+  const user = store.users.find(item => item.id === session.userId);
+  const membership = activeMembership(store, session.userId, session.organizationId);
+  if (!user || !hasOwnerAssistantAccess({
+    user,
+    membership,
+    organizationId: session.organizationId,
+    ownerOrganizationId: posIdentity.organizationId,
+    ownerUserId: posIdentity.ownerUserId,
+    ownerEmail: process.env.V79_HUB_ADMIN_EMAIL,
+  })) return null;
+
+  const organization = store.organizations.find(org => org.id === session.organizationId);
+  return {
+    userId: user.id,
+    email: normalizeEmail(user.email),
+    organizationId: session.organizationId,
+    organizationName: organization?.name || store.workspace.companyName || "V79 Digital",
+    allowedSystems: ownerAgentSystems,
+    ownerAgent: true,
+    hubAdmin: true,
+  };
+}
+
+app.get("/api/agent/access", (req, res) => {
+  const context = ownerAssistantContext(req);
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ enabled: Boolean(context), ownerOnly: true, email: context?.email || null });
+});
+
+function internalOwnerAgentRequest(req: Request) {
+  const token = String(req.get("x-v79-agent-token") || "");
+  const email = normalizeEmail(req.get("x-v79-owner-email"));
+  const organizationId = String(req.get("x-v79-organization-id") || "");
+  if (!agentApiToken || token.length !== agentApiToken.length) return false;
+  if (!crypto.timingSafeEqual(Buffer.from(token), Buffer.from(agentApiToken))) return false;
+  return email === "vision79slu@gmail.com" &&
+    email === normalizeEmail(process.env.V79_HUB_ADMIN_EMAIL) &&
+    organizationId === posIdentity.organizationId;
+}
+
+async function connectionSnapshot() {
+  const products = Object.keys(serviceHealthPaths) as DashboardProduct[];
+  const entries = await Promise.all(products.map(async product => {
+    const started = performance.now();
+    try {
+      const response = await fetch(new URL(serviceHealthPaths[product], dashboardSources[product]), {
+        redirect: "manual",
+        signal: AbortSignal.timeout(3000),
+      });
+      return [product, {
+        status: response.ok ? "online" : "unavailable",
+        responseMs: Math.round(performance.now() - started),
+      }] as const;
+    } catch {
+      return [product, { status: "unavailable", responseMs: null }] as const;
+    }
+  }));
+  return Object.fromEntries(entries);
+}
+
+app.get("/internal/agent/snapshot", async (req, res) => {
+  if (!internalOwnerAgentRequest(req)) {
+    return res.status(403).json({ error: "Vision79 Owner Assistant service access required." });
+  }
+
+  const products: DashboardProduct[] = ["pos", "ffpro", "tiquet", "marketing", "academy", "lasertag", "website", "games"];
+  const [summaries, connections, platformStats] = await Promise.all([
+    Promise.all(products.map(async product => [product, await readDashboardSummary(product)] as const)),
+    connectionSnapshot(),
+    Promise.all(products.map(async product => {
+      const response = await callPlatformAdmin(product, "GET", "/api/platform/admin/stats");
+      let payload: any = null;
+      try { payload = JSON.parse(response.body.toString("utf8")); } catch { /* no-op */ }
+      return [product, {
+        status: response.status === 200 ? "ok" : "unavailable",
+        httpStatus: response.status,
+        metrics: response.status === 200 ? payload : null,
+      }] as const;
+    })),
+  ]);
+
+  const organizationId = posIdentity.organizationId;
+  const activeMembers = store.memberships.filter(member =>
+    member.organizationId === organizationId && member.status === "active"
+  );
+
+  res.setHeader("Cache-Control", "no-store");
+  res.json({
+    generatedAt: new Date().toISOString(),
+    owner: {
+      email: normalizeEmail(process.env.V79_HUB_ADMIN_EMAIL),
+      organizationId,
+      organizationName: store.organizations.find(org => org.id === organizationId)?.name || store.workspace.companyName,
+    },
+    hubAdmin: {
+      users: activeMembers.length,
+      enabledApps: enabledAppIds(store, organizationId),
+      activeSessions: [...sessions.values()].filter(session => session.organizationId === organizationId && session.expiresAt > Date.now()).length,
+    },
+    connections,
+    business: Object.fromEntries(summaries),
+    platform: Object.fromEntries(platformStats),
+  });
+});
+
+app.post("/api/agent/chat", async (req, res) => {
+  const context = ownerAssistantContext(req);
+  if (!context) return res.status(403).json({ error: "Vision79 Owner Assistant access required." });
+  if (!agentApiToken) return res.status(503).json({ error: "Owner Assistant service is not configured." });
+  const message = typeof req.body?.message === "string" ? req.body.message.trim() : "";
+  if (!message) return res.status(400).json({ error: "message is required" });
+
+  try {
+    const response = await fetch(`${agentInternalUrl}/api/agent/chat`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-v79-agent-token": agentApiToken },
+      body: JSON.stringify({ message, context }),
+      signal: AbortSignal.timeout(90000),
+    });
+    const body = await response.text();
+    res.status(response.status);
+    res.setHeader("Cache-Control", "no-store");
+    res.type(response.headers.get("content-type") || "application/json").send(body);
+  } catch (error) {
+    console.error("Owner Assistant proxy failed", error);
+    res.status(502).json({ error: "Owner Assistant service is unavailable." });
+  }
+});
+
 app.use("/api/users", requireRole("admin"));
 app.use("/api/ecosystem/apps", (req, res, next) => req.method === "GET" ? next() : requireRole("admin")(req, res, next));
 
@@ -1105,6 +1334,8 @@ app.get("/api/apps/:product/launch", requireRole("admin"), (req, res) => {
   const product = req.params.product as keyof typeof managedLaunch;
   if (!(product in managedLaunch)) return res.status(404).json({ error: "Unknown managed app" });
   const session = (req as any).user;
+  const appIdByProduct = { ffpro: "app-ffpro", tiquet: "app-tiquet", marketing: "app-marketing" } as const;
+  if (!organizationCanAccessApp(store, session.organizationId, appIdByProduct[product])) return res.status(403).json({ error: "This app is not enabled for this Hub organization" });
   if (session.organizationId !== posIdentity.organizationId || session.userId !== posIdentity.ownerUserId ||
       activeMembership(store, session.userId, session.organizationId)?.role !== "owner") return res.status(403).json({ error: "Only the workspace owner can launch this app" });
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(process.env.V79_HUB_ADMIN_EMAIL || "")) return res.status(503).json({ error: "Set V79_HUB_ADMIN_EMAIL to the owner's verified email." });
@@ -1230,7 +1461,10 @@ app.get("/api/ecosystem/apps", (req, res) => {
     "app-v79pos": "Sales, stock and purchasing. The POS beta requires its own service and register testing.",
     "app-academy": "Public courses and learning. Academy has its own learner account.",
   };
+  const organizationId = (req as any).user.organizationId;
+  const allowedApps = new Set(enabledAppIds(store, organizationId));
   res.json(store.ecosystemApps
+    .filter(a => allowedApps.has(a.id))
     .filter(a => !["app-analytics","app-lifehealth"].includes(a.id))
     .map(a => ({ ...a, status: "beta", metrics: undefined, lastSync: undefined,
       description: managedDescriptions[a.id] || a.description,
@@ -1243,6 +1477,8 @@ app.get("/api/ecosystem/apps", (req, res) => {
 // Update an ecosystem application configuration (e.g. custom URL, status)
 app.put("/api/ecosystem/apps/:id", (req, res) => {
   const { id } = req.params;
+  const organizationId = (req as any).user.organizationId;
+  if (!organizationCanAccessApp(store, organizationId, id)) return res.status(403).json({ error: "This app is not enabled for this Hub organization" });
   const index = store.ecosystemApps.findIndex((a) => a.id === id);
   if (index === -1) {
     return res.status(404).json({ error: "Ecosystem app not found" });
@@ -1293,6 +1529,10 @@ app.post("/api/ecosystem/apps", (req, res) => {
   };
 
   store.ecosystemApps.push(newApp);
+  const organizationId = (req as any).user.organizationId;
+  if (!organizationCanAccessApp(store, organizationId, newApp.id)) {
+    store.appEntitlements.push({ organizationId, appId: newApp.id, enabled: true, createdAt: new Date().toISOString() });
+  }
   saveStore(store);
   broadcast({ type: "ECOSYSTEM_APPS_UPDATED", apps: store.ecosystemApps });
   res.status(201).json(newApp);

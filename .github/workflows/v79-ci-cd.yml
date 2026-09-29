@@ -24,7 +24,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
       - name: Install and validate application
         shell: bash
         run: |
@@ -44,6 +44,7 @@ jobs:
             popd >/dev/null
           }
           run_project .
+          if [ -f agent-service/package.json ]; then run_project agent-service; fi
           if [ -f backend/package.json ]; then run_project backend; fi
       - name: Verify Docker image can build
         if: ${{ hashFiles('Dockerfile') != '' }}

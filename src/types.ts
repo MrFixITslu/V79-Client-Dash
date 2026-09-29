@@ -8,7 +8,8 @@ export type ViewState =
   | 'billing'
   | 'admin'
   | 'dashboard'
-  | 'users';
+  | 'users'
+  | 'assistant';
 
 export interface User {
   id: string;
@@ -16,6 +17,8 @@ export interface User {
   fullName?: string;
   role: UserRole;
   platformOperator?: boolean;
+  ownerAgent?: boolean;
+  email?: string;
   permissions?: ViewState[];
   lastLogin?: string;
   createdAt?: string;
