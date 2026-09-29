@@ -30,7 +30,7 @@ export function compactOwnerSnapshot(snapshot: UnknownRecord) {
       Object.entries(platformMetrics).filter(([key]) => !(key in businessMetrics)),
     );
     systems[product] = {
-      status: snapshot?.connections?.[product]?.status || "unknown",
+      connection: snapshot?.connections?.[product]?.status || "unknown",
       metrics: businessMetrics,
       ...(Object.keys(platformExtra).length ? { extra: platformExtra } : {}),
     };
