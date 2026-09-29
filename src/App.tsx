@@ -15,6 +15,7 @@ import { WorkspaceTeam } from "./components/WorkspaceTeam";
 import { WorkspaceSecurity } from "./components/WorkspaceSecurity";
 import { WorkspaceBilling } from "./components/WorkspaceBilling";
 import { AdminConsole } from "./components/AdminConsole";
+import { OwnerAssistant } from "./components/OwnerAssistant";
 import { CheckCircle2, AlertCircle, RotateCw } from "lucide-react";
 
 export default function App() {
@@ -185,6 +186,7 @@ export default function App() {
     billing: "Billing",
     admin: "Admin Console",
     users: "User Management",
+    assistant: "Owner Assistant",
   };
 
   return (
@@ -279,6 +281,7 @@ export default function App() {
         {currentView === "security" && <WorkspaceSecurity onNavigate={setCurrentView} />}
         {currentView === "billing" && <WorkspaceBilling onNavigate={setCurrentView} />}
         {currentView === "admin" && isAdmin && <AdminConsole ecosystemApps={ecosystemApps} />}
+        {currentView === "assistant" && user.ownerAgent === true && <OwnerAssistant />}
 
         {currentView === "users" && isAdmin && (
           <UserManagement

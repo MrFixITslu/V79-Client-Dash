@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "test": "node --test tests/hub-security.test.mjs tests/organization-store.test.mjs tests/organization-access.test.mjs"
+    "test": "node --test tests/hub-security.test.mjs tests/organization-store.test.mjs tests/organization-access.test.mjs tests/agent-access.test.mjs"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.3",

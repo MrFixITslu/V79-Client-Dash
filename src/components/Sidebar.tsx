@@ -6,6 +6,7 @@ import {
   Shield,
   CreditCard,
   Settings2,
+  Bot,
   LogOut,
 } from "lucide-react";
 import { ViewState, User } from "../types";
@@ -112,6 +113,25 @@ export function Sidebar({ currentView, onViewChange, onLogout, user }: SidebarPr
             </button>
           </div>
         </div>
+
+        {user.ownerAgent && (
+          <div>
+            <div className="px-3 mb-2 text-[10px] font-bold uppercase tracking-wider text-slate-500">
+              OWNER AI
+            </div>
+            <button
+              onClick={() => onViewChange("assistant")}
+              className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl font-medium text-xs transition-all ${
+                currentView === "assistant"
+                  ? "bg-cyan-900/40 text-cyan-300 border border-cyan-500/40 shadow-sm"
+                  : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 border border-transparent"
+              }`}
+            >
+              <Bot className="w-4 h-4 text-cyan-400" />
+              <span>Owner Assistant</span>
+            </button>
+          </div>
+        )}
 
         {user.platformOperator && (
           <div>

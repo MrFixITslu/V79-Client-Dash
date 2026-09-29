@@ -17,3 +17,16 @@ export function validLegacyLaunch(store, entry, product, legacyOrganizationId, o
     entry.tenantId === legacyOrganizationId && entry.userId === ownerUserId &&
     activeMembership(store, entry.userId, entry.tenantId)?.role === 'owner');
 }
+
+
+export function enabledAppIds(store, organizationId) {
+  const organization = store.organizations.find(org => org.id === organizationId && org.status === 'active');
+  if (!organization) return [];
+  return (store.appEntitlements || [])
+    .filter(entry => entry.organizationId === organizationId && entry.enabled === true)
+    .map(entry => entry.appId);
+}
+
+export function organizationCanAccessApp(store, organizationId, appId) {
+  return enabledAppIds(store, organizationId).includes(appId);
+}
