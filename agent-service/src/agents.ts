@@ -1,8 +1,9 @@
 import { Agent } from "@openai/agents";
 import type { AgentContext } from "./context.js";
 import { approvalPolicyTool, checkAppHealthTool, getBusinessSnapshotTool, listBusinessSystemsTool } from "./tools.js";
+import { agentModelRuntime } from "./model-runtime.js";
 
-const model = process.env.OPENAI_AGENT_MODEL || "gpt-5.6-sol";
+const model = agentModelRuntime.model;
 
 const sharedRules = `
 You work for V79 Digital as the private Vision79 Owner Assistant team.
