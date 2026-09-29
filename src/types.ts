@@ -15,6 +15,7 @@ export interface User {
   username: string;
   fullName?: string;
   role: UserRole;
+  platformOperator?: boolean;
   permissions?: ViewState[];
   lastLogin?: string;
   createdAt?: string;

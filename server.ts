@@ -722,7 +722,7 @@ app.post("/api/auth/login", (req, res) => {
 
   res.setHeader("Set-Cookie", sessionCookie(token, 12 * 60 * 60));
   res.setHeader("Cache-Control", "no-store");
-  res.json({ user: sanitizeUser(foundUser), organization: store.organizations.find(org => org.id === posIdentity.organizationId) });
+  res.json({ user: { ...sanitizeUser(foundUser), platformOperator: foundUser.id === posIdentity.ownerUserId }, organization: store.organizations.find(org => org.id === posIdentity.organizationId) });
 });
 
 app.get("/api/auth/me", requireAuth, (req, res) => {
@@ -731,7 +731,7 @@ app.get("/api/auth/me", requireAuth, (req, res) => {
   if (!user) {
     return res.status(404).json({ error: "User record not found" });
   }
-  res.json({ user: sanitizeUser(user), organization: store.organizations.find(org => org.id === session.organizationId) });
+  res.json({ user: { ...sanitizeUser(user), platformOperator: user.id === posIdentity.ownerUserId }, organization: store.organizations.find(org => org.id === session.organizationId) });
 });
 
 app.post("/api/auth/logout", requireAuth, (req, res) => {

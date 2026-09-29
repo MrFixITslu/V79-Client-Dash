@@ -104,7 +104,9 @@ test('private data, retired embedded APIs and one-time app launch', {timeout:300
   const migrationBackup=JSON.parse(await readFile(join(dir,'v79_store_pre_organizations.json'),'utf8'));
   assert.equal(migrationBackup.legacyCustomData.keep,true);
   assert.equal(migrationBackup.organizations.length,0);
-  assert.equal('token' in (await login.clone().json()),false);
+  const ownerIdentity=await login.clone().json();
+  assert.equal('token' in ownerIdentity,false);
+  assert.equal(ownerIdentity.user.platformOperator,true);
   const cookie=login.headers.get('set-cookie').split(';')[0];
   const headers={Cookie:cookie,Origin:origin,'content-type':'application/json'};
   const ownerSummary=await (await request('/api/dashboard/summary',{headers:{Cookie:cookie}})).json();
@@ -151,6 +153,7 @@ test('private data, retired embedded APIs and one-time app launch', {timeout:300
   const otherAdminId=(await otherAdmin.json()).id;
   const otherLogin=await request('/api/auth/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({username:'otheradmin',password:'another-admin-password-1234'})});
   assert.equal(otherLogin.status,200);
+  assert.equal((await otherLogin.clone().json()).user.platformOperator,false);
   const otherCookie=otherLogin.headers.get('set-cookie').split(';')[0];
   assert.equal((await request('/api/admin/platform/overview',{headers:{Cookie:otherCookie}})).status,403);
   assert.equal((await request('/api/admin/platform/tiquet/stats',{headers:{Cookie:otherCookie}})).status,403);
