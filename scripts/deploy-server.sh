@@ -39,7 +39,24 @@ test -f "$stage/docker-compose.yml" && test -f "$stage/Dockerfile"
 rsync -a --delete --exclude='/.env' --exclude='/data/' \
   --exclude='/backups/' --exclude='/.incoming.*/' "$stage/" "$root/"
 cd "$root"
-docker compose --project-name v79-hub up -d --build --wait --wait-timeout 120
+# Build first so an old container can keep serving while the new images are prepared.
+docker compose --project-name v79-hub build
+
+# Clean up only name collisions that belong to an older/different Compose project.
+# This handles legacy deployments created as "v79hub" while preserving containers
+# already owned by the canonical "v79-hub" project.
+for name in v79-hub v79-business-agent; do
+  existing_id="$(docker ps -aq --filter "name=^/${name}$" | head -n 1)"
+  [ -n "$existing_id" ] || continue
+  existing_project="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project" }}' "$existing_id" 2>/dev/null || true)"
+  existing_service="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.service" }}' "$existing_id" 2>/dev/null || true)"
+  if [ "$existing_project" != "v79-hub" ] || [ "$existing_service" != "$name" ]; then
+    echo "Removing stale conflicting container: $name (project=${existing_project:-unknown}, service=${existing_service:-unknown})"
+    docker rm -f "$existing_id"
+  fi
+done
+
+docker compose --project-name v79-hub up -d --wait --wait-timeout 120
 container_id="$(docker compose --project-name v79-hub ps -q v79-hub)"
 test -n "$container_id"
 test "$(docker inspect --format '{{.State.Health.Status}}' "$container_id")" = healthy
