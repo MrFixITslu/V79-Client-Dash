@@ -8,6 +8,7 @@ import fs from "fs";
 import crypto from "crypto";
 import { signPlatformRequest, verifyPlatformRequest } from "./server/platform-contract.mjs";
 import { migrateLegacyOrganization } from "./server/organization-store.mjs";
+import { activeMembership, legacyWorkspaceAccess, validLegacyLaunch } from "./server/organization-access.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -493,7 +494,7 @@ if (adminPassword) {
 if (usersChanged) saveStore(store);
 
 // In-Memory Active Auth Sessions: token -> userId
-const sessions = new Map<string, { userId: string; username: string; role: string; expiresAt: number }>();
+const sessions = new Map<string, { userId: string; organizationId: string; username: string; role: string; expiresAt: number }>();
 const loginAttempts = new Map<string, { count: number; until: number }>();
 
 function sessionFromToken(token: string) {
@@ -504,9 +505,9 @@ function sessionFromToken(token: string) {
   }
   const user = store.users.find(u => u.id === session.userId);
   if (!user) return null;
-  if (!store.memberships.some(member => member.userId === user.id && member.organizationId === posIdentity.organizationId && member.status === "active") ||
-      !store.organizations.some(org => org.id === posIdentity.organizationId && org.status === "active")) return null;
-  session.role = user.role;
+  const membership = legacyWorkspaceAccess(store, user.id, session.organizationId, posIdentity.organizationId);
+  if (!membership) return null;
+  session.role = membership.role === "owner" ? "admin" : membership.role;
   return session;
 }
 function cookieToken(header = "") {
@@ -594,7 +595,7 @@ app.post("/api/platform/session/consume", (req, res) => {
   if (product !== expectedProduct || typeof ticket !== "string" || !/^[A-Za-z0-9_-]{32,180}$/.test(ticket)) return res.status(400).json({ error: "Invalid ticket" });
   const ticketHash = crypto.createHash("sha256").update(ticket).digest("hex");
   const entry = launchTickets.get(ticketHash);
-  if (!entry || entry.product !== product || entry.expiresAt < Date.now() || entry.userId !== posIdentity.ownerUserId || !store.users.some(u => u.id === entry.userId && u.role === "admin")) return res.status(401).json({ error: "Ticket expired or revoked" });
+  if (!entry || !validLegacyLaunch(store, entry, product, posIdentity.organizationId, posIdentity.ownerUserId)) return res.status(401).json({ error: "Ticket expired or revoked" });
   launchTickets.delete(ticketHash);
   res.setHeader("Cache-Control", "no-store");
   if (product === "pos") return res.json({ token: posJwt(posUserId(entry.userId), entry.tenantId), tenantId: entry.tenantId });
@@ -686,7 +687,7 @@ app.post("/api/auth/login", (req, res) => {
 
   const foundUser = store.users.find(
     (u) => u.username.toLowerCase() === String(username).trim().toLowerCase() && checkPassword(password, u.password) &&
-      store.memberships.some(member => member.userId === u.id && member.organizationId === posIdentity.organizationId && member.status === "active")
+      Boolean(legacyWorkspaceAccess(store, u.id, posIdentity.organizationId, posIdentity.organizationId))
   );
 
   if (!foundUser) {
@@ -701,6 +702,7 @@ app.post("/api/auth/login", (req, res) => {
 
   sessions.set(token, {
     userId: foundUser.id,
+    organizationId: posIdentity.organizationId,
     username: foundUser.username,
     role: foundUser.role,
     expiresAt
@@ -712,7 +714,7 @@ app.post("/api/auth/login", (req, res) => {
 
   res.setHeader("Set-Cookie", sessionCookie(token, 12 * 60 * 60));
   res.setHeader("Cache-Control", "no-store");
-  res.json({ user: sanitizeUser(foundUser) });
+  res.json({ user: sanitizeUser(foundUser), organization: store.organizations.find(org => org.id === posIdentity.organizationId) });
 });
 
 app.get("/api/auth/me", requireAuth, (req, res) => {
@@ -721,7 +723,7 @@ app.get("/api/auth/me", requireAuth, (req, res) => {
   if (!user) {
     return res.status(404).json({ error: "User record not found" });
   }
-  res.json({ user: sanitizeUser(user) });
+  res.json({ user: sanitizeUser(user), organization: store.organizations.find(org => org.id === session.organizationId) });
 });
 
 app.post("/api/auth/logout", requireAuth, (req, res) => {
@@ -1065,7 +1067,8 @@ app.use("/api/ecosystem/apps", (req, res, next) => req.method === "GET" ? next()
 app.get("/api/apps/pos/launch", requireRole("admin"), async (req, res) => {
   if (posSecret.length < 32) return res.status(503).json({ error: "POS shared secret is not configured" });
   const session = (req as any).user;
-  if (session.userId !== posIdentity.ownerUserId) return res.status(403).json({ error: "Only the workspace owner can launch POS" });
+  if (session.organizationId !== posIdentity.organizationId || session.userId !== posIdentity.ownerUserId ||
+      activeMembership(store, session.userId, session.organizationId)?.role !== "owner") return res.status(403).json({ error: "Only the workspace owner can launch POS" });
   const pathname = "/api/platform/provision";
   const body = JSON.stringify({
     organization: { id: posIdentity.organizationId, name: store.workspace.companyName || "V79 Digital", slug: `v79-${posIdentity.organizationId.slice(0, 12)}` },
@@ -1091,7 +1094,8 @@ app.get("/api/apps/:product/launch", requireRole("admin"), (req, res) => {
   const product = req.params.product as keyof typeof managedLaunch;
   if (!(product in managedLaunch)) return res.status(404).json({ error: "Unknown managed app" });
   const session = (req as any).user;
-  if (session.userId !== posIdentity.ownerUserId) return res.status(403).json({ error: "Only the workspace owner can launch this app" });
+  if (session.organizationId !== posIdentity.organizationId || session.userId !== posIdentity.ownerUserId ||
+      activeMembership(store, session.userId, session.organizationId)?.role !== "owner") return res.status(403).json({ error: "Only the workspace owner can launch this app" });
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(process.env.V79_HUB_ADMIN_EMAIL || "")) return res.status(503).json({ error: "Set V79_HUB_ADMIN_EMAIL to the owner's verified email." });
   const config = managedLaunch[product];
   if ((process.env[config.secretEnv] || "").length < 32) return res.status(503).json({ error: `${product} launch secret is not configured.` });
@@ -1111,7 +1115,8 @@ app.get("/api/apps/:product/launch", requireRole("admin"), (req, res) => {
 // ==========================================
 
 app.get("/api/users", (req, res) => {
-  res.json(store.users.map(sanitizeUser));
+  const organizationId = (req as any).user.organizationId;
+  res.json(store.users.filter(user => activeMembership(store, user.id, organizationId)).map(sanitizeUser));
 });
 
 app.post("/api/users", (req, res) => {
@@ -1137,7 +1142,7 @@ app.post("/api/users", (req, res) => {
   };
 
   store.users.push(newUser);
-  store.memberships.push({ organizationId: posIdentity.organizationId, userId: newUser.id, role: newUser.role, status: "active", createdAt: newUser.createdAt });
+  store.memberships.push({ organizationId: (req as any).user.organizationId, userId: newUser.id, role: newUser.role, status: "active", createdAt: newUser.createdAt });
   saveStore(store);
   broadcast({ type: "USERS_UPDATED", payload: store.users.map(sanitizeUser) });
   res.status(201).json(sanitizeUser(newUser));
@@ -1147,7 +1152,7 @@ app.put("/api/users/:id", (req, res) => {
   const { id } = req.params;
   const { username, password, fullName, role, permissions } = req.body;
 
-  const userIndex = store.users.findIndex((u) => u.id === id);
+  const userIndex = store.users.findIndex((u) => u.id === id && activeMembership(store, u.id, (req as any).user.organizationId));
   if (userIndex === -1) {
     return res.status(404).json({ error: "User not found" });
   }
@@ -1166,7 +1171,7 @@ app.put("/api/users/:id", (req, res) => {
     permissions: normalizePermissions(Array.isArray(permissions) ? permissions : current.permissions, role !== undefined ? role : current.role)
   };
   if (role !== undefined) {
-    const member = store.memberships.find(m => m.organizationId === posIdentity.organizationId && m.userId === id);
+    const member = store.memberships.find(m => m.organizationId === (req as any).user.organizationId && m.userId === id);
     if (member && member.role !== "owner") member.role = role;
   }
 
@@ -1180,7 +1185,8 @@ app.delete("/api/users/:id", (req, res) => {
   const { id } = req.params;
   // Ensure we don't delete the last admin
   const adminCount = store.users.filter((u) => u.role === "admin").length;
-  const userToDelete = store.users.find((u) => u.id === id);
+  const userToDelete = store.users.find((u) => u.id === id && activeMembership(store, u.id, (req as any).user.organizationId));
+  if (!userToDelete) return res.status(404).json({ error: "User not found" });
 
   if (id === posIdentity.ownerUserId) return res.status(400).json({ error: "Cannot delete the workspace owner" });
 
