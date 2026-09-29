@@ -51,7 +51,6 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_AGENT_MODEL: ${OPENAI_AGENT_MODEL:-gpt-5.6-sol}
       V79_AGENT_API_TOKEN: ${V79_AGENT_API_TOKEN:-}
-      V79_HUB_INTERNAL_URL: http://v79-hub:3040
       V79_HUB_HEALTH_URL: http://v79-hub:3040/api/health
       V79_HUB_AGENT_SNAPSHOT_URL: http://v79-hub:3040/internal/agent/snapshot
       V79_WEBSITE_HEALTH_URL: ${V79_WEBSITE_HEALTH_URL:-}

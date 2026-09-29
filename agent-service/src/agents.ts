@@ -1,6 +1,6 @@
 import { Agent } from "@openai/agents";
 import type { AgentContext } from "./context.js";
-import { approvalPolicyTool, checkAppHealthTool, listBusinessSystemsTool } from "./tools.js";
+import { approvalPolicyTool, checkAppHealthTool, getBusinessSnapshotTool, listBusinessSystemsTool } from "./tools.js";
 
 const model = process.env.OPENAI_AGENT_MODEL || "gpt-5.6-sol";
 
@@ -24,7 +24,7 @@ export const operationsAgent = new Agent<AgentContext>({
 Focus on keeping the V79 ecosystem working reliably.
 Diagnose operational issues, check system health, identify bottlenecks, and propose next actions.
 `,
-  tools: [checkAppHealthTool, listBusinessSystemsTool, approvalPolicyTool],
+  tools: [getBusinessSnapshotTool, checkAppHealthTool, listBusinessSystemsTool, approvalPolicyTool],
 });
 export const growthAgent = new Agent<AgentContext>({
   name: "V79 Growth",
@@ -34,7 +34,7 @@ export const growthAgent = new Agent<AgentContext>({
 Focus on lead generation, marketing performance, website conversion, offers and customer growth.
 You may draft ideas and campaigns, but you cannot publish or message customers in this phase.
 `,
-  tools: [listBusinessSystemsTool, approvalPolicyTool],
+  tools: [getBusinessSnapshotTool, listBusinessSystemsTool, approvalPolicyTool],
 });
 
 export const financeAgent = new Agent<AgentContext>({
@@ -45,7 +45,7 @@ export const financeAgent = new Agent<AgentContext>({
 Focus on revenue, costs, cashflow, profitability, pricing logic and financial KPIs.
 Do not move money, issue refunds or change prices without explicit approval.
 `,
-  tools: [listBusinessSystemsTool, approvalPolicyTool],
+  tools: [getBusinessSnapshotTool, listBusinessSystemsTool, approvalPolicyTool],
 });
 
 export const customerAgent = new Agent<AgentContext>({
@@ -56,7 +56,7 @@ export const customerAgent = new Agent<AgentContext>({
 Focus on customer questions, support workflows, ticket priorities and response drafts.
 Do not send messages or change customer records in this phase.
 `,
-  tools: [listBusinessSystemsTool, approvalPolicyTool],
+  tools: [getBusinessSnapshotTool, listBusinessSystemsTool, approvalPolicyTool],
 });
 export const laserTagAgent = new Agent<AgentContext>({
   name: "CombatZone Operations",
@@ -67,7 +67,7 @@ Focus on CombatZone SLU. Help with booking preparation, event logistics, staffin
 equipment readiness, customer information, pricing analysis and store operations.
 Do not change a booking, charge a customer or issue a refund without approval.
 `,
-  tools: [checkAppHealthTool, approvalPolicyTool],
+  tools: [getBusinessSnapshotTool, checkAppHealthTool, approvalPolicyTool],
 });
 
 export const technologyAgent = new Agent<AgentContext>({
@@ -79,7 +79,7 @@ Focus on software reliability, Hub Admin, integrations, security posture, deploy
 production readiness and technical debt across all permitted V79 applications.
 You may diagnose and recommend changes, but deployments and security changes require approval.
 `,
-  tools: [checkAppHealthTool, listBusinessSystemsTool, approvalPolicyTool],
+  tools: [getBusinessSnapshotTool, checkAppHealthTool, listBusinessSystemsTool, approvalPolicyTool],
 });
 export const managerAgent = new Agent<AgentContext>({
   name: "Vision79 Owner Assistant",
@@ -91,6 +91,6 @@ You may work across Hub Admin and the full Vision79 ecosystem only when the Hub 
 Understand the owner's goal, answer simple cross-business questions yourself, and hand focused work to the best specialist.
 Surface priorities, risks, opportunities and next actions. Keep answers concise and practical.
 `,
-  tools: [checkAppHealthTool, listBusinessSystemsTool, approvalPolicyTool],
+  tools: [getBusinessSnapshotTool, checkAppHealthTool, listBusinessSystemsTool, approvalPolicyTool],
   handoffs: [operationsAgent, growthAgent, financeAgent, customerAgent, laserTagAgent, technologyAgent],
 });
