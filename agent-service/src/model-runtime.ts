@@ -20,7 +20,7 @@ export function resolveAgentModelRuntime(env: NodeJS.ProcessEnv = process.env): 
   if (provider === "ollama") {
     return {
       provider: "ollama",
-      model: String(env.OLLAMA_AGENT_MODEL || "qwen2.5:3b").trim(),
+      model: String(env.OLLAMA_AGENT_MODEL || "qwen2.5:1.5b").trim(),
       baseURL: String(env.OLLAMA_OPENAI_BASE_URL || "http://ollama:11434/v1").trim().replace(/\/+$/, ""),
       timeoutMs: positiveInteger(env.OLLAMA_REQUEST_TIMEOUT_MS, 60_000),
     };
