@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { compactOwnerSnapshot } from "../src/grounding.js";
+import { compactOwnerSnapshot, formatPriorityBrief, isPriorityBriefRequest } from "../src/grounding.js";
 
 test("compacts and deduplicates owner business snapshot", () => {
   const compact = compactOwnerSnapshot({
@@ -35,4 +35,27 @@ test("priority signals put negative cashflow before generic inactivity", () => {
   assert.equal(first.values?.currentMonthNet, -4232.02);
   assert.ok(compact.prioritySignals.find(signal => signal.code === "pos_no_recent_sales"));
   assert.ok(compact.prioritySignals.find(signal => signal.code === "marketing_no_active_campaigns"));
+});
+
+
+test("priority briefing intent is narrow and explicit", () => {
+  assert.equal(isPriorityBriefRequest("What needs my attention today?"), true);
+  assert.equal(isPriorityBriefRequest("Give me my top priorities"), true);
+  assert.equal(isPriorityBriefRequest("How is Gaming Studio J doing?"), false);
+});
+
+test("priority brief formatting preserves severity order", () => {
+  const compact = compactOwnerSnapshot({
+    business: {
+      ffpro: { metrics: { currentMonthIncome: 1750, currentMonthExpenses: 5982.02, currentMonthNet: -4232.02 } },
+      pos: { metrics: { sales30d: 0, revenue30d: 0 } },
+      marketing: { metrics: { activeCampaigns: 0 } },
+    },
+  });
+  const brief = formatPriorityBrief(compact.prioritySignals, 3);
+  const lines = brief.split("\n");
+  assert.match(lines[0] || "", /HIGH — Finance/);
+  assert.match(lines[0] || "", /-4,232\.02/);
+  assert.match(lines[1] || "", /POS: no sales/);
+  assert.match(lines[2] || "", /Marketing: there are no active campaigns/);
 });
