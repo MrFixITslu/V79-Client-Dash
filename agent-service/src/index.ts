@@ -100,7 +100,7 @@ app.post("/api/agent/chat", async (req, res) => {
     const localFastPath = agentModelRuntime.provider === "ollama";
     const grounding = localFastPath ? compactOwnerSnapshot(snapshot) : snapshot;
     const snapshotText = JSON.stringify(grounding);
-    const maxSnapshotChars = localFastPath ? 16000 : 50000;
+    const maxSnapshotChars = localFastPath ? 6000 : 50000;
     const trustedSnapshot = snapshotText.length > maxSnapshotChars
       ? snapshotText.slice(0, maxSnapshotChars) + "...[truncated]"
       : snapshotText;
