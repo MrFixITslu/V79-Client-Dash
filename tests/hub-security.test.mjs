@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createPublicKey, verify } from 'node:crypto';
 import { verifyPlatformRequest, signPlatformRequest } from '../server/platform-contract.mjs';
+import WebSocket from 'ws';
 
 const secret='test-shared-secret-long-enough-for-platform';
 async function listen(server) { await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve)); return `http://127.0.0.1:${server.address().port}`; }
@@ -104,7 +105,9 @@ test('private data, retired embedded APIs and one-time app launch', {timeout:300
   const migrationBackup=JSON.parse(await readFile(join(dir,'v79_store_pre_organizations.json'),'utf8'));
   assert.equal(migrationBackup.legacyCustomData.keep,true);
   assert.equal(migrationBackup.organizations.length,0);
-  assert.equal('token' in (await login.clone().json()),false);
+  const ownerIdentity=await login.clone().json();
+  assert.equal('token' in ownerIdentity,false);
+  assert.equal(ownerIdentity.user.platformOperator,true);
   const cookie=login.headers.get('set-cookie').split(';')[0];
   const headers={Cookie:cookie,Origin:origin,'content-type':'application/json'};
   const ownerSummary=await (await request('/api/dashboard/summary',{headers:{Cookie:cookie}})).json();
@@ -146,6 +149,17 @@ test('private data, retired embedded APIs and one-time app launch', {timeout:300
   assert.equal((await request('/api/apps/pos/launch',{headers:{Cookie:viewerCookie}})).status,403);
   assert.equal((await request('/api/admin/academy/courses',{headers:{Cookie:viewerCookie}})).status,403);
   assert.equal((await request('/api/admin/platform/tiquet/stats',{headers:{Cookie:viewerCookie}})).status,403);
+  const otherAdmin=await request('/api/users',{method:'POST',headers,body:JSON.stringify({username:'otheradmin',password:'another-admin-password-1234',role:'admin'})});
+  assert.equal(otherAdmin.status,201);
+  const otherAdminId=(await otherAdmin.json()).id;
+  const otherLogin=await request('/api/auth/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({username:'otheradmin',password:'another-admin-password-1234'})});
+  assert.equal(otherLogin.status,200);
+  assert.equal((await otherLogin.clone().json()).user.platformOperator,false);
+  const otherCookie=otherLogin.headers.get('set-cookie').split(';')[0];
+  assert.equal((await request('/api/admin/platform/overview',{headers:{Cookie:otherCookie}})).status,403);
+  assert.equal((await request('/api/admin/platform/tiquet/stats',{headers:{Cookie:otherCookie}})).status,403);
+  assert.equal((await request('/api/admin/academy/courses',{headers:{Cookie:otherCookie}})).status,403);
+  assert.equal((await request('/api/apps/pos/launch',{headers:{Cookie:otherCookie}})).status,403);
   const academyList=await request('/api/admin/academy/courses',{headers:{Cookie:cookie}});
   assert.equal(academyList.status,200);
   assert.equal((await academyList.json())[0].title,'Signed Academy Course');
@@ -197,6 +211,14 @@ test('private data, retired embedded APIs and one-time app launch', {timeout:300
   assert.equal((await request(`/api/users/${ownerId}`,{method:'DELETE',headers})).status,400);
   assert.equal((await request(`/api/users/${ownerId}`,{method:'PUT',headers,body:JSON.stringify({role:'staff'})})).status,400);
   assert.equal((await request(`/api/users/${createdUser.id}`,{method:'DELETE',headers})).status,200);
+  const otherSocket=new WebSocket(origin.replace(/^http/,'ws'),{headers:{Cookie:otherCookie,Origin:origin}});
+  await new Promise((resolve,reject)=>{otherSocket.once('open',resolve);otherSocket.once('error',reject);});
+  const closed=new Promise((resolve,reject)=>{
+    const timer=setTimeout(()=>reject(new Error('Revoked WebSocket remained open')),3000);
+    otherSocket.once('close',code=>{clearTimeout(timer);resolve(code);});
+  });
+  assert.equal((await request(`/api/users/${otherAdminId}`,{method:'DELETE',headers})).status,200);
+  assert.equal(await closed,1008);
   const afterRemoval=JSON.parse(await readFile(storeFile,'utf8'));
   assert.equal(afterRemoval.memberships.some(member=>member.userId===createdUser.id),false);
 });

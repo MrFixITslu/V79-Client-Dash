@@ -113,7 +113,7 @@ export function Sidebar({ currentView, onViewChange, onLogout, user }: SidebarPr
           </div>
         </div>
 
-        {user.role === "admin" && (
+        {user.platformOperator && (
           <div>
             <div className="px-3 mb-2 text-[10px] font-bold uppercase tracking-wider text-slate-500">
               ADMINISTRATION

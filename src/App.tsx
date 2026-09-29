@@ -175,7 +175,7 @@ export default function App() {
 
   if (!user) return <Login onLoginSuccess={handleLoginSuccess} />;
 
-  const isAdmin = user.role === "admin";
+  const isAdmin = user.platformOperator === true;
   const viewLabel: Record<string, string> = {
     overview: "Business Pulse",
     dashboard: "Business Pulse",
