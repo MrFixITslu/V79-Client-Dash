@@ -55,6 +55,7 @@ export async function runOllamaOwnerAssistant(
             "Use only the trusted business snapshot supplied in the user message for current facts.",
             "Never invent missing values.",
             "Prioritize exceptions, risks, overdue work, cashflow, customer impact, operational issues, and practical next actions.",
+            "When PRIORITY SIGNALS are present, follow their severity order: high before medium before info. Never rank a generic zero-activity observation above a high-severity signal.",
             "Do not claim you changed, sent, deployed, refunded, booked, or edited anything.",
             "Keep answers concise and professional. Prefer at most five short bullets unless the owner asks for more detail.",
           ].join(" "),
