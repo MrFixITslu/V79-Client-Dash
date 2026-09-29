@@ -123,6 +123,7 @@ export const getBusinessSnapshotTool = tool({
       "customers_support",
       "growth",
       "learning",
+      "combat_zone",
     ]).default("all"),
   }),
   async execute({ section }, runContext: RunContext<AgentContext> | undefined) {
@@ -144,6 +145,7 @@ export const getBusinessSnapshotTool = tool({
       customers_support: ["tiquet"],
       growth: ["marketing", "website"],
       learning: ["academy", "games"],
+      combat_zone: ["lasertag"],
     } as const;
     const products = productBySection[section];
     return {
