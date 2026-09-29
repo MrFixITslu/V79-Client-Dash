@@ -29,6 +29,7 @@ services:
       V79_AGENT_INTERNAL_URL: ${V79_AGENT_INTERNAL_URL:-http://v79-business-agent:3055}
       V79_AGENT_API_TOKEN: ${V79_AGENT_API_TOKEN:-}
       V79_AGENT_TOKEN_FILE: /run/secrets/v79-agent-token
+      V79_READONLY_PLATFORM_SECRET_FILE: /run/secrets/v79-readonly-platform-token
     expose:
       - "3040"
     volumes:
