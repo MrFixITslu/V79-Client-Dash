@@ -32,7 +32,7 @@ export function compactOwnerSnapshot(snapshot: UnknownRecord) {
     systems[product] = {
       connection: snapshot?.connections?.[product]?.status || "unknown",
       metrics: businessMetrics,
-      ...(Object.keys(platformExtra).length ? { extra: platformExtra } : {}),
+      ...(Object.keys(platformExtra).length ? { platform: platformExtra } : {}),
     };
   }
   return {
