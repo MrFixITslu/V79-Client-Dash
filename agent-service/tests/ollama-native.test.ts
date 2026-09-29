@@ -2,10 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { resolveOllamaNativeRuntime, runOllamaOwnerAssistant } from "../src/ollama-native.js";
 
-test("native Ollama defaults to the local 3B model", () => {
+test("native Ollama defaults to the responsive local model", () => {
   assert.deepEqual(resolveOllamaNativeRuntime({}), {
     baseURL: "http://ollama:11434",
-    model: "qwen2.5:3b",
+    model: "qwen2.5:1.5b",
     timeoutMs: 45000,
   });
 });
