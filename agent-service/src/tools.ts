@@ -1,5 +1,6 @@
 import { tool, type RunContext } from "@openai/agents";
 import { z } from "zod";
+import fs from "node:fs";
 import { BUSINESS_SYSTEMS, getBusinessSystem } from "./business.js";
 import { checkApproval } from "./policy.js";
 import { canUseSystem, type AgentContext } from "./context.js";
@@ -91,11 +92,17 @@ export const checkAppHealthTool = tool({
 });
 
 const snapshotUrl = process.env.V79_HUB_AGENT_SNAPSHOT_URL || "http://v79-hub:3040/internal/agent/snapshot";
-const internalToken = process.env.V79_AGENT_API_TOKEN || "";
+const tokenFile = process.env.V79_AGENT_TOKEN_FILE || "/run/secrets/v79-agent-token";
+function readInternalToken() {
+  const direct = String(process.env.V79_AGENT_API_TOKEN || "").trim();
+  if (direct) return direct;
+  try { return fs.readFileSync(tokenFile, "utf8").trim(); } catch { return ""; }
+}
 
 async function readBusinessSnapshot(context: AgentContext) {
   if (!context.ownerAgent) throw new Error("Business-wide snapshot is restricted to the Vision79 Owner Assistant.");
-  if (!internalToken) throw new Error("V79_AGENT_API_TOKEN is not configured.");
+  const internalToken = readInternalToken();
+  if (!internalToken) throw new Error("Owner Assistant internal token is not configured.");
 
   const response = await fetch(snapshotUrl, {
     headers: {

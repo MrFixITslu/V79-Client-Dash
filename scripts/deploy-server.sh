@@ -13,6 +13,12 @@ done
 test -f "$archive" || { echo 'Release bundle missing' >&2; exit 1; }
 test -f "$root/.env" || { echo "Create $root/.env before deploying" >&2; exit 1; }
 test -d "$root/data" || { echo "Create $root/data before deploying" >&2; exit 1; }
+agent_token_file="$root/data/agent-runtime.token"
+if [ ! -s "$agent_token_file" ]; then
+  umask 077
+  head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$agent_token_file"
+  chmod 600 "$agent_token_file"
+fi
 docker network inspect proxy_network >/dev/null || { echo 'Docker network proxy_network is missing' >&2; exit 1; }
 docker compose version >/dev/null
 

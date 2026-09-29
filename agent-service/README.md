@@ -68,7 +68,7 @@ That loop — **think -> use a tool -> look at the result -> think again -> answ
 ```bash
 cd agent-service
 cp .env.example .env
-# add OPENAI_API_KEY and V79_AGENT_API_TOKEN
+# add OPENAI_API_KEY; for local development also set V79_AGENT_API_TOKEN
 npm install
 npm run lint
 npm test

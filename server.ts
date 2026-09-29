@@ -1167,7 +1167,12 @@ app.use(retiredEmbeddedAppPaths, (_req, res) => {
   res.status(410).json({ error: "This embedded Hub app-data API has been retired. Use the dedicated V79 application." });
 });
 const agentInternalUrl = process.env.V79_AGENT_INTERNAL_URL || "http://v79-business-agent:3055";
-const agentApiToken = process.env.V79_AGENT_API_TOKEN || "";
+const agentTokenFile = process.env.V79_AGENT_TOKEN_FILE || "/run/secrets/v79-agent-token";
+function readAgentApiToken() {
+  const direct = String(process.env.V79_AGENT_API_TOKEN || "").trim();
+  if (direct) return direct;
+  try { return fs.readFileSync(agentTokenFile, "utf8").trim(); } catch { return ""; }
+}
 const ownerAgentSystems = ["hub", "website", "lasertag", "marketing", "pos", "tiquet", "ffpro", "academy", "games"];
 
 function ownerAssistantContext(req: Request) {
@@ -1205,6 +1210,7 @@ function internalOwnerAgentRequest(req: Request) {
   const token = String(req.get("x-v79-agent-token") || "");
   const email = normalizeEmail(req.get("x-v79-owner-email"));
   const organizationId = String(req.get("x-v79-organization-id") || "");
+  const agentApiToken = readAgentApiToken();
   if (!agentApiToken || token.length !== agentApiToken.length) return false;
   if (!crypto.timingSafeEqual(Buffer.from(token), Buffer.from(agentApiToken))) return false;
   return email === "vision79slu@gmail.com" &&
@@ -1280,6 +1286,7 @@ app.get("/internal/agent/snapshot", async (req, res) => {
 app.post("/api/agent/chat", async (req, res) => {
   const context = ownerAssistantContext(req);
   if (!context) return res.status(403).json({ error: "Vision79 Owner Assistant access required." });
+  const agentApiToken = readAgentApiToken();
   if (!agentApiToken) return res.status(503).json({ error: "Owner Assistant service is not configured." });
   const message = typeof req.body?.message === "string" ? req.body.message.trim() : "";
   if (!message) return res.status(400).json({ error: "message is required" });
