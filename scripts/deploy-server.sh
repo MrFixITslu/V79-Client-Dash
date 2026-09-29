@@ -56,7 +56,7 @@ for name in v79-hub v79-business-agent; do
   fi
 done
 
-docker compose --project-name v79-hub up -d --wait --wait-timeout 120
+docker compose --project-name v79-hub up -d --force-recreate --no-build --wait --wait-timeout 120
 container_id="$(docker compose --project-name v79-hub ps -q v79-hub)"
 test -n "$container_id"
 test "$(docker inspect --format '{{.State.Health.Status}}' "$container_id")" = healthy
