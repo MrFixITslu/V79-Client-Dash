@@ -15,3 +15,22 @@ test("compacts and deduplicates owner business snapshot", () => {
   assert.deepEqual(compact.systems.pos.platform, { activeTenants: 1 });
   assert.equal(compact.systems.ffpro.connection, "unknown");
 });
+
+
+test("priority signals put negative cashflow before generic inactivity", () => {
+  const compact = compactOwnerSnapshot({
+    business: {
+      ffpro: { metrics: { currentMonthIncome: 1750, currentMonthExpenses: 5982.02, currentMonthNet: -4232.02 } },
+      pos: { metrics: { sales30d: 0, revenue30d: 0, criticalReplenishmentItems: 0, delayedShipments: 0, unresolvedInventoryExceptions: 0 } },
+      marketing: { metrics: { campaigns: 0, activeCampaigns: 0 } },
+      lasertag: { metrics: { upcomingBookings: 0, upcomingPlayers: 0 } },
+      academy: { metrics: { publishedCourses: 4, enrolledCourses: 1 } },
+    },
+  });
+
+  assert.equal(compact.prioritySignals[0].severity, "high");
+  assert.equal(compact.prioritySignals[0].code, "finance_negative_month_net");
+  assert.equal(compact.prioritySignals[0].values.currentMonthNet, -4232.02);
+  assert.ok(compact.prioritySignals.find(signal => signal.code === "pos_no_recent_sales"));
+  assert.ok(compact.prioritySignals.find(signal => signal.code === "marketing_no_active_campaigns"));
+});
