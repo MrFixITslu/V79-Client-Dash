@@ -19,6 +19,14 @@ if [ ! -s "$agent_token_file" ]; then
   head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$agent_token_file"
   chmod 600 "$agent_token_file"
 fi
+shared_secret_dir="$HOME/.v79-secrets"
+install -d -m 700 "$shared_secret_dir"
+readonly_platform_token="$shared_secret_dir/owner-readonly-platform.token"
+if [ ! -s "$readonly_platform_token" ]; then
+  umask 077
+  head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$readonly_platform_token"
+  chmod 600 "$readonly_platform_token"
+fi
 docker network inspect proxy_network >/dev/null || { echo 'Docker network proxy_network is missing' >&2; exit 1; }
 docker compose version >/dev/null
 
