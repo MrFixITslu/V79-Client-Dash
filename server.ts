@@ -821,83 +821,6 @@ app.post("/api/auth/logout", requireAuth, (req, res) => {
 });
 
 
-function safeSecretEqual(expected: string, supplied: string) {
-  if (!expected || !supplied) return false;
-  const a = Buffer.from(expected);
-  const b = Buffer.from(supplied);
-  return a.length === b.length && crypto.timingSafeEqual(a, b);
-}
-
-app.get("/api/internal/agent/snapshot", async (req, res) => {
-  const expectedToken = String(process.env.V79_AGENT_API_TOKEN || "");
-  const suppliedToken = String(req.get("x-v79-agent-token") || "");
-  if (expectedToken.length < 32) return res.status(503).json({ error: "Owner Assistant service token is not configured." });
-  if (!safeSecretEqual(expectedToken, suppliedToken)) return res.status(401).json({ error: "Invalid Owner Assistant service token." });
-
-  const ownerEmail = normalizeEmail(process.env.V79_HUB_ADMIN_EMAIL);
-  const requestedEmail = normalizeEmail(req.get("x-v79-owner-email"));
-  const requestedOrganization = String(req.get("x-v79-organization-id") || "");
-  if (ownerEmail !== "vision79slu@gmail.com" || requestedEmail !== ownerEmail || requestedOrganization !== posIdentity.organizationId) {
-    return res.status(403).json({ error: "Vision79 owner context required." });
-  }
-
-  const requested = String(req.query.system || "all").toLowerCase();
-  const products: DashboardProduct[] = ["pos", "ffpro", "tiquet", "marketing", "academy", "lasertag", "website", "games"];
-  if (requested !== "all" && requested !== "hub" && !products.includes(requested as DashboardProduct)) {
-    return res.status(400).json({ error: "Unknown business system." });
-  }
-
-  const organization = store.organizations.find(org => org.id === posIdentity.organizationId);
-  const enabledIds = new Set(enabledAppIds(store, posIdentity.organizationId));
-  const hubSnapshot = {
-    organization: {
-      id: organization?.id || posIdentity.organizationId,
-      name: organization?.name || store.workspace.companyName,
-      status: organization?.status || "active",
-    },
-    users: {
-      total: store.users.filter(user => activeMembership(store, user.id, posIdentity.organizationId)).length,
-      byRole: Object.fromEntries(["admin","manager","staff","viewer"].map(role => [
-        role,
-        store.users.filter(user => activeMembership(store, user.id, posIdentity.organizationId) && user.role === role).length,
-      ])),
-    },
-    apps: store.ecosystemApps
-      .filter(app => enabledIds.has(app.id))
-      .map(app => ({ id: app.id, name: app.name, shortName: app.shortName, status: app.status })),
-  };
-
-  if (requested === "hub") {
-    res.setHeader("Cache-Control", "no-store");
-    return res.json({ generatedAt: new Date().toISOString(), hub: hubSnapshot });
-  }
-
-  const selected = requested === "all" ? products : [requested as DashboardProduct];
-  const entries = await Promise.all(selected.map(async product => {
-    const [summary, admin, health] = await Promise.all([
-      readDashboardSummary(product),
-      callPlatformAdmin(product, "GET", "/api/platform/admin/stats"),
-      readServiceHealth(product),
-    ]);
-    let adminPayload: any = null;
-    try { adminPayload = JSON.parse(admin.body.toString("utf8")); } catch { /* no-op */ }
-    return [product, {
-      health,
-      summary,
-      platform: admin.status === 200
-        ? { status: "ok", metrics: adminPayload }
-        : { status: "unavailable", httpStatus: admin.status, error: adminPayload?.error || "Platform statistics unavailable." },
-    }] as const;
-  }));
-
-  res.setHeader("Cache-Control", "no-store");
-  return res.json({
-    generatedAt: new Date().toISOString(),
-    hub: hubSnapshot,
-    systems: Object.fromEntries(entries),
-  });
-});
-
 app.use("/api", requireAuth);
 
 type DashboardProduct = "pos" | "ffpro" | "tiquet" | "marketing" | "academy" | "lasertag" | "website" | "games";
@@ -988,27 +911,19 @@ const serviceHealthPaths: Record<DashboardProduct, string> = {
   games: "/healthz",
 };
 
-async function readServiceHealth(product: DashboardProduct) {
-  const started = performance.now();
-  try {
-    const response = await fetch(new URL(serviceHealthPaths[product], dashboardSources[product]), {
-      redirect: "manual",
-      signal: AbortSignal.timeout(3000),
-    });
-    return {
-      status: response.ok ? "online" : "unavailable",
-      httpStatus: response.status,
-      responseMs: Math.round(performance.now() - started),
-    };
-  } catch {
-    return { status: "unavailable", httpStatus: null, responseMs: null };
-  }
-}
-
 app.get("/api/connections/status", async (_req, res) => {
   const products = Object.keys(serviceHealthPaths) as DashboardProduct[];
   const results = await Promise.all(products.map(async product => {
-    return [product, await readServiceHealth(product)] as const;
+    const started = performance.now();
+    try {
+      const response = await fetch(new URL(serviceHealthPaths[product], dashboardSources[product]), {
+        redirect: "manual",
+        signal: AbortSignal.timeout(3000),
+      });
+      return [product, { status: response.ok ? "online" : "unavailable", responseMs: Math.round(performance.now() - started) }] as const;
+    } catch {
+      return [product, { status: "unavailable", responseMs: null }] as const;
+    }
   }));
   res.setHeader("Cache-Control", "no-store");
   res.json({ checkedAt: new Date().toISOString(), apps: Object.fromEntries(results) });
@@ -1598,3 +1513,67 @@ app.post("/api/ecosystem/apps", (req, res) => {
     appUrl,
     githubRepo: githubRepo || undefined,
     iconName: "Boxes",
+    colorScheme: {
+      primary: "from-indigo-600 to-cyan-600",
+      bgGradient: "bg-gradient-to-br from-indigo-500/10 via-cyan-500/5 to-transparent",
+      badgeBg: "bg-indigo-500/15 border-indigo-500/30",
+      badgeText: "text-indigo-400",
+      border: "border-indigo-500/30 hover:border-indigo-500/60"
+    },
+    metrics: [{ label: "Status", value: "Connected", sublabel: "Custom integration" }],
+    features: ["Custom Web App Launch", "SSO Token Bridge", "Direct Workspace Access"],
+    ssoSupported: true,
+    isFlagship: false,
+    version: "v1.0.0",
+    lastSync: new Date().toISOString()
+  };
+
+  store.ecosystemApps.push(newApp);
+  const organizationId = (req as any).user.organizationId;
+  if (!organizationCanAccessApp(store, organizationId, newApp.id)) {
+    store.appEntitlements.push({ organizationId, appId: newApp.id, enabled: true, createdAt: new Date().toISOString() });
+  }
+  saveStore(store);
+  broadcast({ type: "ECOSYSTEM_APPS_UPDATED", apps: store.ecosystemApps });
+  res.status(201).json(newApp);
+});
+
+// ==========================================
+// VITE INTEGRATION & SERVER BOOT
+// ==========================================
+
+async function startServer() {
+  if (process.env.NODE_ENV !== "production") {
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: "spa"
+    });
+    app.use(vite.middlewares);
+  } else {
+    const distDir = path.join(__dirname, "dist");
+    app.use(express.static(distDir, {
+      setHeaders(res, filePath) {
+        if (filePath.endsWith("index.html")) {
+          res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0");
+          res.setHeader("Pragma", "no-cache");
+          res.setHeader("Expires", "0");
+        } else if (filePath.includes(`${path.sep}assets${path.sep}`)) {
+          res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+        }
+      },
+    }));
+    app.get("*", (_req, res) => {
+      res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0");
+      res.setHeader("Pragma", "no-cache");
+      res.setHeader("Expires", "0");
+      res.sendFile(path.join(distDir, "index.html"));
+    });
+  }
+
+  const PORT = Number(process.env.PORT || 3040);
+  server.listen(PORT, "0.0.0.0", () => {
+    console.log(`V79 Client Hub Server running on http://0.0.0.0:${PORT}`);
+  });
+}
+
+startServer();
