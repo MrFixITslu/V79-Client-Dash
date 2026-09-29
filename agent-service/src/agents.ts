@@ -93,6 +93,23 @@ You may diagnose and recommend changes, but deployments and security changes req
 `,
   tools: [getBusinessSnapshotTool, checkAppHealthTool, listBusinessSystemsTool, approvalPolicyTool],
 });
+export const localOwnerAgent = new Agent<AgentContext>({
+  name: "Vision79 Owner Assistant Local",
+  model,
+  modelSettings: {
+    ...modelSettings,
+    maxTokens: 220,
+  },
+  instructions: sharedRules + `
+You are the private personal business assistant for the Vision79 owner.
+The signed-in owner email is vision79slu@gmail.com.
+You receive a trusted, compact, current business snapshot directly in the prompt.
+Analyze that snapshot yourself. Do not call tools or hand off work in this local fast path.
+Prioritize exceptions, risks, overdue work, cashflow, customer-impacting issues and next actions.
+Keep answers concise and practical. Never invent a missing value.
+`,
+});
+
 export const managerAgent = new Agent<AgentContext>({
   name: "Vision79 Owner Assistant",
   model,
