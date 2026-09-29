@@ -146,6 +146,16 @@ test('private data, retired embedded APIs and one-time app launch', {timeout:300
   assert.equal((await request('/api/apps/pos/launch',{headers:{Cookie:viewerCookie}})).status,403);
   assert.equal((await request('/api/admin/academy/courses',{headers:{Cookie:viewerCookie}})).status,403);
   assert.equal((await request('/api/admin/platform/tiquet/stats',{headers:{Cookie:viewerCookie}})).status,403);
+  const otherAdmin=await request('/api/users',{method:'POST',headers,body:JSON.stringify({username:'otheradmin',password:'another-admin-password-1234',role:'admin'})});
+  assert.equal(otherAdmin.status,201);
+  const otherAdminId=(await otherAdmin.json()).id;
+  const otherLogin=await request('/api/auth/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({username:'otheradmin',password:'another-admin-password-1234'})});
+  assert.equal(otherLogin.status,200);
+  const otherCookie=otherLogin.headers.get('set-cookie').split(';')[0];
+  assert.equal((await request('/api/admin/platform/overview',{headers:{Cookie:otherCookie}})).status,403);
+  assert.equal((await request('/api/admin/platform/tiquet/stats',{headers:{Cookie:otherCookie}})).status,403);
+  assert.equal((await request('/api/admin/academy/courses',{headers:{Cookie:otherCookie}})).status,403);
+  assert.equal((await request('/api/apps/pos/launch',{headers:{Cookie:otherCookie}})).status,403);
   const academyList=await request('/api/admin/academy/courses',{headers:{Cookie:cookie}});
   assert.equal(academyList.status,200);
   assert.equal((await academyList.json())[0].title,'Signed Academy Course');
@@ -197,6 +207,7 @@ test('private data, retired embedded APIs and one-time app launch', {timeout:300
   assert.equal((await request(`/api/users/${ownerId}`,{method:'DELETE',headers})).status,400);
   assert.equal((await request(`/api/users/${ownerId}`,{method:'PUT',headers,body:JSON.stringify({role:'staff'})})).status,400);
   assert.equal((await request(`/api/users/${createdUser.id}`,{method:'DELETE',headers})).status,200);
+  assert.equal((await request(`/api/users/${otherAdminId}`,{method:'DELETE',headers})).status,200);
   const afterRemoval=JSON.parse(await readFile(storeFile,'utf8'));
   assert.equal(afterRemoval.memberships.some(member=>member.userId===createdUser.id),false);
 });

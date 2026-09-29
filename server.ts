@@ -649,6 +649,14 @@ function requireAuth(req: Request, res: Response, next: () => void) {
   (req as any).user = session;
   next();
 }
+function requirePlatformOperator(req: Request, res: Response, next: () => void) {
+  const session = (req as any).user;
+  if (session.userId !== posIdentity.ownerUserId || session.organizationId !== posIdentity.organizationId ||
+      activeMembership(store, session.userId, session.organizationId)?.role !== "owner") {
+    return res.status(403).json({ error: "Platform operator access required" });
+  }
+  next();
+}
 function requireRole(...roles: StoredUser["role"][]) {
   return (req: Request, res: Response, next: () => void) => {
     if (!roles.includes((req as any).user.role)) return res.status(403).json({ error: "Permission denied" });
@@ -853,7 +861,7 @@ const academyAdminAllowedPaths = [
   "/api/junior-admin",
 ];
 
-app.use("/api/admin/academy", requireRole("admin"), async (req, res) => {
+app.use("/api/admin/academy", requirePlatformOperator, async (req, res) => {
   if (posSecret.length < 32) {
     return res.status(503).json({ error: "Academy platform integration is not configured." });
   }
@@ -918,7 +926,7 @@ app.use("/api/admin/academy", requireRole("admin"), async (req, res) => {
 type PlatformAdminProduct = "pos" | "tiquet" | "marketing" | "ffpro" | "academy";
 
 // Retire the older broad proxy paths so stale clients cannot fall through to the SPA.
-app.use(["/api/admin/tiquet", "/api/admin/marketing"], requireRole("admin"), (_req, res) => {
+app.use(["/api/admin/tiquet", "/api/admin/marketing"], requirePlatformOperator, (_req, res) => {
   res.status(404).json({ error: "Use the platform administration endpoint." });
 });
 
@@ -1013,7 +1021,7 @@ async function callPlatformAdmin(product: PlatformAdminProduct, method: string, 
   }
 }
 
-app.get("/api/admin/platform/overview", requireRole("admin"), async (_req, res) => {
+app.get("/api/admin/platform/overview", requirePlatformOperator, async (_req, res) => {
   const products: PlatformAdminProduct[] = ["pos", "tiquet", "marketing", "ffpro", "academy"];
   const entries = await Promise.all(products.map(async product => {
     const response = await callPlatformAdmin(product, "GET", "/api/platform/admin/stats");
@@ -1030,7 +1038,7 @@ app.get("/api/admin/platform/overview", requireRole("admin"), async (_req, res) 
   res.json({ generatedAt: new Date().toISOString(), apps: Object.fromEntries(entries) });
 });
 
-app.use("/api/admin/platform/:product", requireRole("admin"), async (req, res) => {
+app.use("/api/admin/platform/:product", requirePlatformOperator, async (req, res) => {
   const product = String(req.params.product || "") as PlatformAdminProduct;
   if (!(product in platformAdminSources)) return res.status(404).json({ error: "Unknown platform product." });
 
