@@ -43,5 +43,46 @@ docker compose --project-name v79-hub up -d --build --wait --wait-timeout 120
 container_id="$(docker compose --project-name v79-hub ps -q v79-hub)"
 test -n "$container_id"
 test "$(docker inspect --format '{{.State.Health.Status}}' "$container_id")" = healthy
+
+# Verify the local Ollama model supports the OpenAI-compatible function-calling
+# surface used by the Owner Assistant. This does not expose production data.
+docker exec v79-business-agent node --input-type=module - <<'NODE'
+const controller = new AbortController();
+const timeout = setTimeout(() => controller.abort(), 90_000);
+try {
+  const model = process.env.OLLAMA_AGENT_MODEL || "qwen2.5:1.5b";
+  const base = (process.env.OLLAMA_OPENAI_BASE_URL || "http://ollama:11434/v1").replace(/\/+$/, "");
+  const response = await fetch(`${base}/chat/completions`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      model,
+      stream: false,
+      messages: [
+        { role: "system", content: "You are a deployment test. When asked, call the named tool instead of answering in text." },
+        { role: "user", content: "Call ping_business now." }
+      ],
+      tools: [{
+        type: "function",
+        function: {
+          name: "ping_business",
+          description: "Deployment capability check.",
+          parameters: { type: "object", properties: {}, required: [], additionalProperties: false }
+        }
+      }]
+    }),
+    signal: controller.signal,
+  });
+  const body = await response.json();
+  if (!response.ok) throw new Error(`Ollama HTTP ${response.status}: ${JSON.stringify(body).slice(0,500)}`);
+  const calls = body?.choices?.[0]?.message?.tool_calls;
+  if (!Array.isArray(calls) || !calls.some(call => call?.function?.name === "ping_business")) {
+    throw new Error(`Ollama model ${model} did not return the required function call.`);
+  }
+  console.log(`Ollama tool-call smoke passed with ${model}`);
+} finally {
+  clearTimeout(timeout);
+}
+NODE
 rm -f -- "$archive"
 echo "Deployed and healthy: $sha"
