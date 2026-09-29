@@ -1,13 +1,9 @@
 name: Deploy V79 Ecosystem
 
+# Coordinated multi-service releases are operator initiated. Routine Hub changes
+# deploy through v79-ci-cd.yml without rebuilding the other production apps.
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/deploy-ecosystem.yml"
-      - "scripts/deploy-ecosystem-release.sh"
-      - "scripts/smoke-launches.mjs"
 
 permissions:
   contents: read
