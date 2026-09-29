@@ -8,7 +8,7 @@ import { checkApproval, type ActionRisk } from "./policy.js";
 import { isValidOwnerContext, type AgentContext } from "./context.js";
 import { agentModelRuntime } from "./model-runtime.js";
 import { readBusinessSnapshot } from "./tools.js";
-import { compactOwnerSnapshot } from "./grounding.js";
+import { compactOwnerSnapshot, formatPriorityBrief, isPriorityBriefRequest } from "./grounding.js";
 import { runOllamaOwnerAssistant } from "./ollama-native.js";
 
 const app = express();
@@ -116,6 +116,16 @@ app.post("/api/agent/chat", async (req, res) => {
       "If a requested fact is not present, say it is not available in the current snapshot.",
     ].join("\n");
     if (localFastPath) {
+      if (isPriorityBriefRequest(message) && grounding.prioritySignals.length) {
+        return res.json({
+          output: formatPriorityBrief(grounding.prioritySignals, 5),
+          specialist: "Vision79 Owner Assistant Local",
+          mode: "read-only",
+          modelProvider: "ollama",
+          model: agentModelRuntime.model,
+          responseMode: "deterministic-priority",
+        });
+      }
       const result = await runOllamaOwnerAssistant(groundedMessage);
       return res.json({
         output: result.output,
@@ -123,6 +133,7 @@ app.post("/api/agent/chat", async (req, res) => {
         mode: "read-only",
         modelProvider: result.provider,
         model: result.model,
+        responseMode: "ollama",
       });
     }
 
