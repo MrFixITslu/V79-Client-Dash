@@ -63,7 +63,7 @@ test "$(docker inspect --format '{{.State.Health.Status}}' "$container_id")" = h
 
 # Verify the local Ollama model supports the OpenAI-compatible function-calling
 # surface used by the Owner Assistant. This does not expose production data.
-docker exec v79-business-agent node --input-type=module - <<'NODE'
+docker exec -i v79-business-agent node --input-type=module - <<'NODE'
 const controller = new AbortController();
 const timeout = setTimeout(() => controller.abort(), 90_000);
 try {
