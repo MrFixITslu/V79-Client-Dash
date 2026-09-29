@@ -1,5 +1,6 @@
 import "dotenv/config";
 import express from "express";
+import fs from "node:fs";
 import { run } from "@openai/agents";
 import { managerAgent } from "./agents.js";
 import { BUSINESS_SYSTEMS } from "./business.js";
@@ -8,7 +9,12 @@ import { isValidOwnerContext, type AgentContext } from "./context.js";
 
 const app = express();
 const port = Number(process.env.PORT || 3055);
-const apiToken = process.env.V79_AGENT_API_TOKEN || "";
+const tokenFile = process.env.V79_AGENT_TOKEN_FILE || "/run/secrets/v79-agent-token";
+function readApiToken() {
+  const direct = String(process.env.V79_AGENT_API_TOKEN || "").trim();
+  if (direct) return direct;
+  try { return fs.readFileSync(tokenFile, "utf8").trim(); } catch { return ""; }
+}
 
 app.disable("x-powered-by");
 app.use(express.json({ limit: "128kb" }));
@@ -22,9 +28,10 @@ app.get("/health", (_req, res) => {
   });
 });
 app.use("/api", (req, res, next) => {
+  const apiToken = readApiToken();
   if (!apiToken) {
     if (process.env.NODE_ENV === "production") {
-      return res.status(503).json({ error: "V79_AGENT_API_TOKEN is not configured." });
+      return res.status(503).json({ error: "Owner Assistant internal token is not configured." });
     }
     return next();
   }
