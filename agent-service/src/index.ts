@@ -6,6 +6,7 @@ import { managerAgent } from "./agents.js";
 import { BUSINESS_SYSTEMS } from "./business.js";
 import { checkApproval, type ActionRisk } from "./policy.js";
 import { isValidOwnerContext, type AgentContext } from "./context.js";
+import { agentModelRuntime } from "./model-runtime.js";
 
 const app = express();
 const port = Number(process.env.PORT || 3055);
@@ -25,6 +26,8 @@ app.get("/health", (_req, res) => {
     service: "v79-business-agent",
     mode: "read-only",
     systemsKnown: BUSINESS_SYSTEMS.length,
+    modelProvider: agentModelRuntime.provider,
+    model: agentModelRuntime.model,
   });
 });
 app.use("/api", (req, res, next) => {
@@ -45,6 +48,8 @@ app.get("/api/agent/capabilities", (_req, res) => {
   res.json({
     mode: "read-only",
     ownerOnly: true,
+    modelProvider: agentModelRuntime.provider,
+    model: agentModelRuntime.model,
     can: [
       "answer business questions",
       "route work to specialist agents",
