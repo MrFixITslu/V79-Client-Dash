@@ -23,6 +23,8 @@ services:
       V79_MARKETING_LAUNCH_SECRET: ${V79_MARKETING_LAUNCH_SECRET:-}
       V79_POS_ORG_ID: ${V79_POS_ORG_ID:-}
       V79_POS_OWNER_USER_ID: ${V79_POS_OWNER_USER_ID:-}
+      V79_AGENT_INTERNAL_URL: ${V79_AGENT_INTERNAL_URL:-http://v79-business-agent:3055}
+      V79_AGENT_API_TOKEN: ${V79_AGENT_API_TOKEN:-}
     expose:
       - "3040"
     volumes:
@@ -31,6 +33,36 @@ services:
       - proxy_network
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3040/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  v79-business-agent:
+    build: ./agent-service
+    container_name: v79-business-agent
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3055
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_AGENT_MODEL: ${OPENAI_AGENT_MODEL:-gpt-5.6-sol}
+      V79_AGENT_API_TOKEN: ${V79_AGENT_API_TOKEN:-}
+      V79_HUB_HEALTH_URL: http://v79-hub:3040/api/health
+      V79_WEBSITE_HEALTH_URL: ${V79_WEBSITE_HEALTH_URL:-}
+      V79_LASERTAG_HEALTH_URL: ${V79_LASERTAG_HEALTH_URL:-}
+      V79_MARKETING_HEALTH_URL: ${V79_MARKETING_HEALTH_URL:-}
+      V79_POS_HEALTH_URL: ${V79_POS_HEALTH_URL:-}
+      V79_TIQUET_HEALTH_URL: ${V79_TIQUET_HEALTH_URL:-}
+      V79_FFPRO_HEALTH_URL: ${V79_FFPRO_HEALTH_URL:-}
+      V79_ACADEMY_HEALTH_URL: ${V79_ACADEMY_HEALTH_URL:-}
+      V79_GAMES_HEALTH_URL: ${V79_GAMES_HEALTH_URL:-}
+    expose:
+      - "3055"
+    networks:
+      - proxy_network
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3055/health"]
       interval: 30s
       timeout: 5s
       retries: 3

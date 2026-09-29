@@ -1,12 +1,13 @@
-import { tool } from "@openai/agents";
+import { tool, type RunContext } from "@openai/agents";
 import { z } from "zod";
 import { BUSINESS_SYSTEMS, getBusinessSystem } from "./business.js";
 import { checkApproval } from "./policy.js";
+import { canUseSystem, type AgentContext } from "./context.js";
 
 type HealthResult = {
   key: string;
   name: string;
-  status: "healthy" | "unhealthy" | "not_configured";
+  status: "healthy" | "unhealthy" | "not_configured" | "forbidden";
   httpStatus?: number;
   latencyMs?: number;
   detail?: string;
@@ -14,42 +15,25 @@ type HealthResult = {
 
 async function checkOne(key: string): Promise<HealthResult> {
   const system = getBusinessSystem(key);
-
-  if (!system) {
-    return {
-      key,
-      name: key,
-      status: "unhealthy",
-      detail: "Unknown system.",
-    };
-  }
-
+  if (!system) return { key, name: key, status: "unhealthy", detail: "Unknown system." };
   if (!system.healthUrl) {
-    return {
-      key: system.key,
-      name: system.name,
-      status: "not_configured",
-      detail: "No health URL is configured yet.",
-    };
+    return { key: system.key, name: system.name, status: "not_configured", detail: "No health URL is configured yet." };
   }
 
   const started = Date.now();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 5000);
-
   try {
     const response = await fetch(system.healthUrl, {
       signal: controller.signal,
-      headers: { "user-agent": "v79-business-agent/0.1" },
+      headers: { "user-agent": "v79-business-agent/0.2" },
     });
-
-    const latencyMs = Date.now() - started;
     return {
       key: system.key,
       name: system.name,
       status: response.ok ? "healthy" : "unhealthy",
       httpStatus: response.status,
-      latencyMs,
+      latencyMs: Date.now() - started,
       detail: response.ok ? "Health check succeeded." : "Health check returned an error status.",
     };
   } catch (error) {
@@ -65,54 +49,52 @@ async function checkOne(key: string): Promise<HealthResult> {
   }
 }
 
-export const listBusinessSystemsTool = tool({
+function contextFrom(runContext?: RunContext<AgentContext>) {
+  if (!runContext?.context) throw new Error("Agent identity context is missing.");
+  return runContext.context;
+}
+
+export const listBusinessSystemsTool = tool<z.ZodObject<{}>, AgentContext>({
   name: "list_business_systems",
-  description:
-    "List the V79 business systems the agent knows about and what each one is for.",
+  description: "List only the V79 systems this signed-in Hub account is allowed to use.",
   parameters: z.object({}),
-  async execute() {
-    return BUSINESS_SYSTEMS.map(({ key, name, purpose, healthUrl }) => ({
-      key,
-      name,
-      purpose,
-      healthConfigured: Boolean(healthUrl),
-    }));
+  async execute(_input, runContext) {
+    const context = contextFrom(runContext);
+    return BUSINESS_SYSTEMS
+      .filter((system) => canUseSystem(context, system.key))
+      .map(({ key, name, purpose, healthUrl }) => ({
+        key,
+        name,
+        purpose,
+        healthConfigured: Boolean(healthUrl),
+      }));
   },
 });
 
 export const checkAppHealthTool = tool({
   name: "check_app_health",
-  description:
-    "Check the configured health endpoint for one V79 app or all V79 apps. This is read-only.",
+  description: "Check one permitted V79 system or all permitted systems. This is read-only.",
   parameters: z.object({
-    system: z
-      .string()
-      .default("all")
-      .describe("Use a system key such as hub, lasertag, marketing, pos, or all."),
+    system: z.string().default("all").describe("A system key such as hub, lasertag, marketing, pos, or all."),
   }),
-  async execute({ system }) {
+  async execute({ system }, runContext: RunContext<AgentContext> | undefined) {
+    const context = contextFrom(runContext);
     if (system.toLowerCase() === "all") {
-      return Promise.all(BUSINESS_SYSTEMS.map((item) => checkOne(item.key)));
+      const permitted = BUSINESS_SYSTEMS.filter((item) => canUseSystem(context, item.key));
+      return Promise.all(permitted.map((item) => checkOne(item.key)));
     }
-
+    if (!canUseSystem(context, system)) {
+      return { key: system, name: system, status: "forbidden", detail: "This Hub account does not have access to that system." };
+    }
     return checkOne(system);
   },
 });
 
 export const approvalPolicyTool = tool({
   name: "check_action_approval",
-  description:
-    "Check whether a proposed business action requires owner approval before it can happen.",
+  description: "Check whether a proposed business action requires owner approval before it can happen.",
   parameters: z.object({
-    risk: z.enum([
-      "read",
-      "draft",
-      "external_communication",
-      "booking_change",
-      "financial",
-      "deployment",
-      "security",
-    ]),
+    risk: z.enum(["read", "draft", "external_communication", "booking_change", "financial", "deployment", "security"]),
   }),
   async execute({ risk }) {
     return checkApproval(risk);
