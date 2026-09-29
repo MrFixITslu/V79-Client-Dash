@@ -72,7 +72,7 @@ test('private data, retired embedded APIs and one-time app launch', {timeout:300
   });
   const ffproOrigin=await listen(ffpro);
   const probe=createServer();const origin=await listen(probe);await new Promise(resolve=>probe.close(resolve));
-  const server=spawn(process.execPath,['--import','tsx','server.ts'],{cwd:process.cwd(),env:{...process.env,NODE_ENV:'production',DATA_DIR:dir,PORT:new URL(origin).port,APP_URL:origin,V79_HUB_ADMIN_PASSWORD:'a-unique-admin-password-1234',V79_HUB_ADMIN_EMAIL:'owner@example.test',V79_PLATFORM_SHARED_SECRET:secret,V79_FFPRO_LAUNCH_SECRET:secret,V79_TIQUET_LAUNCH_SECRET:secret,V79_MARKETING_LAUNCH_SECRET:secret,POS_BASE_URL:posOrigin,POS_PUBLIC_URL:'https://pos.example.test',ACADEMY_INTERNAL_URL:academyOrigin,TIQUET_INTERNAL_URL:tiquetOrigin,FFPRO_INTERNAL_URL:ffproOrigin},stdio:['ignore','pipe','pipe']});
+  const server=spawn(process.execPath,['--import','tsx','server.ts'],{cwd:process.cwd(),env:{...process.env,NODE_ENV:'production',DATA_DIR:dir,PORT:new URL(origin).port,APP_URL:origin,V79_HUB_ADMIN_PASSWORD:'a-unique-admin-password-1234',V79_HUB_ADMIN_EMAIL:'vision79slu@gmail.com',V79_AGENT_API_TOKEN:'agent-internal-token-long-enough-1234567890',V79_PLATFORM_SHARED_SECRET:secret,V79_FFPRO_LAUNCH_SECRET:secret,V79_TIQUET_LAUNCH_SECRET:secret,V79_MARKETING_LAUNCH_SECRET:secret,POS_BASE_URL:posOrigin,POS_PUBLIC_URL:'https://pos.example.test',ACADEMY_INTERNAL_URL:academyOrigin,TIQUET_INTERNAL_URL:tiquetOrigin,FFPRO_INTERNAL_URL:ffproOrigin},stdio:['ignore','pipe','pipe']});
   let errors='';server.stderr.on('data',c=>errors+=c);
   server.stdout.on('data',c=>errors+=c);
   t.after(async()=>{
@@ -110,6 +110,13 @@ test('private data, retired embedded APIs and one-time app launch', {timeout:300
   assert.equal(ownerIdentity.user.platformOperator,true);
   const cookie=login.headers.get('set-cookie').split(';')[0];
   const headers={Cookie:cookie,Origin:origin,'content-type':'application/json'};
+  assert.equal((await request('/api/internal/agent/snapshot?system=hub')).status,401);
+  assert.equal((await request('/api/internal/agent/snapshot?system=hub',{headers:{'x-v79-agent-token':'agent-internal-token-long-enough-1234567890','x-v79-owner-email':'other@example.com','x-v79-organization-id':preservedStore.organizations[0].id}})).status,403);
+  const ownerSnapshot=await request('/api/internal/agent/snapshot?system=hub',{headers:{'x-v79-agent-token':'agent-internal-token-long-enough-1234567890','x-v79-owner-email':'vision79slu@gmail.com','x-v79-organization-id':preservedStore.organizations[0].id}});
+  assert.equal(ownerSnapshot.status,200);
+  const ownerSnapshotBody=await ownerSnapshot.json();
+  assert.equal(ownerSnapshotBody.hub.organization.id,preservedStore.organizations[0].id);
+  assert.ok(ownerSnapshotBody.hub.apps.length>=5);
   const ownerSummary=await (await request('/api/dashboard/summary',{headers:{Cookie:cookie}})).json();
   assert.equal(ownerSummary.apps.ffpro.metrics.currentMonthNet,123456);
   const connectionCheck=await (await request('/api/connections/status',{headers:{Cookie:cookie}})).json();
@@ -202,7 +209,7 @@ test('private data, retired embedded APIs and one-time app launch', {timeout:300
     const consumed=await request('/api/platform/session/consume',signed);
     assert.equal(consumed.status,200);
     const identity=await consumed.json();
-    assert.equal(identity.user.email,'owner@example.test');
+    assert.equal(identity.user.email,'vision79slu@gmail.com');
     assert.equal(identity.entitlement.product,product);
     assert.equal(identity.organization.id,provision.organization.id);
     assert.equal((await request('/api/platform/session/consume',signed)).status,401);

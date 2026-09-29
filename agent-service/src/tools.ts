@@ -54,6 +54,41 @@ function contextFrom(runContext?: RunContext<AgentContext>) {
   return runContext.context;
 }
 
+const hubInternalUrl = process.env.V79_HUB_INTERNAL_URL || "http://v79-hub:3040";
+const agentApiToken = process.env.V79_AGENT_API_TOKEN || "";
+
+export const getBusinessSnapshotTool = tool({
+  name: "get_business_snapshot",
+  description:
+    "Read the latest authorized Vision79 business snapshot from Hub. Use this for current KPIs, app status, Hub Admin counts, bookings, sales, tickets, marketing, finance, academy, website or games summaries.",
+  parameters: z.object({
+    system: z.enum(["all", "hub", "pos", "ffpro", "tiquet", "marketing", "academy", "lasertag", "website", "games"]).default("all"),
+  }),
+  async execute({ system }, runContext: RunContext<AgentContext> | undefined) {
+    const context = contextFrom(runContext);
+    if (!context.ownerAgent) throw new Error("Owner Assistant access is required.");
+    if (system !== "all" && system !== "hub" && !canUseSystem(context, system)) {
+      return { error: "This Hub account does not have access to that system." };
+    }
+    if (agentApiToken.length < 32) throw new Error("Owner Assistant service token is not configured.");
+
+    const url = new URL("/api/internal/agent/snapshot", hubInternalUrl);
+    url.searchParams.set("system", system);
+    const response = await fetch(url, {
+      headers: {
+        "x-v79-agent-token": agentApiToken,
+        "x-v79-owner-email": context.email,
+        "x-v79-organization-id": context.organizationId,
+        "user-agent": "v79-business-agent/0.2",
+      },
+      signal: AbortSignal.timeout(15000),
+    });
+    const payload = await response.json().catch(() => ({ error: "Invalid Hub response." }));
+    if (!response.ok) throw new Error(String((payload as any)?.error || `Hub snapshot failed with HTTP ${response.status}.`));
+    return payload;
+  },
+});
+
 export const listBusinessSystemsTool = tool<z.ZodObject<{}>, AgentContext>({
   name: "list_business_systems",
   description: "List only the V79 systems this signed-in Hub account is allowed to use.",
