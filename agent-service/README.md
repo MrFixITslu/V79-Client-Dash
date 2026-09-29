@@ -63,12 +63,25 @@ the service follows this loop:
 
 That loop — **think -> use a tool -> look at the result -> think again -> answer** — is the heart of an agent.
 
+## Model provider
+
+Production defaults to the local Ollama service:
+
+- provider: `ollama`
+- OpenAI-compatible endpoint: `http://ollama:11434/v1`
+- default model: `qwen2.5:1.5b`
+- request timeout: 60 seconds
+- OpenAI tracing is disabled while Ollama is selected.
+
+The Hub permissions and tools do not change when the model provider changes. OpenAI remains an optional fallback by setting `V79_AGENT_MODEL_PROVIDER=openai` and configuring an API key.
+
 ## Run locally
 
 ```bash
 cd agent-service
 cp .env.example .env
-# add OPENAI_API_KEY; for local development also set V79_AGENT_API_TOKEN
+# Ensure Ollama is reachable and the configured model is installed.
+# For local development also set V79_AGENT_API_TOKEN.
 npm install
 npm run lint
 npm test
