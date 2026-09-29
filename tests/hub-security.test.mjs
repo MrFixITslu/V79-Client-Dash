@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createPublicKey, verify } from 'node:crypto';
 import { verifyPlatformRequest, signPlatformRequest } from '../server/platform-contract.mjs';
+import WebSocket from 'ws';
 
 const secret='test-shared-secret-long-enough-for-platform';
 async function listen(server) { await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve)); return `http://127.0.0.1:${server.address().port}`; }
@@ -210,7 +211,14 @@ test('private data, retired embedded APIs and one-time app launch', {timeout:300
   assert.equal((await request(`/api/users/${ownerId}`,{method:'DELETE',headers})).status,400);
   assert.equal((await request(`/api/users/${ownerId}`,{method:'PUT',headers,body:JSON.stringify({role:'staff'})})).status,400);
   assert.equal((await request(`/api/users/${createdUser.id}`,{method:'DELETE',headers})).status,200);
+  const otherSocket=new WebSocket(origin.replace(/^http/,'ws'),{headers:{Cookie:otherCookie,Origin:origin}});
+  await new Promise((resolve,reject)=>{otherSocket.once('open',resolve);otherSocket.once('error',reject);});
+  const closed=new Promise((resolve,reject)=>{
+    const timer=setTimeout(()=>reject(new Error('Revoked WebSocket remained open')),3000);
+    otherSocket.once('close',code=>{clearTimeout(timer);resolve(code);});
+  });
   assert.equal((await request(`/api/users/${otherAdminId}`,{method:'DELETE',headers})).status,200);
+  assert.equal(await closed,1008);
   const afterRemoval=JSON.parse(await readFile(storeFile,'utf8'));
   assert.equal(afterRemoval.memberships.some(member=>member.userId===createdUser.id),false);
 });

@@ -614,20 +614,23 @@ server.on("upgrade", (request, socket, head) => {
   const session = sessionFromToken(cookieToken(request.headers.cookie));
   if (request.headers.origin !== origin || !session) { socket.destroy(); return; }
   wss.handleUpgrade(request, socket, head, ws => {
-    (ws as any).userId = session.userId;
+    (ws as any).sessionToken = cookieToken(request.headers.cookie);
     wss.emit("connection", ws, request);
   });
 });
 
 // Broadcast helper for real-time WebSocket clients
 function broadcast(data: any, sender?: WebSocket) {
-  const message = JSON.stringify(data);
   wss.clients.forEach((client) => {
-    const session = [...sessions.values()].find(s => s.userId === (client as any).userId && s.expiresAt > Date.now());
-    if (client.readyState === WebSocket.OPEN && client !== sender && session &&
-        (data.type !== "USERS_UPDATED" || session.role === "admin")) {
-      client.send(message);
-    }
+    const session = sessionFromToken((client as any).sessionToken || "");
+    if (!session) { client.close(1008, "Session expired"); return; }
+    if (client.readyState !== WebSocket.OPEN || client === sender ||
+        session.organizationId !== posIdentity.organizationId ||
+        (data.type === "USERS_UPDATED" && session.role !== "admin")) return;
+    const payload = data.type === "USERS_UPDATED"
+      ? { ...data, payload: store.users.filter(user => activeMembership(store, user.id, session.organizationId)).map(sanitizeUser) }
+      : data;
+    client.send(JSON.stringify(payload));
   });
 }
 
