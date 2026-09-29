@@ -897,7 +897,8 @@ const academyAdminAllowedPaths = [
   "/api/publishing-logs",
   "/api/gemini/assist",
   "/api/learners",
-  "/api/junior-admin",];
+  "/api/junior-admin",
+];
 
 app.use("/api/admin/academy", requirePlatformOperator, async (req, res) => {
   if (posSecret.length < 32) {
