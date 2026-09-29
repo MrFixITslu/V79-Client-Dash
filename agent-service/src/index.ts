@@ -2,12 +2,13 @@ import "dotenv/config";
 import express from "express";
 import fs from "node:fs";
 import { run } from "@openai/agents";
-import { managerAgent } from "./agents.js";
+import { localOwnerAgent, managerAgent } from "./agents.js";
 import { BUSINESS_SYSTEMS } from "./business.js";
 import { checkApproval, type ActionRisk } from "./policy.js";
 import { isValidOwnerContext, type AgentContext } from "./context.js";
 import { agentModelRuntime } from "./model-runtime.js";
 import { readBusinessSnapshot } from "./tools.js";
+import { compactOwnerSnapshot } from "./grounding.js";
 
 const app = express();
 const port = Number(process.env.PORT || 3055);
@@ -96,8 +97,10 @@ app.post("/api/agent/chat", async (req, res) => {
   }
   try {
     const snapshot = await readBusinessSnapshot(context);
-    const snapshotText = JSON.stringify(snapshot);
-    const maxSnapshotChars = 50000;
+    const localFastPath = agentModelRuntime.provider === "ollama";
+    const grounding = localFastPath ? compactOwnerSnapshot(snapshot) : snapshot;
+    const snapshotText = JSON.stringify(grounding);
+    const maxSnapshotChars = localFastPath ? 16000 : 50000;
     const trustedSnapshot = snapshotText.length > maxSnapshotChars
       ? snapshotText.slice(0, maxSnapshotChars) + "...[truncated]"
       : snapshotText;
@@ -111,13 +114,14 @@ app.post("/api/agent/chat", async (req, res) => {
       "Use the trusted snapshot for current business facts. Do not invent missing values.",
       "If a requested fact is not present, say it is not available in the current snapshot.",
     ].join("\n");
-    const result = await run(managerAgent, groundedMessage, { context });
+    const selectedAgent = localFastPath ? localOwnerAgent : managerAgent;
+    const result = await run(selectedAgent, groundedMessage, { context });
     return res.json({
       output:
         typeof result.finalOutput === "string"
           ? result.finalOutput
           : JSON.stringify(result.finalOutput),
-      specialist: result.lastAgent?.name || managerAgent.name,
+      specialist: result.lastAgent?.name || selectedAgent.name,
       mode: "read-only",
     });
   } catch (error) {
