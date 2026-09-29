@@ -55,12 +55,17 @@ test("Owner Assistant snapshot is service-authenticated and locked to Vision79 o
   });
 
   const request = (url, options = {}) => fetch(origin + url, { redirect: "manual", ...options });
-  for (let i = 0; i < 100; i++) {
+  let ready = false;
+  for (let i = 0; i < 300; i++) {
     try {
-      if ((await request("/api/health")).ok) break;
+      if ((await request("/api/health")).ok) {
+        ready = true;
+        break;
+      }
     } catch {}
     await new Promise(resolve => setTimeout(resolve, 50));
   }
+  assert.equal(ready, true, logs || "Hub test server did not become ready.");
 
   const login = await request("/api/auth/login", {
     method: "POST",
