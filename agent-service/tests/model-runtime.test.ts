@@ -5,7 +5,7 @@ import { resolveAgentModelRuntime } from "../src/model-runtime.js";
 test("Ollama is the default model provider", () => {
   assert.deepEqual(resolveAgentModelRuntime({}), {
     provider: "ollama",
-    model: "qwen2.5:1.5b",
+    model: "qwen2.5:3b",
     baseURL: "http://ollama:11434/v1",
     timeoutMs: 60000,
   });
