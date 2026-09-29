@@ -12,7 +12,7 @@ function positiveInteger(value: string | undefined, fallback: number) {
 export function resolveOllamaNativeRuntime(env: NodeJS.ProcessEnv = process.env): OllamaNativeRuntime {
   return {
     baseURL: String(env.OLLAMA_BASE_URL || "http://ollama:11434").trim().replace(/\/+$/, ""),
-    model: String(env.OLLAMA_AGENT_MODEL || "qwen2.5:3b").trim(),
+    model: String(env.OLLAMA_AGENT_MODEL || "qwen2.5:1.5b").trim(),
     timeoutMs: positiveInteger(env.OLLAMA_REQUEST_TIMEOUT_MS, 45_000),
   };
 }
