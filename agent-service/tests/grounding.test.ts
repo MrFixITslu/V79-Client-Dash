@@ -28,9 +28,11 @@ test("priority signals put negative cashflow before generic inactivity", () => {
     },
   });
 
-  assert.equal(compact.prioritySignals[0].severity, "high");
-  assert.equal(compact.prioritySignals[0].code, "finance_negative_month_net");
-  assert.equal(compact.prioritySignals[0].values.currentMonthNet, -4232.02);
+  const first = compact.prioritySignals[0];
+  assert.ok(first);
+  assert.equal(first.severity, "high");
+  assert.equal(first.code, "finance_negative_month_net");
+  assert.equal(first.values?.currentMonthNet, -4232.02);
   assert.ok(compact.prioritySignals.find(signal => signal.code === "pos_no_recent_sales"));
   assert.ok(compact.prioritySignals.find(signal => signal.code === "marketing_no_active_campaigns"));
 });
