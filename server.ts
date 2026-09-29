@@ -835,8 +835,20 @@ const dashboardSources: Record<DashboardProduct, string> = {
   games: process.env.GAMES_INTERNAL_URL || "http://gaming-studio-j:80",
 };
 
+const readonlyPlatformSecretFile = process.env.V79_READONLY_PLATFORM_SECRET_FILE || "/run/secrets/v79-readonly-platform-token";
+const readonlyPlatformProducts = new Set(["lasertag", "website", "games"]);
+function readReadonlyPlatformSecret() {
+  const direct = String(process.env.V79_READONLY_PLATFORM_SHARED_SECRET || "").trim();
+  if (direct) return direct;
+  try { return fs.readFileSync(readonlyPlatformSecretFile, "utf8").trim(); } catch { return ""; }
+}
+function platformSigningSecret(product: string) {
+  return readonlyPlatformProducts.has(product) ? (readReadonlyPlatformSecret() || posSecret) : posSecret;
+}
+
 async function readDashboardSummary(product: DashboardProduct) {
-  if (posSecret.length < 32) {
+  const signingSecret = platformSigningSecret(product);
+  if (signingSecret.length < 32) {
     return { status: "misconfigured", error: "Platform summary signing is not configured." };
   }
 
@@ -853,7 +865,7 @@ async function readDashboardSummary(product: DashboardProduct) {
     pathname,
     timestamp,
     body: "",
-    secret: posSecret,
+    secret: signingSecret,
   });
 
   try {
@@ -1062,7 +1074,8 @@ const platformAdminAllowed: Record<PlatformAdminProduct, Array<{ method: string;
 };
 
 async function callPlatformAdmin(product: PlatformAdminProduct, method: string, pathname: string, requestBody?: unknown) {
-  if (posSecret.length < 32) {
+  const signingSecret = platformSigningSecret(product);
+  if (signingSecret.length < 32) {
     return { status: 503, headers: new Headers({ "content-type": "application/json" }), body: Buffer.from(JSON.stringify({ error: "Platform integration is not configured." })) };
   }
 
@@ -1081,7 +1094,7 @@ async function callPlatformAdmin(product: PlatformAdminProduct, method: string, 
     pathname,
     timestamp,
     body: serializedBody,
-    secret: posSecret,
+    secret: signingSecret,
   });
 
   const headers: Record<string, string> = {
