@@ -28,3 +28,21 @@ test('launch tickets require the active owner and exact legacy tenant', () => {
   store.organizations[0].status = 'suspended';
   assert.equal(validLegacyLaunch(store, entry('owner-a', 'v79'), 'pos', 'v79', 'owner-a'), false);
 });
+
+import { enabledAppIds, organizationCanAccessApp } from "../server/organization-access.mjs";
+
+test("organization app entitlements fail closed and expose only enabled apps", () => {
+  const entitledStore = {
+    ...store,
+    organizations: [{ id: "v79", status: "active" }, { id: "business-b", status: "active" }],
+    appEntitlements: [
+      { organizationId: "v79", appId: "app-pos", enabled: true },
+      { organizationId: "v79", appId: "app-marketing", enabled: false },
+      { organizationId: "business-b", appId: "app-tiquet", enabled: true },
+    ],
+  };
+  assert.deepEqual(enabledAppIds(entitledStore, "v79"), ["app-pos"]);
+  assert.equal(organizationCanAccessApp(entitledStore, "v79", "app-pos"), true);
+  assert.equal(organizationCanAccessApp(entitledStore, "v79", "app-tiquet"), false);
+  assert.deepEqual(enabledAppIds({ ...entitledStore, appEntitlements: [] }, "v79"), []);
+});
