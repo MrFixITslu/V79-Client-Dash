@@ -99,7 +99,7 @@ function readInternalToken() {
   try { return fs.readFileSync(tokenFile, "utf8").trim(); } catch { return ""; }
 }
 
-async function readBusinessSnapshot(context: AgentContext) {
+export async function readBusinessSnapshot(context: AgentContext) {
   if (!context.ownerAgent) throw new Error("Business-wide snapshot is restricted to the Vision79 Owner Assistant.");
   const internalToken = readInternalToken();
   if (!internalToken) throw new Error("Owner Assistant internal token is not configured.");
