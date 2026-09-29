@@ -100,6 +100,9 @@ jobs:
 
   deploy:
     name: Deploy Hub to server
+    concurrency:
+      group: v79-hub-production
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     needs: [validate, deliver-container]
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}

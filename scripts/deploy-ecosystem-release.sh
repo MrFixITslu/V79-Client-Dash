@@ -21,6 +21,18 @@ deploy_app() {
   test -f "$root/.env" || { echo "Missing production .env: $root/.env" >&2; exit 1; }
   test -f "$archive" || { echo "Missing release bundle: $archive" >&2; exit 1; }
 
+  # The normal Hub release binds /opt/v79/hub/data. Refuse a coordinated
+  # deployment before copying or recreating anything if that mount differs.
+  if [ "$name" = "V79 Hub" ]; then
+    test -d "$root/data" || { echo "Hub production data directory is missing." >&2; exit 1; }
+    local live_data
+    live_data="$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/app/data"}}{{.Source}}{{end}}{{end}}' "$container" 2>/dev/null || true)"
+    if [ -z "$live_data" ] || [ "$(realpath "$live_data")" != "$(realpath "$root/data")" ]; then
+      echo "Hub release target does not match the live production data mount." >&2
+      exit 1
+    fi
+  fi
+
   local project
   project="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project" }}' "$container" 2>/dev/null || true)"
   project="${project:-$default_project}"
@@ -84,7 +96,7 @@ deploy_app() {
   echo "==> $name deployed successfully"
 }
 
-deploy_app "V79 Hub"       "$HOME/v79hub"       "v79hub"       "v79-hub"            "v79-hub"            "$HOME/v79-ecosystem-hub.tar.gz"       "3040" "/api/health"
+deploy_app "V79 Hub"       "/opt/v79/hub"       "v79-hub"       "v79-hub"            "v79-hub"            "$HOME/v79-ecosystem-hub.tar.gz"       "3040" "/api/health"
 deploy_app "V79 Tiquet"    "$HOME/V79Tiquet"    "v79tiquet"    "v79-tiquet-manager" "v79-tiquet-manager" "$HOME/v79-ecosystem-tiquet.tar.gz"    "3050" "/health"
 deploy_app "V79 Marketing" "$HOME/V79Marketing" "v79marketing" "v79-marketing"       "v79marketing-app"    "$HOME/v79-ecosystem-marketing.tar.gz" "3070" "/api/health"
 deploy_app "FFPRO"         "$HOME/FFPRO2"        "ffpro2"       "fire-finance"        "fire-finance-app"    "$HOME/v79-ecosystem-ffpro.tar.gz"     "3010" "/api/health"
