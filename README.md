@@ -35,4 +35,4 @@ npm run build
 npm test
 ```
 
-The tests cover private API access, role boundaries, checkout pricing/stock, password recovery and signed, single-use launches. Additional deployed browser, existing-account linking, device, payment and cross-product acceptance testing is required before real merchant transactions. The local Hub checkout is separate from the V79 POS register and should not be used as a payment processor.
+The active test suite covers private API access, role and organization boundaries, password recovery, signed single-use launches, service contracts and Owner Assistant access. Older prototype tests for open signup and a removed SQLite owner recovery path are retained in `tests/legacy/` as historical specifications and are excluded from the active suite. Paid checkout and multi-business onboarding remain disabled; see `docs/multi-business-release-gates.md` before enabling either.
