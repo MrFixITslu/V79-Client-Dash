@@ -20,10 +20,10 @@ function cookieFrom(response, name) {
   return "";
 }
 
-function safeUrl(raw) {
+function safeUrl(raw, base) {
   if (!raw) return "(none)";
   try {
-    const url = new URL(raw);
+    const url = new URL(raw, base);
     const keys = [...url.searchParams.keys()];
     const hashKeys = url.hash ? [...new URLSearchParams(url.hash.slice(1)).keys()] : [];
     return `${url.origin}${url.pathname}${keys.length ? "?" + keys.map(k => k + "=<redacted>").join("&") : ""}${hashKeys.length ? "#" + hashKeys.map(k => k + "=<redacted>").join("&") : ""}`;
@@ -60,7 +60,7 @@ async function hubLaunch(product, hubCookie) {
     signal: AbortSignal.timeout(10000),
   });
   const location = response.headers.get("location") || "";
-  console.log(`${product}: Hub launch HTTP ${response.status} -> ${safeUrl(location)}`);
+  console.log(`${product}: Hub launch HTTP ${response.status} -> ${safeUrl(location, hubBase)}`);
   if (response.status !== 302 || !location) {
     throw new Error(`${product}: Hub launch failed HTTP ${response.status}: ${await bodySnippet(response)}`);
   }
@@ -76,12 +76,12 @@ async function launchManaged(product, cookieName, verifyPath, hubCookie) {
     signal: AbortSignal.timeout(15000),
   });
   const next = response.headers.get("location") || "";
-  console.log(`${product}: App launch HTTP ${response.status} -> ${safeUrl(next)}`);
+  console.log(`${product}: App launch HTTP ${response.status} -> ${safeUrl(next, appOrigin)}`);
 
   if (next) {
     const redirected = new URL(next, appOrigin);
-    if (redirected.origin === hubBase) {
-      throw new Error(`${product}: app bounced back to Hub: ${safeUrl(redirected.toString())}`);
+    if (redirected.origin !== appOrigin) {
+      throw new Error(`${product}: app redirected outside its origin: ${safeUrl(redirected.toString())}`);
     }
   }
   if (response.status !== 302) {
