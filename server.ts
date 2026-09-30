@@ -1769,6 +1769,15 @@ function platformSigningSecret(product: string) {
 }
 
 async function readDashboardSummary(product: DashboardProduct, organizationId: string) {
+  if (organizationId !== posIdentity.organizationId && product === "academy") {
+    return {
+      status: "not_configured",
+      metrics: {},
+      generatedAt: null,
+      accessMessage: "Academy uses a separate learner account. Hub-to-Academy learner linking is not enabled for customer workspaces.",
+    };
+  }
+
   const customerPosReady = product === "pos" &&
     posTenantLaunchReady(store, organizationId, posIdentity.organizationId);
   const customerFfproReady = product === "ffpro" &&
