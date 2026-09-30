@@ -1,6 +1,6 @@
 # Multi-business release gates
 
-Status: invite-only Hub onboarding enabled for closed beta. The V79 platform operator can enroll additional SMB workspaces through single-use owner invitations. Managed product tenant mappings are created in a pending state and POS, FFPRO, Tiquet and Marketing launches remain fail-closed for customer organizations until each product mapping is explicitly activated. Paid checkout remains disabled.
+Status: invite-only Hub onboarding is production-ready for closed beta. The V79 platform operator can enroll additional SMB workspaces through single-use owner invitations and explicitly provision POS, FFPRO, Tiquet and Marketing tenant mappings. Customer launches remain fail-closed until the exact product mapping is active. Open registration and paid checkout remain disabled.
 
 ## 1. Organization data boundary
 
@@ -12,10 +12,12 @@ Implemented at the Hub layer: only the V79 platform operator can issue a single-
 
 ## 3. Two-business acceptance
 
-Hub-level two-business acceptance is automated: a single identity can own two isolated SMB workspaces, workspace selection is explicit, team/catalog reads remain scoped, and replayed/revoked invites fail closed. The remaining release gate is product-level acceptance for POS, FFPRO, Tiquet and Marketing: use isolated demo owners and staff for business A and B, confirm each product's tenant data boundary, then activate that product's tenant mapping. A cross-business read or mutation must fail without returning another tenant's data.
+Implemented and automated. The release gate provisions two independent SMB workspaces for the same owner identity, requires explicit workspace selection, confirms tenant-scoped user/catalog reads, provisions POS, FFPRO, Tiquet and Marketing separately for both businesses, launches each product through a one-time signed ticket, and verifies different workspace-scoped product identities. Dashboard summaries must resolve to the exact organization for all four managed products. Academy remains a separate learner account for customer workspaces, while CombatZone / LaserTag, the Vision79 website and Gaming Studio J aggregate metrics remain unavailable to customer organizations.
+
+The release gate is part of the Hub test suite so a future change that reintroduces a cross-tenant mapping, launch, or dashboard leak fails CI.
 
 ## 4. Subscription lifecycle
 
 Keep paid checkout off until an approved provider and merchant account are configured. Store plan, entitlement, billing customer, subscription state, grace deadline, and provider event IDs per organization. Verify webhook signatures over the raw body, process event IDs idempotently in a transaction, and audit transitions. The state policy covers trial, active, past due, grace, canceled, and recovery. Billing permissions must not grant product or operator access. Academy learner accounts remain independent.
 
-Before enabling managed product launches for customer organizations: complete the two-business acceptance run inside each connected product and explicitly activate its tenant mapping. Before enabling paid checkout: run provider sandbox checkout, retry, cancellation, payment recovery, and duplicate/out-of-order webhook cases; confirm invoice separation for both demo businesses. Restore from backup and rerun owner launches.
+Before the first external closed-beta customer, use a controlled pilot workspace to smoke-test the live product redirects and normal customer UX without weakening the tenant gates. Before enabling paid checkout, run provider sandbox checkout, retry, cancellation, payment recovery, and duplicate/out-of-order webhook cases; confirm invoice separation for two demo businesses. Restore from backup and rerun owner launches.
