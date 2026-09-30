@@ -123,7 +123,7 @@ test("POS customer provisioning activates only the exact Hub tenant and enables 
     const created = await request("/api/admin/onboarding/invitations", {
       method: "POST",
       headers: operatorHeaders,
-      body: JSON.stringify({ organizationName: name, email, appIds: ["app-v79pos"], expiresInHours: 24 }),
+      body: JSON.stringify({ organizationName: name, email, appIds: ["app-v79pos", "app-academy"], expiresInHours: 24 }),
     });
     assert.equal(created.status, 201);
     const invite = await created.json();
@@ -208,4 +208,7 @@ test("POS customer provisioning activates only the exact Hub tenant and enables 
   assert.equal(dashA.apps.pos.metrics.organizationMarker, a.organization.id);
   assert.equal(dashB.apps.pos.metrics.organizationMarker, b.organization.id);
   assert.notEqual(dashA.apps.pos.metrics.organizationMarker, dashB.apps.pos.metrics.organizationMarker);
+  assert.equal(dashA.apps.academy.status, "not_configured");
+  assert.equal(dashB.apps.academy.status, "not_configured");
+  assert.match(dashA.apps.academy.accessMessage, /separate learner account/i);
 });
