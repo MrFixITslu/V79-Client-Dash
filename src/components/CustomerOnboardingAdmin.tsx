@@ -167,6 +167,25 @@ export function CustomerOnboardingAdmin() {
     }
   };
 
+  const provisionMarketing = async (invitation: OwnerInvitation) => {
+    if (!window.confirm(`Provision an isolated Marketing workspace for ${invitation.organizationName}?`)) return;
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      await onboardingApi(`/organizations/${encodeURIComponent(invitation.organizationId)}/apps/marketing/provision`, {
+        method: "POST",
+        body: "{}",
+      });
+      setMessage(`Marketing workspace activated for ${invitation.organizationName}.`);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Marketing workspace could not be provisioned.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const toggleApp = (appId: string) => {
     setAppIds(current => current.includes(appId) ? current.filter(id => id !== appId) : [...current, appId]);
   };
@@ -311,6 +330,13 @@ export function CustomerOnboardingAdmin() {
                     ? <span className="inline-flex items-center rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-[10px] font-bold uppercase tracking-wide text-emerald-700">Tiquet active</span>
                     : <button onClick={() => void provisionTiquet(invitation)} disabled={busy} className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-700 px-3 py-2 text-[11px] font-semibold text-white disabled:opacity-50">
                         Provision Tiquet
+                      </button>
+                )}
+                {invitation.status === "accepted" && invitation.appIds.includes("app-marketing") && (
+                  invitation.appMappings?.find(mapping => mapping.appId === "app-marketing")?.status === "active"
+                    ? <span className="inline-flex items-center rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-[10px] font-bold uppercase tracking-wide text-emerald-700">Marketing active</span>
+                    : <button onClick={() => void provisionMarketing(invitation)} disabled={busy} className="inline-flex items-center gap-1.5 rounded-lg bg-cyan-700 px-3 py-2 text-[11px] font-semibold text-white disabled:opacity-50">
+                        Provision Marketing
                       </button>
                 )}
               </div>
