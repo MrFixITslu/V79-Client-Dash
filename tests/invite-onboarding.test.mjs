@@ -174,6 +174,13 @@ test("platform operator invite-only onboarding is single-use and workspace isola
   assert.equal(customerUserList.length, 1);
   assert.equal(customerUserList[0].username, "owner@example.test");
   assert.equal((await request("/api/admin/onboarding/invitations", { headers: { Cookie: customerCookie } })).status, 403);
+  for (const product of ["lasertag", "website", "games"]) {
+    assert.equal(
+      (await request(`/api/admin/platform/${product}/overview`, { headers: { Cookie: customerCookie } })).status,
+      403,
+      `customer workspace must not access ${product} platform administration`,
+    );
+  }
 
   const customerApps = await (await request("/api/ecosystem/apps", { headers: { Cookie: customerCookie } })).json();
   const tiquet = customerApps.find(app => app.id === "app-tiquet");

@@ -600,8 +600,12 @@ function checkPassword(password: string, stored: string) {
   return crypto.timingSafeEqual(actual, Buffer.from(digest, "hex"));
 }
 const adminPassword = process.env.V79_HUB_ADMIN_PASSWORD || "";
+const vision79OwnerEmail = "vision79slu@gmail.com";
 if (process.env.NODE_ENV === "production" && (adminPassword.length < 16 || knownDemoPasswords.has(adminPassword))) {
   throw new Error("Set V79_HUB_ADMIN_PASSWORD to a unique password of at least 16 characters before production startup.");
+}
+if (process.env.NODE_ENV === "production" && normalizeEmail(process.env.V79_HUB_ADMIN_EMAIL) !== vision79OwnerEmail) {
+  throw new Error("V79_HUB_ADMIN_EMAIL must remain vision79slu@gmail.com for platform administration.");
 }
 let usersChanged = false;
 for (const user of store.users) {
@@ -1089,10 +1093,22 @@ function requireAuth(req: Request, res: Response, next: () => void) {
   (req as any).user = session;
   next();
 }
+function isPlatformOperatorIdentity(userId: string, organizationId: string) {
+  const user = store.users.find(item => item.id === userId);
+  const membership = activeMembership(store, userId, organizationId);
+  return Boolean(
+    user &&
+    user.id === posIdentity.ownerUserId &&
+    organizationId === posIdentity.organizationId &&
+    membership?.role === "owner" &&
+    normalizeEmail(user.email) === vision79OwnerEmail &&
+    normalizeEmail(process.env.V79_HUB_ADMIN_EMAIL) === vision79OwnerEmail
+  );
+}
+
 function requirePlatformOperator(req: Request, res: Response, next: () => void) {
   const session = (req as any).user;
-  if (session.userId !== posIdentity.ownerUserId || session.organizationId !== posIdentity.organizationId ||
-      activeMembership(store, session.userId, session.organizationId)?.role !== "owner") {
+  if (!isPlatformOperatorIdentity(session.userId, session.organizationId)) {
     return res.status(403).json({ error: "Platform operator access required" });
   }
   next();
@@ -1344,7 +1360,7 @@ app.post("/api/auth/login", (req, res) => {
   const membership = activeMembership(store, foundUser.id, selectedMembership.organizationId);
   const ownerAgent = hasOwnerAssistantAccess({ user: foundUser, membership, organizationId: selectedMembership.organizationId, ownerOrganizationId: posIdentity.organizationId, ownerUserId: posIdentity.ownerUserId, ownerEmail: process.env.V79_HUB_ADMIN_EMAIL });
   res.json({
-    user: { ...sanitizeUserForOrganization(foundUser, selectedMembership.organizationId), platformOperator: foundUser.id === posIdentity.ownerUserId && selectedMembership.organizationId === posIdentity.organizationId, ownerAgent },
+    user: { ...sanitizeUserForOrganization(foundUser, selectedMembership.organizationId), platformOperator: isPlatformOperatorIdentity(foundUser.id, selectedMembership.organizationId), ownerAgent },
     organization: store.organizations.find(org => org.id === selectedMembership.organizationId)
   });
 });
@@ -1429,7 +1445,7 @@ app.get("/api/auth/me", requireAuth, (req, res) => {
   }
   const membership = activeMembership(store, user.id, session.organizationId);
   const ownerAgent = hasOwnerAssistantAccess({ user, membership, organizationId: session.organizationId, ownerOrganizationId: posIdentity.organizationId, ownerUserId: posIdentity.ownerUserId, ownerEmail: process.env.V79_HUB_ADMIN_EMAIL });
-  res.json({ user: { ...sanitizeUserForOrganization(user, session.organizationId), platformOperator: user.id === posIdentity.ownerUserId && session.organizationId === posIdentity.organizationId, ownerAgent }, organization: store.organizations.find(org => org.id === session.organizationId) });
+  res.json({ user: { ...sanitizeUserForOrganization(user, session.organizationId), platformOperator: isPlatformOperatorIdentity(user.id, session.organizationId), ownerAgent }, organization: store.organizations.find(org => org.id === session.organizationId) });
 });
 
 app.post("/api/auth/logout", requireAuth, (req, res) => {
@@ -1791,6 +1807,14 @@ async function readDashboardSummary(product: DashboardProduct, organizationId: s
       metrics: {},
       generatedAt: null,
       accessMessage: "Vision79 website metrics are platform-owned and are not shared with customer workspaces.",
+    };
+  }
+  if (organizationId !== posIdentity.organizationId && product === "games") {
+    return {
+      status: "not_configured",
+      metrics: {},
+      generatedAt: null,
+      accessMessage: "Gaming Studio J metrics are Vision79-owned and are not shared with customer workspaces.",
     };
   }
 
