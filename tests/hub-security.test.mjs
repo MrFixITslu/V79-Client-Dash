@@ -124,7 +124,7 @@ test('private data, retired embedded APIs and one-time app launch', {timeout:300
   const catalogPut=(id,body)=>request(`/api/ecosystem/apps/${id}`,{method:'PUT',headers,body:JSON.stringify(body)});
   assert.equal((await catalogPut(custom.id,{id:'app-ffpro'})).status,400);
   assert.equal((await catalogPut(custom.id,{appUrl:'javascript:alert(1)'})).status,400);
-  assert.equal((await catalogPut('app-ffpro',{appUrl:'https://example.test/'})).status,400);
+  assert.equal((await catalogPut('app-ffpro',{appUrl:'https://example.test/'})).status,403);
   const catalogAfterReject=JSON.parse(await readFile(storeFile,'utf8'));
   assert.equal(catalogAfterReject.ecosystemApps.find(app=>app.id===custom.id).appUrl,'https://example.test/tool');
   const ownerSummary=await (await request('/api/dashboard/summary',{headers:{Cookie:cookie}})).json();
