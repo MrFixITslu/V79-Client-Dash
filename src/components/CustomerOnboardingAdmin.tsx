@@ -148,6 +148,25 @@ export function CustomerOnboardingAdmin() {
     }
   };
 
+  const provisionTiquet = async (invitation: OwnerInvitation) => {
+    if (!window.confirm(`Provision an isolated Tiquet workspace for ${invitation.organizationName}?`)) return;
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      await onboardingApi(`/organizations/${encodeURIComponent(invitation.organizationId)}/apps/tiquet/provision`, {
+        method: "POST",
+        body: "{}",
+      });
+      setMessage(`Tiquet workspace activated for ${invitation.organizationName}.`);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Tiquet workspace could not be provisioned.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const toggleApp = (appId: string) => {
     setAppIds(current => current.includes(appId) ? current.filter(id => id !== appId) : [...current, appId]);
   };
@@ -285,6 +304,13 @@ export function CustomerOnboardingAdmin() {
                     ? <span className="inline-flex items-center rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-[10px] font-bold uppercase tracking-wide text-emerald-700">FFPRO active</span>
                     : <button onClick={() => void provisionFfpro(invitation)} disabled={busy} className="inline-flex items-center gap-1.5 rounded-lg bg-teal-700 px-3 py-2 text-[11px] font-semibold text-white disabled:opacity-50">
                         Provision FFPRO
+                      </button>
+                )}
+                {invitation.status === "accepted" && invitation.appIds.includes("app-tiquet") && (
+                  invitation.appMappings?.find(mapping => mapping.appId === "app-tiquet")?.status === "active"
+                    ? <span className="inline-flex items-center rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-[10px] font-bold uppercase tracking-wide text-emerald-700">Tiquet active</span>
+                    : <button onClick={() => void provisionTiquet(invitation)} disabled={busy} className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-700 px-3 py-2 text-[11px] font-semibold text-white disabled:opacity-50">
+                        Provision Tiquet
                       </button>
                 )}
               </div>
