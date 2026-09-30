@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { compactOwnerSnapshot, formatPriorityBrief, isPriorityBriefRequest } from "../src/grounding.js";
+import { compactOwnerSnapshot, deterministicFactAnswer, formatPriorityBrief, isPriorityBriefRequest } from "../src/grounding.js";
 
 test("compacts and deduplicates owner business snapshot", () => {
   const compact = compactOwnerSnapshot({
@@ -58,4 +58,59 @@ test("priority brief formatting preserves severity order", () => {
   assert.match(lines[0] || "", /-4,232\.02/);
   assert.match(lines[1] || "", /POS: no sales/);
   assert.match(lines[2] || "", /Marketing: there are no active campaigns/);
+});
+
+
+test("finance facts are deterministic and do not invent period comparisons", () => {
+  const compact = compactOwnerSnapshot({
+    business: {
+      ffpro: {
+        metrics: {
+          currentMonthIncome: 1750,
+          currentMonthExpenses: 5982.02,
+          yearToDateIncome: 11944,
+          yearToDateExpenses: 7378.42,
+        },
+      },
+    },
+  });
+  const answer = deterministicFactAnswer("Explain the current finance position in one sentence.", compact);
+  assert.ok(answer);
+  assert.equal(answer.domain, "finance");
+  assert.match(answer.output, /current-month income 1,750/);
+  assert.match(answer.output, /net -4,232\.02/);
+  assert.match(answer.output, /year-to-date net 4,565\.58/);
+  assert.doesNotMatch(answer.output, /previous month|last month|compared to/i);
+});
+
+test("sales and inventory facts stay grounded in POS metrics", () => {
+  const compact = compactOwnerSnapshot({
+    business: {
+      pos: {
+        metrics: {
+          sales30d: 0,
+          revenue30d: 0,
+          openPurchaseOrders: 2,
+          criticalReplenishmentItems: 1,
+          delayedShipments: 0,
+          unresolvedInventoryExceptions: 3,
+        },
+      },
+    },
+  });
+  const answer = deterministicFactAnswer("How are POS sales and inventory?", compact);
+  assert.ok(answer);
+  assert.equal(answer.domain, "pos");
+  assert.match(answer.output, /30-day sales 0/);
+  assert.match(answer.output, /critical replenishment items 1/);
+  assert.match(answer.output, /unresolved inventory exceptions 3/);
+});
+
+test("open-ended advice stays with the language model", () => {
+  const compact = compactOwnerSnapshot({
+    business: {
+      ffpro: { metrics: { currentMonthIncome: 100, currentMonthExpenses: 200 } },
+    },
+  });
+  assert.equal(deterministicFactAnswer("What should I do to improve cashflow?", compact), null);
 });
