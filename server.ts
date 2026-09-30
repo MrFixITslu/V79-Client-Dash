@@ -780,6 +780,16 @@ function posUserId(userId: string, organizationId: string) {
   const hex = crypto.createHash("sha256").update(`${organizationId}:${userId}`).digest("hex");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
+const posTeamRoleMap = {
+  manager: "MANAGER",
+  staff: "CASHIER",
+  viewer: "AUDITOR",
+} as const;
+
+function posTeamRole(role: string | undefined) {
+  return role && role in posTeamRoleMap ? role as keyof typeof posTeamRoleMap : null;
+}
+
 function posJwt(userId: string, tenantId: string) {
   const now = Math.floor(Date.now() / 1000);
   const header = Buffer.from(JSON.stringify({ alg: "EdDSA", typ: "JWT", kid: posKeyId })).toString("base64url");
@@ -824,6 +834,52 @@ async function provisionPosWorkspace(organization: Organization, hubUserId: stri
       return { ok: false as const, status: 502, error: "POS returned a mismatched tenant identity" };
     }
     return { ok: true as const, organizationId: organization.id, ownerUserId };
+  } catch {
+    return { ok: false as const, status: 503, error: "POS service is unavailable" };
+  }
+}
+
+async function provisionPosTeamMember(organization: Organization, hubUserId: string, role: keyof typeof posTeamRoleMap) {
+  if (posSecret.length < 32) {
+    return { ok: false as const, status: 503, error: "POS shared secret is not configured" };
+  }
+  const userId = posUserId(hubUserId, organization.id);
+  const pathname = "/api/platform/members/provision";
+  const body = JSON.stringify({
+    organizationId: organization.id,
+    user: { id: userId },
+    role,
+  });
+  const timestamp = String(Date.now());
+  try {
+    const response = await fetch(new URL(pathname, posServiceUrl), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-v79-service-id": "v79-hub",
+        "x-v79-timestamp": timestamp,
+        "x-v79-signature": signPlatformRequest({ method: "POST", pathname, timestamp, body, secret: posSecret }),
+      },
+      body,
+      signal: AbortSignal.timeout(5000),
+    });
+    const payload = await response.json().catch(() => ({})) as any;
+    if (!response.ok) {
+      return { ok: false as const, status: 502, error: "POS team member provisioning failed", upstreamStatus: response.status };
+    }
+    const expectedRoleKey = posTeamRoleMap[role];
+    if (
+      payload.provisioned !== true ||
+      payload.organizationId !== organization.id ||
+      payload.userId !== userId ||
+      payload.roleKey !== expectedRoleKey ||
+      !Array.isArray(payload.locationIds) ||
+      payload.locationIds.length !== 1 ||
+      typeof payload.locationIds[0] !== "string"
+    ) {
+      return { ok: false as const, status: 502, error: "POS returned a mismatched team member identity" };
+    }
+    return { ok: true as const, organizationId: organization.id, userId, roleKey: expectedRoleKey, locationId: payload.locationIds[0] as string };
   } catch {
     return { ok: false as const, status: 503, error: "POS service is unavailable" };
   }
@@ -1007,11 +1063,14 @@ app.post("/api/platform/session/consume", (req, res) => {
   if (product !== expectedProduct || typeof ticket !== "string" || !/^[A-Za-z0-9_-]{32,180}$/.test(ticket)) return res.status(400).json({ error: "Invalid ticket" });
   const ticketHash = crypto.createHash("sha256").update(ticket).digest("hex");
   const entry = launchTickets.get(ticketHash);
+  const posTicketMembership = entry
+    ? activeMembership(store, entry.userId, entry.tenantId)
+    : null;
   const validPosTicket = product === "pos" && Boolean(
     entry &&
     entry.product === "pos" &&
     entry.expiresAt >= Date.now() &&
-    activeMembership(store, entry.userId, entry.tenantId)?.role === "owner" &&
+    (posTicketMembership?.role === "owner" || posTeamRole(posTicketMembership?.role)) &&
     organizationCanAccessApp(store, entry.tenantId, "app-v79pos") &&
     posTenantLaunchReady(store, entry.tenantId, posIdentity.organizationId)
   );
@@ -1389,7 +1448,12 @@ function completeTeamInvitationAcceptance(
     teamOnboarding: {
       role: transition.role,
       permissions: transition.permissions,
-      managedProductAccess: "owner_only",
+      managedProductAccess: {
+        pos: "role_mapped",
+        ffpro: "owner_only",
+        tiquet: "owner_only",
+        marketing: "owner_only",
+      },
     },
   });
 }
@@ -2614,13 +2678,16 @@ app.use("/api/users", (req, res, next) => {
 });
 app.use("/api/ecosystem/apps", (req, res, next) => req.method === "GET" ? next() : requireRole("admin")(req, res, next));
 
-app.get("/api/apps/pos/launch", requireRole("admin"), async (req, res) => {
+app.get("/api/apps/pos/launch", async (req, res) => {
   const session = (req as any).user;
   if (!organizationCanAccessApp(store, session.organizationId, "app-v79pos")) {
     return res.status(403).json({ error: "POS is not enabled for this Hub organization" });
   }
   const membership = activeMembership(store, session.userId, session.organizationId);
-  if (membership?.role !== "owner") return res.status(403).json({ error: "Only the workspace owner can launch POS" });
+  const teamRole = posTeamRole(membership?.role);
+  if (membership?.role !== "owner" && !teamRole) {
+    return res.status(403).json({ error: "Your workspace role is not eligible for POS access" });
+  }
   if (session.organizationId === posIdentity.organizationId && session.userId !== posIdentity.ownerUserId) {
     return res.status(403).json({ error: "Only the V79 workspace owner can launch POS" });
   }
@@ -2630,11 +2697,13 @@ app.get("/api/apps/pos/launch", requireRole("admin"), async (req, res) => {
   const organization = store.organizations.find(org => org.id === session.organizationId && org.status === "active");
   if (!organization) return res.status(409).json({ error: "Hub organization is not active" });
 
-  const provisioned = await provisionPosWorkspace(
-    organization,
-    session.userId,
-    session.organizationId !== posIdentity.organizationId,
-  );
+  const provisioned = membership?.role === "owner"
+    ? await provisionPosWorkspace(
+        organization,
+        session.userId,
+        session.organizationId !== posIdentity.organizationId,
+      )
+    : await provisionPosTeamMember(organization, session.userId, teamRole!);
   if (!provisioned.ok) {
     return res.status(provisioned.status).json({
       error: provisioned.error,
@@ -2851,7 +2920,11 @@ app.get("/api/ecosystem/apps", (req, res) => {
       const isManagedProduct = tenantMappedAppIds.has(a.id);
       const setupPending = organizationId !== posIdentity.organizationId &&
         isManagedProduct && tenantMapping?.status !== "active";
-      const teamLaunchBlocked = isManagedProduct && membership?.role !== "owner";
+      const posTeamLaunchReady = a.id === "app-v79pos" &&
+        organizationId !== posIdentity.organizationId &&
+        tenantMapping?.status === "active" &&
+        Boolean(posTeamRole(membership?.role));
+      const teamLaunchBlocked = isManagedProduct && membership?.role !== "owner" && !posTeamLaunchReady;
       const launchBlocked = setupPending || teamLaunchBlocked;
       return { ...a, status: setupPending ? "syncing" : "beta", metrics: undefined, lastSync: undefined,
         description: setupPending
