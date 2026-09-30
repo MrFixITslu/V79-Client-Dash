@@ -181,7 +181,7 @@ test("platform operator invite-only onboarding is single-use and workspace isola
   assert.equal(tiquet.launchReady, false);
   assert.equal(tiquet.status, "syncing");
   assert.equal(academy.launchReady, true);
-  assert.equal((await request("/api/apps/tiquet/launch", { headers: { Cookie: customerCookie } })).status, 403);
+  assert.equal((await request("/api/apps/tiquet/launch", { headers: { Cookie: customerCookie } })).status, 409);
 
   const secondInviteResponse = await createInvite({
     organizationName: "Second Business Inc",

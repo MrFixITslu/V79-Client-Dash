@@ -12,6 +12,7 @@ import { activeMembership, activeMembershipsForUser, enabledAppIds, organization
 import { acceptInvitationState, invitationStatus } from "./server/onboarding-store.mjs";
 import { hasOwnerAssistantAccess, normalizeEmail } from "./server/agent-access.mjs";
 import { activatePosTenantMapping, posProvisioningTarget, posTenantLaunchReady, posTenantMapping } from "./server/pos-provisioning.mjs";
+import { activateFfproTenantMapping, ffproProvisioningTarget, ffproTenantLaunchReady, ffproTenantMapping } from "./server/ffpro-provisioning.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -101,6 +102,7 @@ interface AppTenantMapping {
   appId: string;
   status: "pending" | "active" | "disabled";
   externalTenantId?: string;
+  externalOwnerId?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -798,6 +800,54 @@ async function provisionPosWorkspace(organization: Organization, hubUserId: stri
   }
 }
 
+async function provisionFfproWorkspace(organization: Organization, owner: StoredUser) {
+  if (posSecret.length < 32) {
+    return { ok: false as const, status: 503, error: "Platform shared secret is not configured" };
+  }
+  const email = String(owner.email || owner.username || "").trim().toLowerCase();
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+    return { ok: false as const, status: 409, error: "FFPRO owner email is not valid" };
+  }
+  const ownerHubUserId = posUserId(owner.id, organization.id);
+  const pathname = "/api/platform/provision";
+  const body = JSON.stringify({
+    organization: { id: organization.id, name: organization.name, slug: organization.slug },
+    user: { id: ownerHubUserId, email, name: owner.fullName || email },
+    role: "owner",
+  });
+  const timestamp = String(Date.now());
+  const ffproServiceUrl = process.env.FFPRO_INTERNAL_URL || "http://fire-finance-app:3010";
+  try {
+    const response = await fetch(new URL(pathname, ffproServiceUrl), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-v79-service-id": "v79-hub",
+        "x-v79-timestamp": timestamp,
+        "x-v79-signature": signPlatformRequest({ method: "POST", pathname, timestamp, body, secret: posSecret }),
+      },
+      body,
+      signal: AbortSignal.timeout(5000),
+    });
+    const payload = await response.json().catch(() => ({})) as any;
+    if (!response.ok) {
+      return { ok: false as const, status: 502, error: "FFPRO workspace provisioning failed", upstreamStatus: response.status };
+    }
+    if (
+      payload.provisioned !== true ||
+      payload.organizationId !== organization.id ||
+      payload.ownerHubUserId !== ownerHubUserId ||
+      typeof payload.financeUserId !== "string" ||
+      !payload.financeUserId
+    ) {
+      return { ok: false as const, status: 502, error: "FFPRO returned a mismatched tenant identity" };
+    }
+    return { ok: true as const, organizationId: organization.id, ownerHubUserId, financeUserId: payload.financeUserId as string };
+  } catch {
+    return { ok: false as const, status: 503, error: "FFPRO service is unavailable" };
+  }
+}
+
 app.get("/.well-known/jwks.json", (_req, res) => {
   res.setHeader("Cache-Control", "public, max-age=300");
   res.json({ keys: [{ ...posPublicKey.export({ format: "jwk" }), kid: posKeyId, alg: "EdDSA", use: "sig" }] });
@@ -822,21 +872,40 @@ app.post("/api/platform/session/consume", (req, res) => {
     organizationCanAccessApp(store, entry.tenantId, "app-v79pos") &&
     posTenantLaunchReady(store, entry.tenantId, posIdentity.organizationId)
   );
+  const validFfproTicket = product === "ffpro" && Boolean(
+    entry &&
+    entry.product === "ffpro" &&
+    entry.expiresAt >= Date.now() &&
+    activeMembership(store, entry.userId, entry.tenantId)?.role === "owner" &&
+    organizationCanAccessApp(store, entry.tenantId, "app-ffpro") &&
+    ffproTenantLaunchReady(store, entry.tenantId, posIdentity.organizationId)
+  );
   const validTicket = product === "pos"
     ? validPosTicket
-    : Boolean(entry && validLegacyLaunch(store, entry, product, posIdentity.organizationId, posIdentity.ownerUserId));
+    : product === "ffpro"
+      ? validFfproTicket
+      : Boolean(entry && validLegacyLaunch(store, entry, product, posIdentity.organizationId, posIdentity.ownerUserId));
   if (!entry || !validTicket) return res.status(401).json({ error: "Ticket expired or revoked" });
   launchTickets.delete(ticketHash);
   res.setHeader("Cache-Control", "no-store");
   if (product === "pos") return res.json({ token: posJwt(posUserId(entry.userId, entry.tenantId), entry.tenantId), tenantId: entry.tenantId });
-  const email = (process.env.V79_HUB_ADMIN_EMAIL || "").trim().toLowerCase();
+
+  const user = store.users.find(u => u.id === entry.userId);
+  const organization = store.organizations.find(org => org.id === entry.tenantId);
+  const email = entry.tenantId === posIdentity.organizationId
+    ? (process.env.V79_HUB_ADMIN_EMAIL || "").trim().toLowerCase()
+    : String(user?.email || user?.username || "").trim().toLowerCase();
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(503).json({ error: "Hub owner email is not configured." });
+  if (!organization) return res.status(409).json({ error: "Hub organization is unavailable." });
+
   res.json({
-    user: { id: posUserId(entry.userId, entry.tenantId), email, name: store.users.find(u => u.id === entry.userId)?.fullName || email },
-    organization: { id: entry.tenantId, name: store.workspace.companyName || "V79 Digital", slug: `v79-${entry.tenantId.slice(0, 12)}` },
+    user: { id: posUserId(entry.userId, entry.tenantId), email, name: user?.fullName || email },
+    organization: { id: organization.id, name: organization.name, slug: organization.slug },
     role: "owner", plan: "beta", accessMode: "beta",
     entitlement: { product, enabled: true, access: "owner" },
-    assignedProducts: ["ffpro", "tiquet", "marketing"],
+    assignedProducts: enabledAppIds(store, entry.tenantId)
+      .map((appId: string) => ({ "app-ffpro": "ffpro", "app-tiquet": "tiquet", "app-marketing": "marketing" } as Record<string,string>)[appId])
+      .filter(Boolean),
   });
 });
 server.on("upgrade", (request, socket, head) => {
@@ -1258,6 +1327,7 @@ app.get("/api/admin/onboarding/invitations", requirePlatformOperator, (_req, res
           appId: mapping.appId,
           status: mapping.status,
           externalTenantId: mapping.externalTenantId || null,
+          externalOwnerId: mapping.externalOwnerId || null,
           updatedAt: mapping.updatedAt,
         })),
     }));
@@ -1409,6 +1479,48 @@ app.post("/api/admin/onboarding/organizations/:organizationId/apps/pos/provision
   });
 });
 
+app.post("/api/admin/onboarding/organizations/:organizationId/apps/ffpro/provision", requirePlatformOperator, async (req, res) => {
+  if (!sameOriginMutation(req)) return res.status(403).json({ error: "Invalid request origin" });
+  const organizationId = String(req.params.organizationId || "");
+  let target;
+  try {
+    target = ffproProvisioningTarget(store, organizationId);
+  } catch (error) {
+    return res.status(409).json({ error: error instanceof Error ? error.message : "FFPRO workspace is not ready for provisioning" });
+  }
+
+  const provisioned = await provisionFfproWorkspace(target.organization, target.owner);
+  if (!provisioned.ok) {
+    return res.status(provisioned.status).json({
+      error: provisioned.error,
+      ...("upstreamStatus" in provisioned ? { upstreamStatus: provisioned.upstreamStatus } : {}),
+    });
+  }
+
+  let nextStore: AppStore;
+  try {
+    nextStore = activateFfproTenantMapping(
+      store,
+      organizationId,
+      provisioned.organizationId,
+      provisioned.financeUserId,
+      (req as any).user.userId,
+      new Date().toISOString(),
+    ) as AppStore;
+  } catch (error) {
+    return res.status(409).json({ error: error instanceof Error ? error.message : "FFPRO tenant mapping could not be activated" });
+  }
+  commitStore(nextStore);
+  res.setHeader("Cache-Control", "no-store");
+  res.json({
+    success: true,
+    organizationId,
+    ownerHubUserId: provisioned.ownerHubUserId,
+    financeUserId: provisioned.financeUserId,
+    mapping: ffproTenantMapping(store, organizationId),
+  });
+});
+
 type DashboardProduct = "pos" | "ffpro" | "tiquet" | "marketing" | "academy" | "lasertag" | "website" | "games";
 const dashboardSources: Record<DashboardProduct, string> = {
   pos: posServiceUrl,
@@ -1435,7 +1547,9 @@ function platformSigningSecret(product: string) {
 async function readDashboardSummary(product: DashboardProduct, organizationId: string) {
   const customerPosReady = product === "pos" &&
     posTenantLaunchReady(store, organizationId, posIdentity.organizationId);
-  if (organizationId !== posIdentity.organizationId && !customerPosReady) {
+  const customerFfproReady = product === "ffpro" &&
+    ffproTenantLaunchReady(store, organizationId, posIdentity.organizationId);
+  if (organizationId !== posIdentity.organizationId && !customerPosReady && !customerFfproReady) {
     return { status: "not_configured", metrics: {}, generatedAt: null };
   }
   const signingSecret = platformSigningSecret(product);
@@ -1956,9 +2070,28 @@ app.get("/api/apps/:product/launch", requireRole("admin"), (req, res) => {
   const session = (req as any).user;
   const appIdByProduct = { ffpro: "app-ffpro", tiquet: "app-tiquet", marketing: "app-marketing" } as const;
   if (!organizationCanAccessApp(store, session.organizationId, appIdByProduct[product])) return res.status(403).json({ error: "This app is not enabled for this Hub organization" });
-  if (session.organizationId !== posIdentity.organizationId || session.userId !== posIdentity.ownerUserId ||
-      activeMembership(store, session.userId, session.organizationId)?.role !== "owner") return res.status(403).json({ error: "Only the workspace owner can launch this app" });
-  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(process.env.V79_HUB_ADMIN_EMAIL || "")) return res.status(503).json({ error: "Set V79_HUB_ADMIN_EMAIL to the owner's verified email." });
+
+  const membership = activeMembership(store, session.userId, session.organizationId);
+  if (membership?.role !== "owner") return res.status(403).json({ error: "Only the workspace owner can launch this app" });
+  if (session.organizationId === posIdentity.organizationId && session.userId !== posIdentity.ownerUserId) {
+    return res.status(403).json({ error: "Only the V79 workspace owner can launch this app" });
+  }
+  if (product === "ffpro") {
+    if (!ffproTenantLaunchReady(store, session.organizationId, posIdentity.organizationId)) {
+      return res.status(409).json({ error: "FFPRO workspace setup is pending. Contact V79 Digital." });
+    }
+  } else if (session.organizationId !== posIdentity.organizationId) {
+    return res.status(409).json({ error: `${product} workspace setup is pending. Contact V79 Digital.` });
+  }
+
+  const user = store.users.find(item => item.id === session.userId);
+  const ownerEmail = session.organizationId === posIdentity.organizationId
+    ? String(process.env.V79_HUB_ADMIN_EMAIL || "").trim().toLowerCase()
+    : String(user?.email || user?.username || "").trim().toLowerCase();
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(ownerEmail)) {
+    return res.status(503).json({ error: "Set the workspace owner's verified email before launch." });
+  }
+
   const config = managedLaunch[product];
   if ((process.env[config.secretEnv] || "").length < 32) return res.status(503).json({ error: `${product} launch secret is not configured.` });
   const configuredUrl = process.env[config.publicEnv] || config.defaultUrl;
@@ -1967,7 +2100,8 @@ app.get("/api/apps/:product/launch", requireRole("admin"), (req, res) => {
     target = new URL("/api/platform/launch", configuredUrl);
     if (target.protocol !== "https:" || target.username || target.password || !target.hostname.endsWith(".v79sl.com")) throw new Error("Invalid app URL");
   } catch { return res.status(503).json({ error: `${product} public URL is invalid.` }); }
-  target.searchParams.set("ticket", launchTicket(session.userId, posIdentity.organizationId, product));
+
+  target.searchParams.set("ticket", launchTicket(session.userId, session.organizationId, product));
   res.setHeader("Cache-Control", "no-store");
   res.redirect(302, target.toString());
 });
