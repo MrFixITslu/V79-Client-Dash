@@ -1793,6 +1793,14 @@ async function readDashboardSummary(product: DashboardProduct, organizationId: s
       accessMessage: "Vision79 website metrics are platform-owned and are not shared with customer workspaces.",
     };
   }
+  if (organizationId !== posIdentity.organizationId && product === "games") {
+    return {
+      status: "not_configured",
+      metrics: {},
+      generatedAt: null,
+      accessMessage: "Gaming Studio J metrics are Vision79-owned and are not shared with customer workspaces.",
+    };
+  }
 
   const customerPosReady = product === "pos" &&
     posTenantLaunchReady(store, organizationId, posIdentity.organizationId);
