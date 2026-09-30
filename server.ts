@@ -1785,6 +1785,14 @@ async function readDashboardSummary(product: DashboardProduct, organizationId: s
       accessMessage: "CombatZone / LaserTag is a Vision79-owned operation and is not shared with customer workspaces.",
     };
   }
+  if (organizationId !== posIdentity.organizationId && product === "website") {
+    return {
+      status: "not_configured",
+      metrics: {},
+      generatedAt: null,
+      accessMessage: "Vision79 website metrics are platform-owned and are not shared with customer workspaces.",
+    };
+  }
 
   const customerPosReady = product === "pos" &&
     posTenantLaunchReady(store, organizationId, posIdentity.organizationId);
