@@ -211,4 +211,7 @@ test("POS customer provisioning activates only the exact Hub tenant and enables 
   assert.equal(dashA.apps.academy.status, "not_configured");
   assert.equal(dashB.apps.academy.status, "not_configured");
   assert.match(dashA.apps.academy.accessMessage, /separate learner account/i);
+  assert.equal(dashA.apps.lasertag.status, "not_configured");
+  assert.equal(dashB.apps.lasertag.status, "not_configured");
+  assert.match(dashA.apps.lasertag.accessMessage, /Vision79-owned operation/i);
 });
