@@ -262,7 +262,7 @@ test("workspace team invitations stay owner-controlled and isolated across SMBs"
   assert.deepEqual(managerBody.teamOnboarding.managedProductAccess, {
     pos: "role_mapped",
     ffpro: "owner_only",
-    tiquet: "owner_only",
+    tiquet: "role_mapped",
     marketing: "owner_only",
   });
   assert.deepEqual(
