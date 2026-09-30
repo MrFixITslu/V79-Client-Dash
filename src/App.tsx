@@ -7,6 +7,7 @@ import { useState, useEffect, useCallback } from "react";
 import { ViewState, User, EcosystemApp } from "./types";
 import { Sidebar } from "./components/Sidebar";
 import { Login } from "./components/Login";
+import { InviteAcceptance } from "./components/InviteAcceptance";
 import { UserManagement } from "./components/UserManagement";
 import { AppSwitcher } from "./components/AppSwitcher";
 import { HubOverview } from "./components/HubOverview";
@@ -19,6 +20,7 @@ import { OwnerAssistant } from "./components/OwnerAssistant";
 import { CheckCircle2, AlertCircle, RotateCw } from "lucide-react";
 
 export default function App() {
+  const inviteToken = new URLSearchParams(window.location.hash.replace(/^#/, "")).get("invite") || new URLSearchParams(window.location.search).get("invite") || "";
   const [authToken, setAuthToken] = useState<string | null>(null);
   const [user, setUser] = useState<User | null>(null);
   const [isVerifyingSession, setIsVerifyingSession] = useState(true);
@@ -46,6 +48,10 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (inviteToken) {
+      setIsVerifyingSession(false);
+      return;
+    }
     const verifySession = async () => {
       try {
         const res = await fetch("/api/auth/me", { cache: "no-store" });
@@ -63,7 +69,7 @@ export default function App() {
       }
     };
     verifySession();
-  }, [authToken]);
+  }, [authToken, inviteToken]);
 
   const fetchHubData = useCallback(async () => {
     try {
@@ -162,6 +168,22 @@ export default function App() {
     showToast("User account removed");
     await fetchHubData();
   };
+
+  if (inviteToken) {
+    return (
+      <InviteAcceptance
+        token={inviteToken}
+        onAccepted={(acceptedUser) => {
+          const params = new URLSearchParams(window.location.search);
+          params.delete("invite");
+          const query = params.toString();
+          window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
+          handleLoginSuccess(acceptedUser, "cookie");
+        }}
+        onCancel={() => window.location.assign("/")}
+      />
+    );
+  }
 
   if (isVerifyingSession) {
     return (

@@ -7,12 +7,20 @@ interface LoginProps {
   onLoginSuccess: (user: User, token: string) => void;
 }
 
+interface WorkspaceOption {
+  id: string;
+  name: string;
+  slug: string;
+}
+
 export function Login({ onLoginSuccess }: LoginProps) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [workspaces, setWorkspaces] = useState<WorkspaceOption[]>([]);
+  const [organizationId, setOrganizationId] = useState("");
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -27,11 +35,19 @@ export function Login({ onLoginSuccess }: LoginProps) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           username: username.trim(),
-          password: password,
+          password,
+          ...(organizationId ? { organizationId } : {}),
         }),
       });
 
       const data = await res.json();
+
+      if (res.status === 409 && Array.isArray(data.organizations)) {
+        setWorkspaces(data.organizations);
+        setOrganizationId("");
+        setError("Choose the business workspace you want to open.");
+        return;
+      }
 
       if (!res.ok) {
         throw new Error(data.error || "Authentication failed");
@@ -91,7 +107,7 @@ export function Login({ onLoginSuccess }: LoginProps) {
 
             <div>
               <label className="block text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-1.5 ml-1">
-                Account Username
+                Username or Email
               </label>
               <div className="relative">
                 <UserIcon className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
@@ -99,9 +115,13 @@ export function Login({ onLoginSuccess }: LoginProps) {
                   type="text"
                   required
                   value={username}
-                  onChange={(e) => setUsername(e.target.value)}
+                  onChange={(e) => {
+                    setUsername(e.target.value);
+                    setWorkspaces([]);
+                    setOrganizationId("");
+                  }}
                   className="w-full bg-slate-950/70 border border-slate-800 text-white pl-10 pr-4 py-3 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all placeholder-slate-600"
-                  placeholder="e.g. admin or staff"
+                  placeholder="admin or you@example.com"
                   autoComplete="username"
                 />
               </div>
@@ -119,7 +139,11 @@ export function Login({ onLoginSuccess }: LoginProps) {
                   type={showPassword ? "text" : "password"}
                   required
                   value={password}
-                  onChange={(e) => setPassword(e.target.value)}
+                  onChange={(e) => {
+                    setPassword(e.target.value);
+                    setWorkspaces([]);
+                    setOrganizationId("");
+                  }}
                   className="w-full bg-slate-950/70 border border-slate-800 text-white pl-10 pr-11 py-3 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all placeholder-slate-600"
                   placeholder="••••••••••••"
                   autoComplete="current-password"
@@ -134,6 +158,28 @@ export function Login({ onLoginSuccess }: LoginProps) {
                 </button>
               </div>
             </div>
+
+            {workspaces.length > 0 && (
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-1.5 ml-1">
+                  Business Workspace
+                </label>
+                <select
+                  required
+                  value={organizationId}
+                  onChange={(e) => {
+                    setOrganizationId(e.target.value);
+                    setError("");
+                  }}
+                  className="w-full bg-slate-950/70 border border-slate-800 text-white px-3.5 py-3 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                >
+                  <option value="">Choose a workspace</option>
+                  {workspaces.map((workspace) => (
+                    <option key={workspace.id} value={workspace.id}>{workspace.name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
 
             <button
               type="submit"

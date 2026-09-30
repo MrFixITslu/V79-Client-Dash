@@ -9,6 +9,7 @@ import crypto from "crypto";
 import { signPlatformRequest, verifyPlatformRequest } from "./server/platform-contract.mjs";
 import { migrateLegacyOrganization } from "./server/organization-store.mjs";
 import { activeMembership, activeMembershipsForUser, enabledAppIds, organizationCanAccessApp, organizationCanMutateApp, sessionRole, validLegacyLaunch, visibleEcosystemApps } from "./server/organization-access.mjs";
+import { acceptInvitationState, invitationStatus } from "./server/onboarding-store.mjs";
 import { hasOwnerAssistantAccess, normalizeEmail } from "./server/agent-access.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -76,6 +77,42 @@ interface AppEntitlement {
   createdAt: string;
 }
 
+interface OwnerInvitation {
+  id: string;
+  organizationId: string;
+  organizationName: string;
+  organizationSlug: string;
+  email: string;
+  appIds: string[];
+  tokenHash: string;
+  status: "pending" | "accepted" | "revoked";
+  expiresAt: string;
+  createdAt: string;
+  createdByUserId: string;
+  acceptedAt?: string;
+  acceptedUserId?: string;
+  revokedAt?: string;
+  revokedByUserId?: string;
+}
+
+interface AppTenantMapping {
+  organizationId: string;
+  appId: string;
+  status: "pending" | "active" | "disabled";
+  externalTenantId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface AuditEvent {
+  id: string;
+  organizationId?: string;
+  actorUserId?: string;
+  type: string;
+  createdAt: string;
+  details: Record<string, unknown>;
+}
+
 interface EcosystemApp {
   id: string;
   name: string;
@@ -114,6 +151,9 @@ interface AppStore {
   organizations: Organization[];
   memberships: Membership[];
   appEntitlements: AppEntitlement[];
+  ownerInvitations: OwnerInvitation[];
+  appTenantMappings: AppTenantMapping[];
+  auditEvents: AuditEvent[];
 }
 
 // Initial Seed Data
@@ -461,7 +501,10 @@ function loadStore(): AppStore {
         : "";
       if ((parsed.organizations !== undefined && !Array.isArray(parsed.organizations)) ||
           (parsed.memberships !== undefined && !Array.isArray(parsed.memberships)) ||
-          (parsed.appEntitlements !== undefined && !Array.isArray(parsed.appEntitlements))) {
+          (parsed.appEntitlements !== undefined && !Array.isArray(parsed.appEntitlements)) ||
+          (parsed.ownerInvitations !== undefined && !Array.isArray(parsed.ownerInvitations)) ||
+          (parsed.appTenantMappings !== undefined && !Array.isArray(parsed.appTenantMappings)) ||
+          (parsed.auditEvents !== undefined && !Array.isArray(parsed.auditEvents))) {
         throw new Error("Organization records are malformed.");
       }
 
@@ -474,6 +517,9 @@ function loadStore(): AppStore {
         organizations: Array.isArray(parsed.organizations) ? parsed.organizations : [],
         memberships: Array.isArray(parsed.memberships) ? parsed.memberships : [],
         appEntitlements: Array.isArray(parsed.appEntitlements) ? parsed.appEntitlements : [],
+        ownerInvitations: Array.isArray(parsed.ownerInvitations) ? parsed.ownerInvitations : [],
+        appTenantMappings: Array.isArray(parsed.appTenantMappings) ? parsed.appTenantMappings : [],
+        auditEvents: Array.isArray(parsed.auditEvents) ? parsed.auditEvents : [],
       };
     }
   } catch (err) {
@@ -487,6 +533,9 @@ function loadStore(): AppStore {
     organizations: [],
     memberships: [],
     appEntitlements: [],
+    ownerInvitations: [],
+    appTenantMappings: [],
+    auditEvents: [],
   };
   saveStore(initialStore);
   return initialStore;
@@ -511,6 +560,9 @@ function saveStore(store: AppStore): void {
     organizations: store.organizations,
     memberships: store.memberships,
     appEntitlements: store.appEntitlements,
+    ownerInvitations: store.ownerInvitations,
+    appTenantMappings: store.appTenantMappings,
+    auditEvents: store.auditEvents,
   };
   const tempFile = STORE_FILE + ".tmp";
   fs.writeFileSync(tempFile, JSON.stringify(persisted, null, 2), { encoding: "utf-8", mode: 0o600 });
@@ -520,6 +572,15 @@ function saveStore(store: AppStore): void {
 
 // In-Memory store synchronized with disk
 let store = loadStore();
+
+function commitStore(nextStore: AppStore) {
+  saveStore(nextStore);
+  store = nextStore;
+}
+
+function cloneStore() {
+  return structuredClone(store) as AppStore;
+}
 
 const knownDemoPasswords = new Set(["password123", "manager123", "viewer123"]);
 function hashPassword(password: string) {
@@ -568,6 +629,7 @@ if (usersChanged) saveStore(store);
 // In-Memory Active Auth Sessions: token -> userId
 const sessions = new Map<string, { userId: string; organizationId: string; username: string; role: string; expiresAt: number }>();
 const loginAttempts = new Map<string, { count: number; until: number }>();
+const inviteAttempts = new Map<string, { count: number; until: number }>();
 
 function sessionFromToken(token: string) {
   const session = sessions.get(token);
@@ -660,6 +722,7 @@ const launchTickets = new Map<string, { userId: string; tenantId: string; produc
 function pruneAuthState(now = Date.now()) {
   for (const [token, session] of sessions) if (session.expiresAt <= now) sessions.delete(token);
   for (const [key, attempt] of loginAttempts) if (attempt.until <= now) loginAttempts.delete(key);
+  for (const [key, attempt] of inviteAttempts) if (attempt.until <= now) inviteAttempts.delete(key);
   for (const [ticket, entry] of launchTickets) if (entry.expiresAt <= now) launchTickets.delete(ticket);
 }
 const authCleanup = setInterval(pruneAuthState, 60_000);
@@ -807,6 +870,148 @@ function sanitizeUserForOrganization(u: StoredUser, organizationId: string) {
   };
 }
 
+const customerAssignableAppIds = ["app-v79pos", "app-ffpro", "app-tiquet", "app-marketing", "app-academy"];
+const tenantMappedAppIds = new Set(["app-v79pos", "app-ffpro", "app-tiquet", "app-marketing"]);
+
+function validEmail(value: unknown) {
+  const email = normalizeEmail(value);
+  return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) ? email : "";
+}
+
+function validBusinessName(value: unknown) {
+  if (typeof value !== "string") return "";
+  const name = value.trim().replace(/\s+/g, " ");
+  return name.length >= 2 && name.length <= 120 ? name : "";
+}
+
+function organizationSlug(name: string, currentStore: AppStore) {
+  const base = name.normalize("NFKD").toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48) || "business";
+  let slug = base;
+  let attempt = 2;
+  while (currentStore.organizations.some(org => org.slug === slug) ||
+         currentStore.ownerInvitations.some(invite => invite.status === "pending" && invite.organizationSlug === slug)) {
+    slug = `${base.slice(0, 42)}-${attempt++}`;
+  }
+  return slug;
+}
+
+function inviteHash(token: string) {
+  return crypto.createHash("sha256").update(token).digest("hex");
+}
+
+function inviteTokenFromRequest(req: Request) {
+  const token = String(req.get("x-v79-invite-token") || "");
+  return /^[A-Za-z0-9_-]{40,180}$/.test(token) ? token : "";
+}
+
+function maskEmail(email: string) {
+  const at = email.indexOf("@");
+  if (at < 1) return "";
+  const local = email.slice(0, at);
+  const domain = email.slice(at + 1);
+  const visible = local.slice(0, Math.min(2, local.length));
+  return `${visible}***@${domain}`;
+}
+
+function onboardingAudit(nextStore: AppStore, type: string, details: Record<string, unknown>, actorUserId?: string, organizationId?: string) {
+  nextStore.auditEvents.push({
+    id: crypto.randomUUID(),
+    type,
+    details,
+    actorUserId,
+    organizationId,
+    createdAt: new Date().toISOString(),
+  });
+  if (nextStore.auditEvents.length > 5000) nextStore.auditEvents = nextStore.auditEvents.slice(-5000);
+}
+
+function sameOriginMutation(req: Request) {
+  try {
+    const expectedOrigin = process.env.APP_URL
+      ? new URL(process.env.APP_URL).origin
+      : `${req.protocol}://${req.get("host")}`;
+    return req.get("origin") === expectedOrigin;
+  } catch {
+    return false;
+  }
+}
+
+function createHubSession(userId: string, organizationId: string) {
+  const user = store.users.find(item => item.id === userId);
+  const membership = activeMembership(store, userId, organizationId);
+  if (!user || !membership) throw new Error("Unable to create Hub session.");
+  pruneAuthState();
+  const token = "v79_tok_" + crypto.randomBytes(24).toString("hex");
+  if (sessions.size >= 5_000) {
+    const oldest = sessions.keys().next().value;
+    if (oldest !== undefined) sessions.delete(oldest);
+  }
+  sessions.set(token, {
+    userId,
+    organizationId,
+    username: user.username,
+    role: sessionRole(membership)!,
+    expiresAt: Date.now() + 12 * 60 * 60 * 1000,
+  });
+  return token;
+}
+
+function completeInvitationAcceptance(
+  invitation: OwnerInvitation,
+  existingUser: StoredUser | undefined,
+  fullName: string,
+  password: string,
+  attemptKey: string,
+  res: Response,
+) {
+  if (store.organizations.some(org => org.id === invitation.organizationId)) {
+    return res.status(409).json({ error: "This invitation needs manual review before it can be completed" });
+  }
+
+  const now = new Date().toISOString();
+  const newUser = existingUser ? undefined : {
+    id: crypto.randomUUID(),
+    username: invitation.email,
+    email: invitation.email,
+    password: hashPassword(password),
+    fullName,
+    role: "admin" as const,
+    permissions: normalizePermissions([], "admin"),
+  };
+
+  let transition;
+  try {
+    transition = acceptInvitationState(store, invitation.id, {
+      existingUserId: existingUser?.id,
+      newUser,
+      ownerPermissions: normalizePermissions([], "admin"),
+      tenantMappedAppIds: [...tenantMappedAppIds],
+      auditId: crypto.randomUUID(),
+      now,
+    });
+  } catch (error) {
+    console.error("Invitation acceptance state transition failed", error);
+    return res.status(409).json({ error: "This invitation needs manual review before it can be completed" });
+  }
+
+  commitStore(transition.nextStore);
+  inviteAttempts.delete(attemptKey);
+  const user = store.users.find(item => item.id === transition.userId)!;
+  const sessionToken = createHubSession(user.id, transition.organizationId);
+  const organization = store.organizations.find(org => org.id === transition.organizationId)!;
+  res.setHeader("Set-Cookie", sessionCookie(sessionToken, 12 * 60 * 60));
+  res.setHeader("Cache-Control", "no-store");
+  return res.status(201).json({
+    user: { ...sanitizeUserForOrganization(user, transition.organizationId), platformOperator: false, ownerAgent: false },
+    organization,
+    onboarding: {
+      appIds: transition.appIds,
+      productSetupPending: transition.appIds.filter((appId: string) => tenantMappedAppIds.has(appId)),
+    },
+  });
+}
+
 // ==========================================
 // AUTHENTICATION ROUTES
 // ==========================================
@@ -884,6 +1089,78 @@ app.post("/api/auth/login", (req, res) => {
   });
 });
 
+app.post("/api/auth/register", (_req, res) => {
+  res.status(403).json({ error: "Registration is invite-only. Ask V79 Digital for an owner invitation." });
+});
+
+app.get("/api/onboarding/invitation", (req, res) => {
+  const token = inviteTokenFromRequest(req);
+  if (!token) return res.status(404).json({ error: "Invitation unavailable" });
+  const invitation = store.ownerInvitations.find(item => item.tokenHash === inviteHash(token));
+  if (!invitation) return res.status(404).json({ error: "Invitation unavailable" });
+  const status = invitationStatus(invitation);
+  res.setHeader("Cache-Control", "no-store");
+  if (status !== "pending") return res.status(410).json({ error: "Invitation is no longer available", status });
+  res.json({
+    organizationName: invitation.organizationName,
+    organizationSlug: invitation.organizationSlug,
+    email: maskEmail(invitation.email),
+    expiresAt: invitation.expiresAt,
+    appIds: invitation.appIds,
+  });
+});
+
+app.post("/api/onboarding/invitation/accept", (req, res) => {
+  if (!sameOriginMutation(req)) return res.status(403).json({ error: "Invalid request origin" });
+  const token = inviteTokenFromRequest(req);
+  if (!token) return res.status(404).json({ error: "Invitation unavailable" });
+  const tokenHash = inviteHash(token);
+  const attemptKey = `${req.ip}:${tokenHash.slice(0, 20)}`;
+  const attempts = inviteAttempts.get(attemptKey);
+  if (attempts && attempts.count >= 10 && attempts.until > Date.now()) {
+    return res.status(429).json({ error: "Too many invitation attempts. Try again later." });
+  }
+
+  const invitation = store.ownerInvitations.find(item => item.tokenHash === tokenHash);
+  if (!invitation) return res.status(404).json({ error: "Invitation unavailable" });
+  const status = invitationStatus(invitation);
+  if (status !== "pending") {
+    if (status === "expired" && invitation.status === "pending") {
+      const nextStore = cloneStore();
+      const expired = nextStore.ownerInvitations.find(item => item.id === invitation.id)!;
+      expired.status = "revoked";
+      expired.revokedAt = new Date().toISOString();
+      onboardingAudit(nextStore, "owner_invitation_expired", { invitationId: expired.id, email: expired.email }, undefined, expired.organizationId);
+      commitStore(nextStore);
+    }
+    return res.status(410).json({ error: "Invitation is no longer available", status });
+  }
+
+  const fullName = typeof req.body?.fullName === "string" ? req.body.fullName.trim() : "";
+  const password = typeof req.body?.password === "string" ? req.body.password : "";
+  if (!fullName || fullName.length > 120 || password.length < 12 || password.length > 1024) {
+    return res.status(400).json({ error: "Full name and a password of at least 12 characters are required" });
+  }
+
+  const existingUser = store.users.find(user =>
+    normalizeEmail(user.email) === invitation.email || user.username.toLowerCase() === invitation.email
+  );
+  if (existingUser) {
+    if (normalizeEmail(existingUser.email) && normalizeEmail(existingUser.email) !== invitation.email) {
+      return res.status(409).json({ error: "This email conflicts with an existing Hub identity" });
+    }
+    if (!checkPassword(password, existingUser.password)) {
+      inviteAttempts.set(attemptKey, {
+        count: (attempts?.until && attempts.until > Date.now() ? attempts.count : 0) + 1,
+        until: Date.now() + 15 * 60_000,
+      });
+      return res.status(401).json({ error: "Use the password for the existing Hub account linked to this email" });
+    }
+  }
+
+  return completeInvitationAcceptance(invitation, existingUser, fullName, password, attemptKey, res);
+});
+
 app.get("/api/auth/me", requireAuth, (req, res) => {
   const session = (req as any).user;
   const user = store.users.find((u) => u.id === session.userId);
@@ -904,6 +1181,130 @@ app.post("/api/auth/logout", requireAuth, (req, res) => {
 
 
 app.use("/api", requireAuth);
+
+app.get("/api/admin/onboarding/invitations", requirePlatformOperator, (_req, res) => {
+  const invitations = [...store.ownerInvitations]
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .map(invitation => ({
+      id: invitation.id,
+      organizationId: invitation.organizationId,
+      organizationName: invitation.organizationName,
+      organizationSlug: invitation.organizationSlug,
+      email: invitation.email,
+      appIds: invitation.appIds,
+      status: invitationStatus(invitation),
+      expiresAt: invitation.expiresAt,
+      createdAt: invitation.createdAt,
+      acceptedAt: invitation.acceptedAt || null,
+      revokedAt: invitation.revokedAt || null,
+    }));
+  const assignableApps = customerAssignableAppIds
+    .map(appId => store.ecosystemApps.find(app => app.id === appId))
+    .filter((app): app is EcosystemApp => Boolean(app))
+    .map(app => ({ id: app.id, name: app.name, shortName: app.shortName }));
+  const audit = store.auditEvents
+    .filter(event => event.type.startsWith("owner_invitation_"))
+    .slice(-50)
+    .reverse();
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ invitations, assignableApps, audit });
+});
+
+app.post("/api/admin/onboarding/invitations", requirePlatformOperator, (req, res) => {
+  const email = validEmail(req.body?.email);
+  const organizationName = validBusinessName(req.body?.organizationName);
+  const expiresInHours = Number(req.body?.expiresInHours ?? 72);
+  const requestedApps = req.body?.appIds === undefined ? [] : req.body.appIds;
+  if (!email || !organizationName || !Number.isFinite(expiresInHours) || expiresInHours < 1 || expiresInHours > 168 ||
+      !Array.isArray(requestedApps) || requestedApps.some(appId => typeof appId !== "string" || !customerAssignableAppIds.includes(appId))) {
+    return res.status(400).json({ error: "Valid business, email, app selection and expiry between 1 and 168 hours are required" });
+  }
+
+  const appIds = [...new Set(requestedApps as string[])];
+  const duplicate = store.ownerInvitations.find(invitation =>
+    invitationStatus(invitation) === "pending" &&
+    invitation.email === email &&
+    invitation.organizationName.toLowerCase() === organizationName.toLowerCase()
+  );
+  if (duplicate) return res.status(409).json({ error: "An active invitation already exists for this business and email" });
+
+  let appUrl: URL;
+  try {
+    appUrl = new URL(process.env.APP_URL || "");
+    const loopback = ["127.0.0.1", "localhost", "::1"].includes(appUrl.hostname);
+    if (!["http:", "https:"].includes(appUrl.protocol) ||
+        (process.env.NODE_ENV === "production" && appUrl.protocol !== "https:" && !loopback)) throw new Error("invalid app URL");
+  } catch {
+    return res.status(503).json({ error: "Hub public URL is not configured for invitations" });
+  }
+
+  const session = (req as any).user;
+  const token = crypto.randomBytes(32).toString("base64url");
+  const now = new Date();
+  const invitation: OwnerInvitation = {
+    id: crypto.randomUUID(),
+    organizationId: crypto.randomUUID(),
+    organizationName,
+    organizationSlug: organizationSlug(organizationName, store),
+    email,
+    appIds,
+    tokenHash: inviteHash(token),
+    status: "pending",
+    createdAt: now.toISOString(),
+    expiresAt: new Date(now.getTime() + expiresInHours * 60 * 60 * 1000).toISOString(),
+    createdByUserId: session.userId,
+  };
+
+  const nextStore = cloneStore();
+  nextStore.ownerInvitations.push(invitation);
+  onboardingAudit(nextStore, "owner_invitation_created", {
+    invitationId: invitation.id,
+    email,
+    organizationName,
+    appIds,
+    expiresAt: invitation.expiresAt,
+  }, session.userId, invitation.organizationId);
+  commitStore(nextStore);
+
+  const inviteUrl = new URL("/", appUrl);
+  inviteUrl.hash = `invite=${encodeURIComponent(token)}`;
+  res.setHeader("Cache-Control", "no-store");
+  res.status(201).json({
+    invitation: {
+      id: invitation.id,
+      organizationId: invitation.organizationId,
+      organizationName: invitation.organizationName,
+      organizationSlug: invitation.organizationSlug,
+      email: invitation.email,
+      appIds: invitation.appIds,
+      status: invitation.status,
+      expiresAt: invitation.expiresAt,
+      createdAt: invitation.createdAt,
+    },
+    inviteUrl: inviteUrl.toString(),
+  });
+});
+
+app.post("/api/admin/onboarding/invitations/:id/revoke", requirePlatformOperator, (req, res) => {
+  const id = String(req.params.id || "");
+  const invitation = store.ownerInvitations.find(item => item.id === id);
+  if (!invitation) return res.status(404).json({ error: "Invitation not found" });
+  if (invitation.status !== "pending") return res.status(409).json({ error: "Only pending invitations can be revoked" });
+
+  const session = (req as any).user;
+  const nextStore = cloneStore();
+  const target = nextStore.ownerInvitations.find(item => item.id === id)!;
+  target.status = "revoked";
+  target.revokedAt = new Date().toISOString();
+  target.revokedByUserId = session.userId;
+  onboardingAudit(nextStore, "owner_invitation_revoked", {
+    invitationId: target.id,
+    email: target.email,
+    organizationName: target.organizationName,
+  }, session.userId, target.organizationId);
+  commitStore(nextStore);
+  res.json({ success: true, status: "revoked" });
+});
 
 type DashboardProduct = "pos" | "ffpro" | "tiquet" | "marketing" | "academy" | "lasertag" | "website" | "games";
 const dashboardSources: Record<DashboardProduct, string> = {
@@ -1595,12 +1996,23 @@ app.get("/api/ecosystem/apps", (req, res) => {
   const visibleApps = visibleEcosystemApps(store, organizationId) as EcosystemApp[];
   res.json(visibleApps
     .filter((a: EcosystemApp) => !["app-analytics","app-lifehealth"].includes(a.id))
-    .map((a: EcosystemApp) => ({ ...a, status: "beta", metrics: undefined, lastSync: undefined,
-      description: managedDescriptions[a.id] || a.description,
-      features: managedDescriptions[a.id] ? [] : a.features,
-      ssoSupported: ["app-ffpro","app-tiquet","app-marketing","app-v79pos"].includes(a.id),
-      appUrl: a.id === "app-academy" ? "https://v79academy.v79sl.com/academy" : a.appUrl,
-    })));
+    .map((a: EcosystemApp) => {
+      const tenantMapping = store.appTenantMappings.find(mapping =>
+        mapping.organizationId === organizationId && mapping.appId === a.id
+      );
+      const setupPending = organizationId !== posIdentity.organizationId &&
+        tenantMappedAppIds.has(a.id) && tenantMapping?.status !== "active";
+      return { ...a, status: setupPending ? "syncing" : "beta", metrics: undefined, lastSync: undefined,
+        description: setupPending
+          ? "Your Hub access is active. V79 Digital is completing this product workspace before launch is enabled."
+          : managedDescriptions[a.id] || a.description,
+        features: managedDescriptions[a.id] ? [] : a.features,
+        ssoSupported: ["app-ffpro","app-tiquet","app-marketing","app-v79pos"].includes(a.id) && !setupPending,
+        appUrl: a.id === "app-academy" ? "https://v79academy.v79sl.com/academy" : a.appUrl,
+        launchReady: !setupPending,
+        accessMessage: setupPending ? "Product workspace setup pending" : undefined,
+      };
+    }));
 });
 
 // Update an ecosystem application configuration (e.g. custom URL, status)

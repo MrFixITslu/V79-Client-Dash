@@ -35,4 +35,4 @@ npm run build
 npm test
 ```
 
-The active test suite covers private API access, role and organization boundaries, password recovery, signed single-use launches, service contracts and Owner Assistant access. Older prototype tests for open signup and a removed SQLite owner recovery path are retained in `tests/legacy/` as historical specifications and are excluded from the active suite. Paid checkout and multi-business onboarding remain disabled; see `docs/multi-business-release-gates.md` before enabling either.
+The active test suite covers private API access, role and organization boundaries, invite-only multi-business onboarding, password recovery, signed single-use launches, service contracts and Owner Assistant access. Older prototype tests for open signup and a removed SQLite owner recovery path are retained in `tests/legacy/` as historical specifications and are excluded from the active suite. Paid checkout remains disabled. Multi-business onboarding is invite-only and restricted to the V79 platform operator; managed product workspaces remain launch-disabled until their tenant mappings are activated. See `docs/multi-business-release-gates.md`.

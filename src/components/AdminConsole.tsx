@@ -15,6 +15,7 @@ import { MarketingPlatformAdmin } from "./MarketingPlatformAdmin";
 import { POSPlatformAdmin } from "./POSPlatformAdmin";
 import { FFPROPlatformAdmin } from "./FFPROPlatformAdmin";
 import { PlatformAdminOverview } from "./PlatformAdminOverview";
+import { CustomerOnboardingAdmin } from "./CustomerOnboardingAdmin";
 
 type CourseStatus = "Draft" | "Review" | "Ready for Upload" | "Uploaded" | "Imported" | "Published" | "Archived";
 type PricingType = "free" | "free_trial" | "premium" | "subscription";
@@ -87,7 +88,7 @@ interface AdminConsoleProps {
 }
 
 type AdminSection = "academy" | "platform";
-type PlatformView = "overview" | "pos" | "ffpro" | "tiquet" | "marketing";
+type PlatformView = "overview" | "onboarding" | "pos" | "ffpro" | "tiquet" | "marketing";
 type AcademyView = "courses" | "learners" | "publishing" | "import" | "junior";
 const emptyCourse = (): Partial<Course> => ({
   title: "",
@@ -426,6 +427,7 @@ export function AdminConsole({ ecosystemApps }: AdminConsoleProps) {
           <div className="flex flex-wrap gap-2">
             {[
               ["overview", "Overview"],
+              ["onboarding", "Customer Onboarding"],
               ["pos", "POS"],
               ["ffpro", "FFPRO"],
               ["tiquet", "Tiquet"],
@@ -454,6 +456,8 @@ export function AdminConsole({ ecosystemApps }: AdminConsoleProps) {
                 setPlatformView(product);
               }
             }} />
+          ) : platformView === "onboarding" ? (
+            <CustomerOnboardingAdmin />
           ) : platformView === "pos" ? (
             <POSPlatformAdmin />
           ) : platformView === "ffpro" ? (

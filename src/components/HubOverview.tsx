@@ -305,14 +305,16 @@ export function HubOverview({ ecosystemApps, onNavigate }: HubOverviewProps) {
               value: summary?.status === "ok" ? metric.value : "—",
             }));
             const managed = isManagedHubApp(app, card.fallback);
+            const launchUrl = appLaunchUrl(app, card.fallback);
             const Icon = card.icon;
             return (
               <a
                 key={card.key}
-                href={appLaunchUrl(app, card.fallback) || card.fallback}
-                target={managed ? undefined : "_blank"}
-                rel={managed ? undefined : "noopener noreferrer"}
-                className="bg-white border border-slate-200 rounded-2xl p-5 hover:border-cyan-300 hover:shadow-md transition-all no-underline text-inherit group"
+                href={launchUrl || undefined}
+                aria-disabled={!launchUrl}
+                target={launchUrl && !managed ? "_blank" : undefined}
+                rel={launchUrl && !managed ? "noopener noreferrer" : undefined}
+                className={`bg-white border border-slate-200 rounded-2xl p-5 transition-all no-underline text-inherit group ${launchUrl ? "hover:border-cyan-300 hover:shadow-md" : "cursor-not-allowed opacity-75"}`}
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex items-center gap-3">
@@ -342,7 +344,7 @@ export function HubOverview({ ecosystemApps, onNavigate }: HubOverviewProps) {
                     {summary?.generatedAt ? `Updated ${new Date(summary.generatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "Awaiting live data"}
                   </span>
                   <span className="inline-flex items-center gap-1 text-xs font-semibold text-slate-800 group-hover:text-cyan-700">
-                    Open <ArrowUpRight className="w-3.5 h-3.5" />
+                    {launchUrl ? <>Open <ArrowUpRight className="w-3.5 h-3.5" /></> : (app?.accessMessage || "Setup pending")}
                   </span>
                 </div>
               </a>
@@ -365,20 +367,27 @@ export function HubOverview({ ecosystemApps, onNavigate }: HubOverviewProps) {
           const card = appCards.find((item) => item.key === action.key)!;
           const app = appFor(card.id, card.shortName);
           const managed = isManagedHubApp(app, card.fallback);
+          const launchUrl = appLaunchUrl(app, card.fallback);
           return (
             <div key={action.title} className="bg-slate-50 border border-slate-200 rounded-xl p-4 flex items-start justify-between gap-4">
               <div>
                 <h4 className="text-xs font-bold text-slate-900">{action.title}</h4>
                 <p className="text-xs text-slate-600 mt-1">{action.detail}</p>
               </div>
-              <a
-                href={appLaunchUrl(app, card.fallback) || card.fallback}
-                target={managed ? undefined : "_blank"}
-                rel={managed ? undefined : "noopener noreferrer"}
-                className="text-xs font-semibold text-cyan-700 whitespace-nowrap"
-              >
-                Open <ArrowUpRight className="inline w-3.5 h-3.5" />
-              </a>
+              {launchUrl ? (
+                <a
+                  href={launchUrl}
+                  target={managed ? undefined : "_blank"}
+                  rel={managed ? undefined : "noopener noreferrer"}
+                  className="text-xs font-semibold text-cyan-700 whitespace-nowrap"
+                >
+                  Open <ArrowUpRight className="inline w-3.5 h-3.5" />
+                </a>
+              ) : (
+                <span className="text-xs font-semibold text-amber-700 whitespace-nowrap">
+                  {app?.accessMessage || "Setup pending"}
+                </span>
+              )}
             </div>
           );
         }) : (
