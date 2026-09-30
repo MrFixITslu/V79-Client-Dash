@@ -8,7 +8,7 @@ import { checkApproval, type ActionRisk } from "./policy.js";
 import { isValidOwnerContext, type AgentContext } from "./context.js";
 import { agentModelRuntime } from "./model-runtime.js";
 import { readBusinessSnapshot } from "./tools.js";
-import { compactOwnerSnapshot, formatPriorityBrief, isPriorityBriefRequest } from "./grounding.js";
+import { compactOwnerSnapshot, deterministicFactAnswer, formatPriorityBrief, isPriorityBriefRequest } from "./grounding.js";
 import { runOllamaOwnerAssistant } from "./ollama-native.js";
 
 const app = express();
@@ -124,6 +124,18 @@ app.post("/api/agent/chat", async (req, res) => {
           modelProvider: "ollama",
           model: agentModelRuntime.model,
           responseMode: "deterministic-priority",
+        });
+      }
+      const factual = deterministicFactAnswer(message, grounding as ReturnType<typeof compactOwnerSnapshot>);
+      if (factual) {
+        return res.json({
+          output: factual.output,
+          specialist: "Vision79 Owner Assistant Local",
+          mode: "read-only",
+          modelProvider: "ollama",
+          model: agentModelRuntime.model,
+          responseMode: "deterministic-facts",
+          domain: factual.domain,
         });
       }
       const result = await runOllamaOwnerAssistant(groundedMessage);
