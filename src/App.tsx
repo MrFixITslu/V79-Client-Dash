@@ -8,6 +8,7 @@ import { ViewState, User, EcosystemApp } from "./types";
 import { Sidebar } from "./components/Sidebar";
 import { Login } from "./components/Login";
 import { InviteAcceptance } from "./components/InviteAcceptance";
+import { TeamInviteAcceptance } from "./components/TeamInviteAcceptance";
 import { UserManagement } from "./components/UserManagement";
 import { AppSwitcher } from "./components/AppSwitcher";
 import { HubOverview } from "./components/HubOverview";
@@ -20,7 +21,10 @@ import { OwnerAssistant } from "./components/OwnerAssistant";
 import { CheckCircle2, AlertCircle, RotateCw } from "lucide-react";
 
 export default function App() {
-  const inviteToken = new URLSearchParams(window.location.hash.replace(/^#/, "")).get("invite") || new URLSearchParams(window.location.search).get("invite") || "";
+  const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+  const searchParams = new URLSearchParams(window.location.search);
+  const inviteToken = hashParams.get("invite") || searchParams.get("invite") || "";
+  const teamInviteToken = hashParams.get("teamInvite") || searchParams.get("teamInvite") || "";
   const [authToken, setAuthToken] = useState<string | null>(null);
   const [user, setUser] = useState<User | null>(null);
   const [isVerifyingSession, setIsVerifyingSession] = useState(true);
@@ -48,7 +52,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (inviteToken) {
+    if (inviteToken || teamInviteToken) {
       setIsVerifyingSession(false);
       return;
     }
@@ -69,22 +73,23 @@ export default function App() {
       }
     };
     verifySession();
-  }, [authToken, inviteToken]);
+  }, [authToken, inviteToken, teamInviteToken]);
 
   const fetchHubData = useCallback(async () => {
     try {
       const ecoRes = await fetch("/api/ecosystem/apps", { cache: "no-store" });
       if (ecoRes.ok) setEcosystemApps(await ecoRes.json());
-      if (user?.role === "admin") {
+      if (user?.permissions?.includes("team")) {
         const usersRes = await fetch("/api/users", { cache: "no-store" });
         if (usersRes.ok) setUsers(await usersRes.json());
+        else setUsers([]);
       } else {
         setUsers([]);
       }
     } catch (err) {
       console.error("Error fetching Hub state:", err);
     }
-  }, [user?.role]);
+  }, [user?.permissions]);
 
   useEffect(() => {
     if (user) fetchHubData();
@@ -102,7 +107,7 @@ export default function App() {
       socket.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data);
-          if (msg.type === "USERS_UPDATED" && user.role === "admin") setUsers(msg.payload);
+          if (msg.type === "USERS_UPDATED" && user.permissions?.includes("team")) setUsers(msg.payload);
           if (msg.type === "ECOSYSTEM_APPS_UPDATED") setEcosystemApps(msg.apps);
         } catch (err) {
           console.error("WS parse error", err);
@@ -169,6 +174,22 @@ export default function App() {
     await fetchHubData();
   };
 
+  if (teamInviteToken) {
+    return (
+      <TeamInviteAcceptance
+        token={teamInviteToken}
+        onAccepted={(acceptedUser) => {
+          const params = new URLSearchParams(window.location.search);
+          params.delete("teamInvite");
+          const query = params.toString();
+          window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
+          handleLoginSuccess(acceptedUser, "cookie");
+        }}
+        onCancel={() => window.location.assign("/")}
+      />
+    );
+  }
+
   if (inviteToken) {
     return (
       <InviteAcceptance
@@ -199,6 +220,11 @@ export default function App() {
   if (!user) return <Login onLoginSuccess={handleLoginSuccess} />;
 
   const isAdmin = user.platformOperator === true;
+  const canView = (view: ViewState) =>
+    view === "overview" ||
+    view === "dashboard" ||
+    (view === "admin" ? isAdmin : view === "assistant" ? user.ownerAgent === true : Boolean(user.permissions?.includes(view)));
+
   const viewLabel: Record<string, string> = {
     overview: "Business Pulse",
     dashboard: "Business Pulse",
@@ -281,7 +307,7 @@ export default function App() {
           <HubOverview ecosystemApps={ecosystemApps} onNavigate={setCurrentView} />
         )}
 
-        {currentView === "connections" && (
+        {currentView === "connections" && canView("connections") && (
           <WorkspaceConnections
             apps={ecosystemApps}
             onNavigate={setCurrentView}
@@ -289,7 +315,7 @@ export default function App() {
           />
         )}
 
-        {currentView === "team" && (
+        {currentView === "team" && canView("team") && (
           <WorkspaceTeam
             users={users}
             currentUser={user}
@@ -300,10 +326,10 @@ export default function App() {
           />
         )}
 
-        {currentView === "security" && <WorkspaceSecurity onNavigate={setCurrentView} />}
-        {currentView === "billing" && <WorkspaceBilling onNavigate={setCurrentView} />}
-        {currentView === "admin" && isAdmin && <AdminConsole ecosystemApps={ecosystemApps} />}
-        {currentView === "assistant" && user.ownerAgent === true && <OwnerAssistant />}
+        {currentView === "security" && canView("security") && <WorkspaceSecurity onNavigate={setCurrentView} />}
+        {currentView === "billing" && canView("billing") && <WorkspaceBilling onNavigate={setCurrentView} />}
+        {currentView === "admin" && canView("admin") && <AdminConsole ecosystemApps={ecosystemApps} />}
+        {currentView === "assistant" && canView("assistant") && <OwnerAssistant />}
 
         {currentView === "users" && isAdmin && (
           <UserManagement

@@ -18,6 +18,7 @@ export interface User {
   role: UserRole;
   platformOperator?: boolean;
   ownerAgent?: boolean;
+  workspaceOwner?: boolean;
   email?: string;
   permissions?: ViewState[];
   lastLogin?: string;

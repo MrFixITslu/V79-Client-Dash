@@ -10,6 +10,7 @@ import { signPlatformRequest, verifyPlatformRequest } from "./server/platform-co
 import { migrateLegacyOrganization } from "./server/organization-store.mjs";
 import { activeMembership, activeMembershipsForUser, enabledAppIds, organizationCanAccessApp, organizationCanMutateApp, sessionRole, validLegacyLaunch, visibleEcosystemApps } from "./server/organization-access.mjs";
 import { acceptInvitationState, invitationStatus } from "./server/onboarding-store.mjs";
+import { acceptTeamInvitationState, teamInvitationStatus } from "./server/team-invitation-store.mjs";
 import { hasOwnerAssistantAccess, normalizeEmail } from "./server/agent-access.mjs";
 import { activatePosTenantMapping, posProvisioningTarget, posTenantLaunchReady, posTenantMapping } from "./server/pos-provisioning.mjs";
 import { activateFfproTenantMapping, ffproProvisioningTarget, ffproTenantLaunchReady, ffproTenantMapping } from "./server/ffpro-provisioning.mjs";
@@ -99,6 +100,23 @@ interface OwnerInvitation {
   revokedByUserId?: string;
 }
 
+interface TeamInvitation {
+  id: string;
+  organizationId: string;
+  email: string;
+  role: "manager" | "staff" | "viewer";
+  permissions: string[];
+  tokenHash: string;
+  status: "pending" | "accepted" | "revoked";
+  expiresAt: string;
+  createdAt: string;
+  createdByUserId: string;
+  acceptedAt?: string;
+  acceptedUserId?: string;
+  revokedAt?: string;
+  revokedByUserId?: string;
+}
+
 interface AppTenantMapping {
   organizationId: string;
   appId: string;
@@ -157,6 +175,7 @@ interface AppStore {
   memberships: Membership[];
   appEntitlements: AppEntitlement[];
   ownerInvitations: OwnerInvitation[];
+  teamInvitations: TeamInvitation[];
   appTenantMappings: AppTenantMapping[];
   auditEvents: AuditEvent[];
 }
@@ -508,6 +527,7 @@ function loadStore(): AppStore {
           (parsed.memberships !== undefined && !Array.isArray(parsed.memberships)) ||
           (parsed.appEntitlements !== undefined && !Array.isArray(parsed.appEntitlements)) ||
           (parsed.ownerInvitations !== undefined && !Array.isArray(parsed.ownerInvitations)) ||
+          (parsed.teamInvitations !== undefined && !Array.isArray(parsed.teamInvitations)) ||
           (parsed.appTenantMappings !== undefined && !Array.isArray(parsed.appTenantMappings)) ||
           (parsed.auditEvents !== undefined && !Array.isArray(parsed.auditEvents))) {
         throw new Error("Organization records are malformed.");
@@ -523,6 +543,7 @@ function loadStore(): AppStore {
         memberships: Array.isArray(parsed.memberships) ? parsed.memberships : [],
         appEntitlements: Array.isArray(parsed.appEntitlements) ? parsed.appEntitlements : [],
         ownerInvitations: Array.isArray(parsed.ownerInvitations) ? parsed.ownerInvitations : [],
+        teamInvitations: Array.isArray(parsed.teamInvitations) ? parsed.teamInvitations : [],
         appTenantMappings: Array.isArray(parsed.appTenantMappings) ? parsed.appTenantMappings : [],
         auditEvents: Array.isArray(parsed.auditEvents) ? parsed.auditEvents : [],
       };
@@ -539,6 +560,7 @@ function loadStore(): AppStore {
     memberships: [],
     appEntitlements: [],
     ownerInvitations: [],
+    teamInvitations: [],
     appTenantMappings: [],
     auditEvents: [],
   };
@@ -566,6 +588,7 @@ function saveStore(store: AppStore): void {
     memberships: store.memberships,
     appEntitlements: store.appEntitlements,
     ownerInvitations: store.ownerInvitations,
+    teamInvitations: store.teamInvitations,
     appTenantMappings: store.appTenantMappings,
     auditEvents: store.auditEvents,
   };
@@ -1065,7 +1088,7 @@ function broadcast(organizationId: string, data: any, sender?: WebSocket) {
     if (!session) { client.close(1008, "Session expired"); return; }
     if (client.readyState !== WebSocket.OPEN || client === sender ||
         session.organizationId !== organizationId ||
-        (data.type === "USERS_UPDATED" && session.role !== "admin")) return;
+        (data.type === "USERS_UPDATED" && !hasHubPermission(session.userId, organizationId, "team"))) return;
     const payload = data.type === "USERS_UPDATED"
       ? { ...data, payload: store.users.map(user => sanitizeUserForOrganization(user, organizationId)).filter(Boolean) }
       : data.type === "ECOSYSTEM_APPS_UPDATED"
@@ -1120,16 +1143,43 @@ function requireRole(...roles: StoredUser["role"][]) {
   };
 }
 
-const allowedHubPermissions = new Set(["overview", "connections", "team", "security", "billing", "admin", "users"]);
+function requireWorkspaceOwner(req: Request, res: Response, next: () => void) {
+  const session = (req as any).user;
+  if (activeMembership(store, session.userId, session.organizationId)?.role !== "owner") {
+    return res.status(403).json({ error: "Workspace owner access required" });
+  }
+  next();
+}
+
+const rolePermissionDefaults: Record<StoredUser["role"], string[]> = {
+  admin: ["overview", "connections", "team", "security", "billing", "admin", "users"],
+  manager: ["overview", "connections", "team", "security", "billing"],
+  staff: ["overview", "connections"],
+  viewer: ["overview"],
+};
 function normalizePermissions(value: unknown, role: StoredUser["role"]) {
+  const allowedForRole = new Set(rolePermissionDefaults[role]);
   const requested = Array.isArray(value)
-    ? value.filter(permission => typeof permission === "string" && allowedHubPermissions.has(permission))
+    ? value.filter(permission => typeof permission === "string" && allowedForRole.has(permission))
     : [];
   if (requested.length > 0) return [...new Set(requested)];
-  if (role === "admin") return ["overview", "connections", "team", "security", "billing", "admin", "users"];
-  if (role === "manager") return ["overview", "connections", "team", "security", "billing"];
-  if (role === "staff") return ["overview", "connections"];
-  return ["overview"];
+  return [...rolePermissionDefaults[role]];
+}
+function hasHubPermission(userId: string, organizationId: string, permission: string) {
+  const user = store.users.find(item => item.id === userId);
+  const membership = activeMembership(store, userId, organizationId);
+  if (!user || !membership) return false;
+  const role = sessionRole(membership) as StoredUser["role"];
+  return normalizePermissions(membership.permissions ?? user.permissions, role).includes(permission);
+}
+function requirePermission(permission: string) {
+  return (req: Request, res: Response, next: () => void) => {
+    const session = (req as any).user;
+    if (!hasHubPermission(session.userId, session.organizationId, permission)) {
+      return res.status(403).json({ error: "Permission denied" });
+    }
+    next();
+  };
 }
 function sanitizeUser(u: StoredUser) {
   const { password, ...safeUser } = u;
@@ -1142,6 +1192,7 @@ function sanitizeUserForOrganization(u: StoredUser, organizationId: string) {
   return {
     ...sanitizeUser(u),
     role,
+    workspaceOwner: membership.role === "owner",
     permissions: normalizePermissions(membership.permissions ?? u.permissions, role),
   };
 }
@@ -1178,6 +1229,11 @@ function inviteHash(token: string) {
 
 function inviteTokenFromRequest(req: Request) {
   const token = String(req.get("x-v79-invite-token") || "");
+  return /^[A-Za-z0-9_-]{40,180}$/.test(token) ? token : "";
+}
+
+function teamInviteTokenFromRequest(req: Request) {
+  const token = String(req.get("x-v79-team-invite-token") || "");
   return /^[A-Za-z0-9_-]{40,180}$/.test(token) ? token : "";
 }
 
@@ -1284,6 +1340,56 @@ function completeInvitationAcceptance(
     onboarding: {
       appIds: transition.appIds,
       productSetupPending: transition.appIds.filter((appId: string) => tenantMappedAppIds.has(appId)),
+    },
+  });
+}
+
+function completeTeamInvitationAcceptance(
+  invitation: TeamInvitation,
+  existingUser: StoredUser | undefined,
+  fullName: string,
+  password: string,
+  attemptKey: string,
+  res: Response,
+) {
+  const now = new Date().toISOString();
+  const newUser = existingUser ? undefined : {
+    id: crypto.randomUUID(),
+    username: invitation.email,
+    email: invitation.email,
+    password: hashPassword(password),
+    fullName,
+    role: invitation.role,
+    permissions: [...invitation.permissions],
+  };
+
+  let transition;
+  try {
+    transition = acceptTeamInvitationState(store, invitation.id, {
+      existingUserId: existingUser?.id,
+      newUser,
+      auditId: crypto.randomUUID(),
+      now,
+    });
+  } catch (error) {
+    console.error("Team invitation acceptance state transition failed", error);
+    return res.status(409).json({ error: "This team invitation needs manual review before it can be completed" });
+  }
+
+  commitStore(transition.nextStore as AppStore);
+  inviteAttempts.delete(attemptKey);
+  const user = store.users.find(item => item.id === transition.userId)!;
+  const sessionToken = createHubSession(user.id, transition.organizationId);
+  const organization = store.organizations.find(org => org.id === transition.organizationId)!;
+  res.setHeader("Set-Cookie", sessionCookie(sessionToken, 12 * 60 * 60));
+  res.setHeader("Cache-Control", "no-store");
+  return res.status(201).json({
+    user: { ...sanitizeUserForOrganization(user, transition.organizationId), platformOperator: false, ownerAgent: false },
+    organization,
+    teamOnboarding: {
+      role: transition.role,
+      permissions: transition.permissions,
+      managedProductAccess: "owner_only",
     },
   });
 }
@@ -1437,6 +1543,79 @@ app.post("/api/onboarding/invitation/accept", (req, res) => {
   return completeInvitationAcceptance(invitation, existingUser, fullName, password, attemptKey, res);
 });
 
+app.get("/api/team-invitation", (req, res) => {
+  const token = teamInviteTokenFromRequest(req);
+  if (!token) return res.status(404).json({ error: "Team invitation unavailable" });
+  const invitation = store.teamInvitations.find(item => item.tokenHash === inviteHash(token));
+  if (!invitation) return res.status(404).json({ error: "Team invitation unavailable" });
+  const status = teamInvitationStatus(invitation);
+  res.setHeader("Cache-Control", "no-store");
+  if (status !== "pending") return res.status(410).json({ error: "Team invitation is no longer available", status });
+  const organization = store.organizations.find(org => org.id === invitation.organizationId && org.status === "active");
+  if (!organization) return res.status(410).json({ error: "Team invitation is no longer available", status: "organization_unavailable" });
+  res.json({
+    organizationName: organization.name,
+    email: maskEmail(invitation.email),
+    role: invitation.role,
+    permissions: invitation.permissions,
+    expiresAt: invitation.expiresAt,
+  });
+});
+
+app.post("/api/team-invitation/accept", (req, res) => {
+  if (!sameOriginMutation(req)) return res.status(403).json({ error: "Invalid request origin" });
+  const token = teamInviteTokenFromRequest(req);
+  if (!token) return res.status(404).json({ error: "Team invitation unavailable" });
+  const tokenHash = inviteHash(token);
+  const attemptKey = `team:${req.ip}:${tokenHash.slice(0, 20)}`;
+  const attempts = inviteAttempts.get(attemptKey);
+  if (attempts && attempts.count >= 10 && attempts.until > Date.now()) {
+    return res.status(429).json({ error: "Too many invitation attempts. Try again later." });
+  }
+
+  const invitation = store.teamInvitations.find(item => item.tokenHash === tokenHash);
+  if (!invitation) return res.status(404).json({ error: "Team invitation unavailable" });
+  const status = teamInvitationStatus(invitation);
+  if (status !== "pending") {
+    if (status === "expired" && invitation.status === "pending") {
+      const nextStore = cloneStore();
+      const expired = nextStore.teamInvitations.find(item => item.id === invitation.id)!;
+      expired.status = "revoked";
+      expired.revokedAt = new Date().toISOString();
+      onboardingAudit(nextStore, "team_invitation_expired", { invitationId: expired.id, email: expired.email }, undefined, expired.organizationId);
+      commitStore(nextStore);
+    }
+    return res.status(410).json({ error: "Team invitation is no longer available", status });
+  }
+
+  const fullName = typeof req.body?.fullName === "string" ? req.body.fullName.trim() : "";
+  const password = typeof req.body?.password === "string" ? req.body.password : "";
+  if (!fullName || fullName.length > 120 || password.length < 12 || password.length > 1024) {
+    return res.status(400).json({ error: "Full name and a password of at least 12 characters are required" });
+  }
+
+  const existingUser = store.users.find(user =>
+    normalizeEmail(user.email) === invitation.email || user.username.toLowerCase() === invitation.email
+  );
+  if (existingUser) {
+    if (normalizeEmail(existingUser.email) && normalizeEmail(existingUser.email) !== invitation.email) {
+      return res.status(409).json({ error: "This email conflicts with an existing Hub identity" });
+    }
+    if (activeMembership(store, existingUser.id, invitation.organizationId)) {
+      return res.status(409).json({ error: "This account is already a member of the workspace" });
+    }
+    if (!checkPassword(password, existingUser.password)) {
+      inviteAttempts.set(attemptKey, {
+        count: (attempts?.until && attempts.until > Date.now() ? attempts.count : 0) + 1,
+        until: Date.now() + 15 * 60_000,
+      });
+      return res.status(401).json({ error: "Use the password for the existing Hub account linked to this email" });
+    }
+  }
+
+  return completeTeamInvitationAcceptance(invitation, existingUser, fullName, password, attemptKey, res);
+});
+
 app.get("/api/auth/me", requireAuth, (req, res) => {
   const session = (req as any).user;
   const user = store.users.find((u) => u.id === session.userId);
@@ -1457,6 +1636,124 @@ app.post("/api/auth/logout", requireAuth, (req, res) => {
 
 
 app.use("/api", requireAuth);
+
+app.get("/api/team/invitations", requireWorkspaceOwner, (req, res) => {
+  const organizationId = (req as any).user.organizationId;
+  res.setHeader("Cache-Control", "no-store");
+  res.json({
+    invitations: [...store.teamInvitations]
+      .filter(invitation => invitation.organizationId === organizationId)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .map(invitation => ({
+        id: invitation.id,
+        email: invitation.email,
+        role: invitation.role,
+        permissions: invitation.permissions,
+        status: teamInvitationStatus(invitation),
+        expiresAt: invitation.expiresAt,
+        createdAt: invitation.createdAt,
+        acceptedAt: invitation.acceptedAt || null,
+        revokedAt: invitation.revokedAt || null,
+      })),
+  });
+});
+
+app.post("/api/team/invitations", requireWorkspaceOwner, (req, res) => {
+  const session = (req as any).user;
+  const organizationId = session.organizationId;
+  const organization = store.organizations.find(org => org.id === organizationId && org.status === "active");
+  if (!organization) return res.status(409).json({ error: "Workspace is not active" });
+
+  const email = validEmail(req.body?.email);
+  const role = req.body?.role;
+  const expiresInHours = req.body?.expiresInHours === undefined ? 72 : Number(req.body.expiresInHours);
+  if (!email || !["manager", "staff", "viewer"].includes(role)) {
+    return res.status(400).json({ error: "A valid email and team role are required" });
+  }
+  if (!Number.isInteger(expiresInHours) || expiresInHours < 1 || expiresInHours > 168) {
+    return res.status(400).json({ error: "Invitation expiry must be between 1 and 168 hours" });
+  }
+
+  const existingUser = store.users.find(user =>
+    normalizeEmail(user.email) === email || user.username.toLowerCase() === email
+  );
+  if (existingUser && activeMembership(store, existingUser.id, organizationId)) {
+    return res.status(409).json({ error: "This person is already a member of the workspace" });
+  }
+  const duplicate = store.teamInvitations.find(invitation =>
+    invitation.organizationId === organizationId &&
+    invitation.email === email &&
+    teamInvitationStatus(invitation) === "pending"
+  );
+  if (duplicate) return res.status(409).json({ error: "A pending invitation already exists for this email" });
+
+  const permissions = normalizePermissions(req.body?.permissions, role);
+  const token = crypto.randomBytes(32).toString("base64url");
+  const now = new Date();
+  const invitation: TeamInvitation = {
+    id: crypto.randomUUID(),
+    organizationId,
+    email,
+    role,
+    permissions,
+    tokenHash: inviteHash(token),
+    status: "pending",
+    expiresAt: new Date(now.getTime() + expiresInHours * 60 * 60 * 1000).toISOString(),
+    createdAt: now.toISOString(),
+    createdByUserId: session.userId,
+  };
+
+  const nextStore = cloneStore();
+  nextStore.teamInvitations.push(invitation);
+  onboardingAudit(nextStore, "team_invitation_created", {
+    invitationId: invitation.id,
+    email,
+    role,
+    permissions,
+    expiresAt: invitation.expiresAt,
+  }, session.userId, organizationId);
+  commitStore(nextStore);
+
+  const baseUrl = process.env.APP_URL
+    ? new URL(process.env.APP_URL).origin
+    : `${req.protocol}://${req.get("host")}`;
+  res.setHeader("Cache-Control", "no-store");
+  res.status(201).json({
+    invitation: {
+      id: invitation.id,
+      email: invitation.email,
+      role: invitation.role,
+      permissions: invitation.permissions,
+      status: invitation.status,
+      expiresAt: invitation.expiresAt,
+      createdAt: invitation.createdAt,
+    },
+    inviteUrl: `${baseUrl}/#teamInvite=${encodeURIComponent(token)}`,
+  });
+});
+
+app.post("/api/team/invitations/:id/revoke", requireWorkspaceOwner, (req, res) => {
+  const session = (req as any).user;
+  const invitation = store.teamInvitations.find(item =>
+    item.id === req.params.id && item.organizationId === session.organizationId
+  );
+  if (!invitation) return res.status(404).json({ error: "Team invitation not found" });
+  if (teamInvitationStatus(invitation) !== "pending") {
+    return res.status(409).json({ error: "Only pending team invitations can be revoked" });
+  }
+
+  const nextStore = cloneStore();
+  const target = nextStore.teamInvitations.find(item => item.id === invitation.id)!;
+  target.status = "revoked";
+  target.revokedAt = new Date().toISOString();
+  target.revokedByUserId = session.userId;
+  onboardingAudit(nextStore, "team_invitation_revoked", {
+    invitationId: target.id,
+    email: target.email,
+  }, session.userId, session.organizationId);
+  commitStore(nextStore);
+  res.json({ success: true, status: "revoked" });
+});
 
 app.get("/api/admin/onboarding/invitations", requirePlatformOperator, (_req, res) => {
   const invitations = [...store.ownerInvitations]
@@ -1881,11 +2178,19 @@ async function readDashboardSummary(product: DashboardProduct, organizationId: s
 
 app.get("/api/dashboard/summary", async (req, res) => {
   const products: DashboardProduct[] = ["pos", "ffpro", "tiquet", "marketing", "academy", "lasertag", "website", "games"];
-  const canViewFinance = (req as any).user.role === "admin";
+  const session = (req as any).user;
+  const membership = activeMembership(store, session.userId, session.organizationId);
+  const workspaceOwner = membership?.role === "owner";
+  const ownerOnlyProducts = new Set<DashboardProduct>(["pos", "ffpro", "tiquet", "marketing"]);
   const results = await Promise.all(products.map(async product => [product,
-    product === "ffpro" && !canViewFinance
-      ? { status: "restricted", metrics: {}, generatedAt: null }
-      : await readDashboardSummary(product, (req as any).user.organizationId)
+    ownerOnlyProducts.has(product) && !workspaceOwner
+      ? {
+          status: "restricted",
+          metrics: {},
+          generatedAt: null,
+          accessMessage: "Managed product metrics are owner-only until team product access is provisioned.",
+        }
+      : await readDashboardSummary(product, session.organizationId)
   ] as const));
   res.setHeader("Cache-Control", "no-store");
   res.json({
@@ -1905,7 +2210,7 @@ const serviceHealthPaths: Record<DashboardProduct, string> = {
   games: "/healthz",
 };
 
-app.get("/api/connections/status", async (_req, res) => {
+app.get("/api/connections/status", requirePermission("connections"), async (_req, res) => {
   const products = Object.keys(serviceHealthPaths) as DashboardProduct[];
   const results = await Promise.all(products.map(async product => {
     const started = performance.now();
@@ -2303,7 +2608,10 @@ app.post("/api/agent/chat", async (req, res) => {
   }
 });
 
-app.use("/api/users", requireRole("admin"));
+app.use("/api/users", (req, res, next) => {
+  if (req.method === "GET") return requirePermission("team")(req, res, next);
+  return requireWorkspaceOwner(req, res, next);
+});
 app.use("/api/ecosystem/apps", (req, res, next) => req.method === "GET" ? next() : requireRole("admin")(req, res, next));
 
 app.get("/api/apps/pos/launch", requireRole("admin"), async (req, res) => {
@@ -2401,6 +2709,10 @@ app.get("/api/users", (req, res) => {
 });
 
 app.post("/api/users", (req, res) => {
+  const organizationId = (req as any).user.organizationId;
+  if (organizationId !== posIdentity.organizationId) {
+    return res.status(403).json({ error: "Customer workspace members must be added through a team invitation" });
+  }
   const { username, password, fullName, role, permissions } = req.body || {};
   if (typeof username !== "string" || !username.trim() || username.trim().length > 120 || typeof password !== "string" || password.length < 12 || password.length > 1024 || !["admin", "manager", "staff", "viewer"].includes(role || "staff")) {
     return res.status(400).json({ error: "Valid username, role and password of at least 12 characters are required" });
@@ -2423,7 +2735,6 @@ app.post("/api/users", (req, res) => {
     lastLogin: undefined
   };
 
-  const organizationId = (req as any).user.organizationId;
   store.users.push(newUser);
   store.memberships.push({
     organizationId,
@@ -2455,6 +2766,9 @@ app.put("/api/users/:id", (req, res) => {
   if (fullName !== undefined && (typeof fullName !== "string" || !fullName.trim() || fullName.trim().length > 120)) return res.status(400).json({ error: "Full name must be 1 to 120 characters" });
   if (password !== undefined && (typeof password !== "string" || password.length < 12 || password.length > 1024)) return res.status(400).json({ error: "Password must be 12 to 1024 characters" });
   if (role !== undefined && !["admin", "manager", "staff", "viewer"].includes(role)) return res.status(400).json({ error: "Invalid role" });
+  if (organizationId !== posIdentity.organizationId && role === "admin") {
+    return res.status(400).json({ error: "Delegated workspace admin is not enabled; use manager, staff or viewer" });
+  }
   if (sharedIdentity && (username !== undefined || password !== undefined || fullName !== undefined)) {
     return res.status(409).json({ error: "Shared account identity must be changed by the account owner, not a workspace administrator" });
   }
@@ -2524,7 +2838,9 @@ app.get("/api/ecosystem/apps", (req, res) => {
     "app-v79pos": "Sales, stock and purchasing. The POS beta requires its own service and register testing.",
     "app-academy": "Public courses and learning. Academy has its own learner account.",
   };
-  const organizationId = (req as any).user.organizationId;
+  const session = (req as any).user;
+  const organizationId = session.organizationId;
+  const membership = activeMembership(store, session.userId, organizationId);
   const visibleApps = visibleEcosystemApps(store, organizationId) as EcosystemApp[];
   res.json(visibleApps
     .filter((a: EcosystemApp) => !["app-analytics","app-lifehealth"].includes(a.id))
@@ -2532,17 +2848,26 @@ app.get("/api/ecosystem/apps", (req, res) => {
       const tenantMapping = store.appTenantMappings.find(mapping =>
         mapping.organizationId === organizationId && mapping.appId === a.id
       );
+      const isManagedProduct = tenantMappedAppIds.has(a.id);
       const setupPending = organizationId !== posIdentity.organizationId &&
-        tenantMappedAppIds.has(a.id) && tenantMapping?.status !== "active";
+        isManagedProduct && tenantMapping?.status !== "active";
+      const teamLaunchBlocked = isManagedProduct && membership?.role !== "owner";
+      const launchBlocked = setupPending || teamLaunchBlocked;
       return { ...a, status: setupPending ? "syncing" : "beta", metrics: undefined, lastSync: undefined,
         description: setupPending
           ? "Your Hub access is active. V79 Digital is completing this product workspace before launch is enabled."
-          : managedDescriptions[a.id] || a.description,
+          : teamLaunchBlocked
+            ? "This product is enabled for the workspace. Team-member product access will be provisioned separately; owner launch remains available."
+            : managedDescriptions[a.id] || a.description,
         features: managedDescriptions[a.id] ? [] : a.features,
-        ssoSupported: ["app-ffpro","app-tiquet","app-marketing","app-v79pos"].includes(a.id) && !setupPending,
+        ssoSupported: ["app-ffpro","app-tiquet","app-marketing","app-v79pos"].includes(a.id) && !launchBlocked,
         appUrl: a.id === "app-academy" ? "https://v79academy.v79sl.com/academy" : a.appUrl,
-        launchReady: !setupPending,
-        accessMessage: setupPending ? "Product workspace setup pending" : undefined,
+        launchReady: !launchBlocked,
+        accessMessage: setupPending
+          ? "Product workspace setup pending"
+          : teamLaunchBlocked
+            ? "Managed product launch is owner-only until team product access is provisioned"
+            : undefined,
       };
     }));
 });

@@ -19,6 +19,9 @@ interface SidebarProps {
 }
 
 export function Sidebar({ currentView, onViewChange, onLogout, user }: SidebarProps) {
+  const permissions = new Set<ViewState>(user.permissions || ["overview"]);
+  const can = (view: ViewState) => view === "overview" || permissions.has(view);
+
   return (
     <aside className="w-64 bg-[#070e17] border-r border-slate-800/80 text-slate-300 h-screen flex flex-col shrink-0 select-none">
       {/* Brand Header matching screenshot */}
@@ -61,56 +64,64 @@ export function Sidebar({ currentView, onViewChange, onLogout, user }: SidebarPr
             </button>
 
             {/* Connections */}
-            <button
-              onClick={() => onViewChange("connections")}
-              className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl font-medium text-xs transition-all ${
-                currentView === "connections"
-                  ? "bg-teal-900/40 text-teal-300 border border-teal-500/40 shadow-sm"
-                  : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 border border-transparent"
-              }`}
-            >
-              <Link2 className="w-4 h-4" />
-              <span>Connections</span>
-            </button>
+            {can("connections") && (
+              <button
+                onClick={() => onViewChange("connections")}
+                className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl font-medium text-xs transition-all ${
+                  currentView === "connections"
+                    ? "bg-teal-900/40 text-teal-300 border border-teal-500/40 shadow-sm"
+                    : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 border border-transparent"
+                }`}
+              >
+                <Link2 className="w-4 h-4" />
+                <span>Connections</span>
+              </button>
+            )}
 
             {/* Team */}
-            <button
-              onClick={() => onViewChange("team")}
-              className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl font-medium text-xs transition-all ${
-                currentView === "team"
-                  ? "bg-teal-900/40 text-teal-300 border border-teal-500/40 shadow-sm"
-                  : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 border border-transparent"
-              }`}
-            >
-              <Users className="w-4 h-4" />
-              <span>Team</span>
-            </button>
+            {can("team") && (
+              <button
+                onClick={() => onViewChange("team")}
+                className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl font-medium text-xs transition-all ${
+                  currentView === "team"
+                    ? "bg-teal-900/40 text-teal-300 border border-teal-500/40 shadow-sm"
+                    : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 border border-transparent"
+                }`}
+              >
+                <Users className="w-4 h-4" />
+                <span>Team</span>
+              </button>
+            )}
 
             {/* Security */}
-            <button
-              onClick={() => onViewChange("security")}
-              className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl font-medium text-xs transition-all ${
-                currentView === "security"
-                  ? "bg-teal-900/40 text-teal-300 border border-teal-500/40 shadow-sm"
-                  : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 border border-transparent"
-              }`}
-            >
-              <Shield className="w-4 h-4" />
-              <span>Security</span>
-            </button>
+            {can("security") && (
+              <button
+                onClick={() => onViewChange("security")}
+                className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl font-medium text-xs transition-all ${
+                  currentView === "security"
+                    ? "bg-teal-900/40 text-teal-300 border border-teal-500/40 shadow-sm"
+                    : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 border border-transparent"
+                }`}
+              >
+                <Shield className="w-4 h-4" />
+                <span>Security</span>
+              </button>
+            )}
 
             {/* Billing */}
-            <button
-              onClick={() => onViewChange("billing")}
-              className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl font-medium text-xs transition-all ${
-                currentView === "billing"
-                  ? "bg-teal-900/40 text-teal-300 border border-teal-500/40 shadow-sm"
-                  : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 border border-transparent"
-              }`}
-            >
-              <CreditCard className="w-4 h-4" />
-              <span>Billing</span>
-            </button>
+            {can("billing") && (
+              <button
+                onClick={() => onViewChange("billing")}
+                className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl font-medium text-xs transition-all ${
+                  currentView === "billing"
+                    ? "bg-teal-900/40 text-teal-300 border border-teal-500/40 shadow-sm"
+                    : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 border border-transparent"
+                }`}
+              >
+                <CreditCard className="w-4 h-4" />
+                <span>Billing</span>
+              </button>
+            )}
           </div>
         </div>
 
