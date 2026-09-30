@@ -1777,6 +1777,14 @@ async function readDashboardSummary(product: DashboardProduct, organizationId: s
       accessMessage: "Academy uses a separate learner account. Hub-to-Academy learner linking is not enabled for customer workspaces.",
     };
   }
+  if (organizationId !== posIdentity.organizationId && product === "lasertag") {
+    return {
+      status: "not_configured",
+      metrics: {},
+      generatedAt: null,
+      accessMessage: "CombatZone / LaserTag is a Vision79-owned operation and is not shared with customer workspaces.",
+    };
+  }
 
   const customerPosReady = product === "pos" &&
     posTenantLaunchReady(store, organizationId, posIdentity.organizationId);
