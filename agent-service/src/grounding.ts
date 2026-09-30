@@ -208,3 +208,177 @@ export function formatPriorityBrief(signals: PrioritySignal[], limit = 5) {
     .map((signal, index) => `${index + 1}. ${signal.severity.toUpperCase()} — ${formatPrioritySignal(signal)}`)
     .join("\n");
 }
+
+type DeterministicFactResult = {
+  domain: string;
+  output: string;
+};
+
+function hasMetric(record: UnknownRecord, key: string) {
+  return Object.prototype.hasOwnProperty.call(record || {}, key);
+}
+
+function metricText(record: UnknownRecord, key: string, label: string) {
+  if (!hasMetric(record, key)) return null;
+  return `${label} ${formatMetric(record[key])}`;
+}
+
+function sentence(parts: Array<string | null | undefined>) {
+  return parts.filter(Boolean).join(", ");
+}
+
+function financeFacts(snapshot: ReturnType<typeof compactOwnerSnapshot>) {
+  const m = snapshot.systems.ffpro?.metrics || {};
+  const income = hasMetric(m, "currentMonthIncome") ? number(m.currentMonthIncome) : undefined;
+  const expenses = hasMetric(m, "currentMonthExpenses") ? number(m.currentMonthExpenses) : undefined;
+  const ytdIncome = hasMetric(m, "yearToDateIncome") ? number(m.yearToDateIncome) : undefined;
+  const ytdExpenses = hasMetric(m, "yearToDateExpenses") ? number(m.yearToDateExpenses) : undefined;
+  const currentNet = income !== undefined && expenses !== undefined ? income - expenses : undefined;
+  const ytdNet = ytdIncome !== undefined && ytdExpenses !== undefined ? ytdIncome - ytdExpenses : undefined;
+  const parts = [
+    income !== undefined ? `current-month income ${formatMetric(income)}` : null,
+    expenses !== undefined ? `expenses ${formatMetric(expenses)}` : null,
+    currentNet !== undefined ? `net ${formatMetric(currentNet)}` : null,
+    ytdIncome !== undefined ? `year-to-date income ${formatMetric(ytdIncome)}` : null,
+    ytdExpenses !== undefined ? `year-to-date expenses ${formatMetric(ytdExpenses)}` : null,
+    ytdNet !== undefined ? `year-to-date net ${formatMetric(ytdNet)}` : null,
+  ];
+  return parts.some(Boolean) ? `FFPRO: ${sentence(parts)}.` : null;
+}
+
+function posFacts(snapshot: ReturnType<typeof compactOwnerSnapshot>) {
+  const m = snapshot.systems.pos?.metrics || {};
+  const parts = [
+    metricText(m, "sales30d", "30-day sales"),
+    metricText(m, "revenue30d", "30-day revenue"),
+    metricText(m, "openPurchaseOrders", "open purchase orders"),
+    metricText(m, "criticalReplenishmentItems", "critical replenishment items"),
+    metricText(m, "delayedShipments", "delayed shipments"),
+    metricText(m, "unresolvedInventoryExceptions", "unresolved inventory exceptions"),
+  ];
+  return parts.some(Boolean) ? `POS: ${sentence(parts)}.` : null;
+}
+
+function marketingFacts(snapshot: ReturnType<typeof compactOwnerSnapshot>) {
+  const m = snapshot.systems.marketing?.metrics || {};
+  const p = snapshot.systems.marketing?.platform || {};
+  const parts = [
+    metricText(m, "campaigns", "campaigns"),
+    metricText(m, "activeCampaigns", "active campaigns"),
+    metricText(m, "connectedSocialAccounts", "connected social accounts"),
+    metricText(p, "totalPosts", "total posts"),
+  ];
+  return parts.some(Boolean) ? `Marketing: ${sentence(parts)}.` : null;
+}
+
+function websiteFacts(snapshot: ReturnType<typeof compactOwnerSnapshot>) {
+  const m = snapshot.systems.website?.metrics || {};
+  const parts = [
+    metricText(m, "totalLeads", "total leads"),
+    metricText(m, "newLeads", "new leads"),
+    metricText(m, "qualifiedLeads", "qualified leads"),
+    metricText(m, "contactedLeads", "contacted leads"),
+    metricText(m, "lostLeads", "lost leads"),
+  ];
+  return parts.some(Boolean) ? `Website CRM: ${sentence(parts)}.` : null;
+}
+
+function tiquetFacts(snapshot: ReturnType<typeof compactOwnerSnapshot>) {
+  const m = snapshot.systems.tiquet?.metrics || {};
+  const parts = [
+    metricText(m, "jobValueTotal", "job value total"),
+    metricText(m, "unreadNotifications", "unread notifications"),
+  ];
+  if (m.jobsByStatus && typeof m.jobsByStatus === "object") {
+    parts.push(`jobs by status ${JSON.stringify(m.jobsByStatus)}`);
+  }
+  return parts.some(Boolean) ? `Tiquet: ${sentence(parts)}.` : null;
+}
+
+function academyFacts(snapshot: ReturnType<typeof compactOwnerSnapshot>) {
+  const m = snapshot.systems.academy?.metrics || {};
+  const p = snapshot.systems.academy?.platform || {};
+  const parts = [
+    metricText(m, "publishedCourses", "published courses"),
+    metricText(m, "enrolledCourses", "courses with enrollment"),
+    metricText(m, "totalLessons", "lessons"),
+    metricText(p, "totalLearners", "learners"),
+    metricText(p, "totalEnrolments", "enrolments"),
+  ];
+  return parts.some(Boolean) ? `Academy: ${sentence(parts)}.` : null;
+}
+
+function combatZoneFacts(snapshot: ReturnType<typeof compactOwnerSnapshot>) {
+  const m = snapshot.systems.lasertag?.metrics || {};
+  const p = snapshot.systems.lasertag?.platform || {};
+  const parts = [
+    metricText(m, "totalBookings", "total bookings"),
+    metricText(m, "upcomingBookings", "upcoming bookings"),
+    metricText(m, "upcomingPlayers", "upcoming players"),
+    metricText(p, "bookingsNext30Days", "bookings in next 30 days"),
+    metricText(p, "playersNext30Days", "players in next 30 days"),
+  ];
+  return parts.some(Boolean) ? `CombatZone: ${sentence(parts)}.` : null;
+}
+
+function gamesFacts(snapshot: ReturnType<typeof compactOwnerSnapshot>) {
+  const m = snapshot.systems.games?.metrics || {};
+  const parts = [
+    metricText(m, "portalViews", "portal views"),
+    metricText(m, "sessions", "sessions"),
+    metricText(m, "players", "players"),
+    metricText(m, "spellingCompletions", "spelling completions"),
+    metricText(m, "wordsMastered", "words mastered"),
+  ];
+  return parts.some(Boolean) ? `Gaming Studio J: ${sentence(parts)}.` : null;
+}
+
+function systemFacts(snapshot: ReturnType<typeof compactOwnerSnapshot>) {
+  const statuses = PRODUCTS.map(product => `${product}=${snapshot.systems[product]?.connection || "unknown"}`);
+  return `System connections: ${statuses.join(", ")}.`;
+}
+
+function hubFacts(snapshot: ReturnType<typeof compactOwnerSnapshot>) {
+  const h = snapshot.hubAdmin || {};
+  const parts = [
+    metricText(h, "users", "users"),
+    metricText(h, "activeSessions", "active sessions"),
+    Array.isArray(h.enabledApps) ? `enabled apps ${h.enabledApps.length}` : null,
+  ];
+  return parts.some(Boolean) ? `Hub Admin: ${sentence(parts)}.` : null;
+}
+
+export function deterministicFactAnswer(
+  message: string,
+  snapshot: ReturnType<typeof compactOwnerSnapshot>,
+): DeterministicFactResult | null {
+  const normalized = String(message || "").trim().toLowerCase();
+  if (!normalized) return null;
+
+  // Open-ended advice stays with the language model; direct factual questions stay deterministic.
+  if (/\b(why|recommend|recommendation|strategy|strategic|should|suggest|improve|grow|fix|cause|caused|how can|what can|what would)\b/.test(normalized)) {
+    return null;
+  }
+
+  const sections: Array<{ domain: string; match: RegExp; render: () => string | null }> = [
+    { domain: "finance", match: /\b(finance|financial|ffpro|cash|cashflow|income|expense|profit|loss|net)\b/, render: () => financeFacts(snapshot) },
+    { domain: "pos", match: /\b(pos|sale|sales|inventory|stock|reorder|shipment|purchase order|logistics)\b/, render: () => posFacts(snapshot) },
+    { domain: "marketing", match: /\b(marketing|campaign|campaigns|social)\b/, render: () => marketingFacts(snapshot) },
+    { domain: "website", match: /\b(website|lead|leads|crm|follow-up|followups|follow-ups)\b/, render: () => websiteFacts(snapshot) },
+    { domain: "tiquet", match: /\b(tiquet|ticket|tickets|support|job|jobs)\b/, render: () => tiquetFacts(snapshot) },
+    { domain: "academy", match: /\b(academy|course|courses|learner|learners|enrolment|enrollment|lesson|lessons)\b/, render: () => academyFacts(snapshot) },
+    { domain: "combatzone", match: /\b(combatzone|combat zone|laser tag|lasertag|booking|bookings|players?)\b/, render: () => combatZoneFacts(snapshot) },
+    { domain: "games", match: /\b(gaming|game|games|spelling|studio j|words mastered|portal views)\b/, render: () => gamesFacts(snapshot) },
+    { domain: "systems", match: /\b(system|systems|health|online|offline|connection|connections|service|services|apps)\b/, render: () => systemFacts(snapshot) },
+    { domain: "hub", match: /\b(hub|admin|users|sessions)\b/, render: () => hubFacts(snapshot) },
+  ];
+
+  const matched = sections.filter(section => section.match.test(normalized)).slice(0, 3);
+  if (!matched.length) return null;
+  const outputs = matched.map(section => section.render()).filter((value): value is string => Boolean(value));
+  if (!outputs.length) return null;
+  return {
+    domain: matched.map(section => section.domain).join("+"),
+    output: outputs.join("\n"),
+  };
+}
