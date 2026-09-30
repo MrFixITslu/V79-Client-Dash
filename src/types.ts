@@ -60,4 +60,6 @@ export interface EcosystemApp {
   isFlagship?: boolean;
   version?: string;
   lastSync?: string;
+  launchReady?: boolean;
+  accessMessage?: string;
 }

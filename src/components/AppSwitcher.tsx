@@ -65,6 +65,7 @@ export function AppSwitcher({
   };
 
   const getLaunchUrl = (app: EcosystemApp): string | null => {
+    if (app.launchReady === false) return null;
     const managed: Record<string, string> = {
       "app-ffpro": "/api/apps/ffpro/launch",
       "app-tiquet": "/api/apps/tiquet/launch",
