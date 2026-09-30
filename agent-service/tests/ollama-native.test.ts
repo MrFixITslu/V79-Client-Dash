@@ -6,9 +6,10 @@ test("native Ollama defaults to the responsive local model", () => {
   assert.deepEqual(resolveOllamaNativeRuntime({}), {
     baseURL: "http://ollama:11434",
     model: "qwen2.5:1.5b",
-    timeoutMs: 60000,
+    timeoutMs: 90000,
     keepAlive: "30m",
-    maxTokens: 140,
+    maxTokens: 80,
+    contextSize: 2048,
   });
 });
 
@@ -28,6 +29,7 @@ test("native Ollama returns assistant content without requiring an OpenAI key", 
       OLLAMA_REQUEST_TIMEOUT_MS: "30000",
       OLLAMA_KEEP_ALIVE: "1h",
       OLLAMA_MAX_TOKENS: "120",
+      OLLAMA_CONTEXT_SIZE: "1536",
     },
     fetchImpl: fetchImpl as typeof fetch,
   });
@@ -39,6 +41,7 @@ test("native Ollama returns assistant content without requiring an OpenAI key", 
   assert.equal(requestBody.stream, false);
   assert.equal(requestBody.options.temperature, 0);
   assert.equal(requestBody.options.num_predict, 120);
+  assert.equal(requestBody.options.num_ctx, 1536);
   assert.equal(requestBody.keep_alive, "1h");
 });
 
