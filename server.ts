@@ -14,6 +14,7 @@ import { hasOwnerAssistantAccess, normalizeEmail } from "./server/agent-access.m
 import { activatePosTenantMapping, posProvisioningTarget, posTenantLaunchReady, posTenantMapping } from "./server/pos-provisioning.mjs";
 import { activateFfproTenantMapping, ffproProvisioningTarget, ffproTenantLaunchReady, ffproTenantMapping } from "./server/ffpro-provisioning.mjs";
 import { activateTiquetTenantMapping, tiquetProvisioningTarget, tiquetTenantLaunchReady, tiquetTenantMapping } from "./server/tiquet-provisioning.mjs";
+import { activateMarketingTenantMapping, marketingProvisioningTarget, marketingTenantLaunchReady, marketingTenantMapping } from "./server/marketing-provisioning.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -906,6 +907,63 @@ async function provisionTiquetWorkspace(organization: Organization, owner: Store
   }
 }
 
+async function provisionMarketingWorkspace(organization: Organization, owner: StoredUser) {
+  if (posSecret.length < 32) {
+    return { ok: false as const, status: 503, error: "Platform shared secret is not configured" };
+  }
+  const email = String(owner.email || owner.username || "").trim().toLowerCase();
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+    return { ok: false as const, status: 409, error: "Marketing owner email is not valid" };
+  }
+  const ownerHubUserId = posUserId(owner.id, organization.id);
+  const pathname = "/api/platform/provision";
+  const body = JSON.stringify({
+    organization: { id: organization.id, name: organization.name, slug: organization.slug },
+    user: { id: ownerHubUserId, email, name: owner.fullName || email },
+    role: "owner",
+    plan: "hub",
+  });
+  const timestamp = String(Date.now());
+  const marketingServiceUrl = process.env.MARKETING_INTERNAL_URL || "http://v79marketing-app:80";
+  try {
+    const response = await fetch(new URL(pathname, marketingServiceUrl), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-v79-service-id": "v79-hub",
+        "x-v79-timestamp": timestamp,
+        "x-v79-signature": signPlatformRequest({ method: "POST", pathname, timestamp, body, secret: posSecret }),
+      },
+      body,
+      signal: AbortSignal.timeout(5000),
+    });
+    const payload = await response.json().catch(() => ({})) as any;
+    if (!response.ok) {
+      return { ok: false as const, status: 502, error: "Marketing workspace provisioning failed", upstreamStatus: response.status };
+    }
+    if (
+      payload.provisioned !== true ||
+      payload.organizationId !== organization.id ||
+      payload.ownerHubUserId !== ownerHubUserId ||
+      typeof payload.businessId !== "string" ||
+      !payload.businessId ||
+      typeof payload.userId !== "string" ||
+      !payload.userId
+    ) {
+      return { ok: false as const, status: 502, error: "Marketing returned a mismatched tenant identity" };
+    }
+    return {
+      ok: true as const,
+      organizationId: organization.id,
+      ownerHubUserId,
+      businessId: payload.businessId as string,
+      userId: payload.userId as string,
+    };
+  } catch {
+    return { ok: false as const, status: 503, error: "Marketing service is unavailable" };
+  }
+}
+
 app.get("/.well-known/jwks.json", (_req, res) => {
   res.setHeader("Cache-Control", "public, max-age=300");
   res.json({ keys: [{ ...posPublicKey.export({ format: "jwk" }), kid: posKeyId, alg: "EdDSA", use: "sig" }] });
@@ -946,13 +1004,23 @@ app.post("/api/platform/session/consume", (req, res) => {
     organizationCanAccessApp(store, entry.tenantId, "app-tiquet") &&
     tiquetTenantLaunchReady(store, entry.tenantId, posIdentity.organizationId)
   );
+  const validMarketingTicket = product === "marketing" && Boolean(
+    entry &&
+    entry.product === "marketing" &&
+    entry.expiresAt >= Date.now() &&
+    activeMembership(store, entry.userId, entry.tenantId)?.role === "owner" &&
+    organizationCanAccessApp(store, entry.tenantId, "app-marketing") &&
+    marketingTenantLaunchReady(store, entry.tenantId, posIdentity.organizationId)
+  );
   const validTicket = product === "pos"
     ? validPosTicket
     : product === "ffpro"
       ? validFfproTicket
       : product === "tiquet"
         ? validTiquetTicket
-        : Boolean(entry && validLegacyLaunch(store, entry, product, posIdentity.organizationId, posIdentity.ownerUserId));
+        : product === "marketing"
+          ? validMarketingTicket
+          : Boolean(entry && validLegacyLaunch(store, entry, product, posIdentity.organizationId, posIdentity.ownerUserId));
   if (!entry || !validTicket) return res.status(401).json({ error: "Ticket expired or revoked" });
   launchTickets.delete(ticketHash);
   res.setHeader("Cache-Control", "no-store");
@@ -1633,6 +1701,50 @@ app.post("/api/admin/onboarding/organizations/:organizationId/apps/tiquet/provis
   });
 });
 
+app.post("/api/admin/onboarding/organizations/:organizationId/apps/marketing/provision", requirePlatformOperator, async (req, res) => {
+  if (!sameOriginMutation(req)) return res.status(403).json({ error: "Invalid request origin" });
+  const organizationId = String(req.params.organizationId || "");
+  let target;
+  try {
+    target = marketingProvisioningTarget(store, organizationId);
+  } catch (error) {
+    return res.status(409).json({ error: error instanceof Error ? error.message : "Marketing workspace is not ready for provisioning" });
+  }
+
+  const provisioned = await provisionMarketingWorkspace(target.organization, target.owner);
+  if (!provisioned.ok) {
+    return res.status(provisioned.status).json({
+      error: provisioned.error,
+      ...("upstreamStatus" in provisioned ? { upstreamStatus: provisioned.upstreamStatus } : {}),
+    });
+  }
+
+  let nextStore: AppStore;
+  try {
+    nextStore = activateMarketingTenantMapping(
+      store,
+      organizationId,
+      provisioned.organizationId,
+      provisioned.businessId,
+      provisioned.userId,
+      (req as any).user.userId,
+      new Date().toISOString(),
+    ) as AppStore;
+  } catch (error) {
+    return res.status(409).json({ error: error instanceof Error ? error.message : "Marketing tenant mapping could not be activated" });
+  }
+  commitStore(nextStore);
+  res.setHeader("Cache-Control", "no-store");
+  res.json({
+    success: true,
+    organizationId,
+    ownerHubUserId: provisioned.ownerHubUserId,
+    businessId: provisioned.businessId,
+    userId: provisioned.userId,
+    mapping: marketingTenantMapping(store, organizationId),
+  });
+});
+
 type DashboardProduct = "pos" | "ffpro" | "tiquet" | "marketing" | "academy" | "lasertag" | "website" | "games";
 const dashboardSources: Record<DashboardProduct, string> = {
   pos: posServiceUrl,
@@ -1663,7 +1775,9 @@ async function readDashboardSummary(product: DashboardProduct, organizationId: s
     ffproTenantLaunchReady(store, organizationId, posIdentity.organizationId);
   const customerTiquetReady = product === "tiquet" &&
     tiquetTenantLaunchReady(store, organizationId, posIdentity.organizationId);
-  if (organizationId !== posIdentity.organizationId && !customerPosReady && !customerFfproReady && !customerTiquetReady) {
+  const customerMarketingReady = product === "marketing" &&
+    marketingTenantLaunchReady(store, organizationId, posIdentity.organizationId);
+  if (organizationId !== posIdentity.organizationId && !customerPosReady && !customerFfproReady && !customerTiquetReady && !customerMarketingReady) {
     return { status: "not_configured", metrics: {}, generatedAt: null };
   }
   const signingSecret = platformSigningSecret(product);
@@ -2197,6 +2311,10 @@ app.get("/api/apps/:product/launch", requireRole("admin"), (req, res) => {
   } else if (product === "tiquet") {
     if (!tiquetTenantLaunchReady(store, session.organizationId, posIdentity.organizationId)) {
       return res.status(409).json({ error: "Tiquet workspace setup is pending. Contact V79 Digital." });
+    }
+  } else if (product === "marketing") {
+    if (!marketingTenantLaunchReady(store, session.organizationId, posIdentity.organizationId)) {
+      return res.status(409).json({ error: "Marketing workspace setup is pending. Contact V79 Digital." });
     }
   } else if (session.organizationId !== posIdentity.organizationId) {
     return res.status(409).json({ error: `${product} workspace setup is pending. Contact V79 Digital.` });
