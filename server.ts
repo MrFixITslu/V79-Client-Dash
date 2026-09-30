@@ -786,8 +786,18 @@ const posTeamRoleMap = {
   viewer: "AUDITOR",
 } as const;
 
+const tiquetTeamPermissions = {
+  manager: ["dashboard", "jobs", "clients", "invoices", "files", "new-request"],
+  staff: ["dashboard", "jobs", "clients", "files", "new-request"],
+  viewer: ["dashboard"],
+} as const;
+
 function posTeamRole(role: string | undefined) {
   return role && role in posTeamRoleMap ? role as keyof typeof posTeamRoleMap : null;
+}
+
+function tiquetTeamRole(role: string | undefined) {
+  return role && role in tiquetTeamPermissions ? role as keyof typeof tiquetTeamPermissions : null;
 }
 
 function posJwt(userId: string, tenantId: string) {
@@ -990,6 +1000,73 @@ async function provisionTiquetWorkspace(organization: Organization, owner: Store
   }
 }
 
+async function provisionTiquetTeamMember(
+  organization: Organization,
+  member: StoredUser,
+  role: keyof typeof tiquetTeamPermissions,
+) {
+  if (posSecret.length < 32) {
+    return { ok: false as const, status: 503, error: "Platform shared secret is not configured" };
+  }
+  const email = String(member.email || member.username || "").trim().toLowerCase();
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+    return { ok: false as const, status: 409, error: "Tiquet team member email is not valid" };
+  }
+  const hubUserId = posUserId(member.id, organization.id);
+  const pathname = "/api/platform/members/provision";
+  const body = JSON.stringify({
+    organization: { id: organization.id, name: organization.name, slug: organization.slug },
+    user: { id: hubUserId, email, name: member.fullName || email },
+    role,
+    plan: "hub",
+  });
+  const timestamp = String(Date.now());
+  const tiquetServiceUrl = process.env.TIQUET_INTERNAL_URL || "http://v79-tiquet-manager:3000";
+  try {
+    const response = await fetch(new URL(pathname, tiquetServiceUrl), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-v79-service-id": "v79-hub",
+        "x-v79-timestamp": timestamp,
+        "x-v79-signature": signPlatformRequest({ method: "POST", pathname, timestamp, body, secret: posSecret }),
+      },
+      body,
+      signal: AbortSignal.timeout(5000),
+    });
+    const payload = await response.json().catch(() => ({})) as any;
+    if (!response.ok) {
+      return { ok: false as const, status: 502, error: "Tiquet team member provisioning failed", upstreamStatus: response.status };
+    }
+    const expectedPermissions = [...tiquetTeamPermissions[role]];
+    const returnedPermissions = Array.isArray(payload.permissions) ? payload.permissions : [];
+    if (
+      payload.provisioned !== true ||
+      payload.organizationId !== organization.id ||
+      payload.hubUserId !== hubUserId ||
+      typeof payload.accountId !== "string" ||
+      !payload.accountId ||
+      typeof payload.userId !== "string" ||
+      !payload.userId ||
+      payload.localRole !== "Member" ||
+      returnedPermissions.length !== expectedPermissions.length ||
+      !expectedPermissions.every(permission => returnedPermissions.includes(permission))
+    ) {
+      return { ok: false as const, status: 502, error: "Tiquet returned a mismatched team identity" };
+    }
+    return {
+      ok: true as const,
+      organizationId: organization.id,
+      hubUserId,
+      accountId: payload.accountId as string,
+      userId: payload.userId as string,
+      permissions: expectedPermissions,
+    };
+  } catch {
+    return { ok: false as const, status: 503, error: "Tiquet service is unavailable" };
+  }
+}
+
 async function provisionMarketingWorkspace(organization: Organization, owner: StoredUser) {
   if (posSecret.length < 32) {
     return { ok: false as const, status: 503, error: "Platform shared secret is not configured" };
@@ -1082,11 +1159,14 @@ app.post("/api/platform/session/consume", (req, res) => {
     organizationCanAccessApp(store, entry.tenantId, "app-ffpro") &&
     ffproTenantLaunchReady(store, entry.tenantId, posIdentity.organizationId)
   );
+  const tiquetTicketMembership = entry
+    ? activeMembership(store, entry.userId, entry.tenantId)
+    : null;
   const validTiquetTicket = product === "tiquet" && Boolean(
     entry &&
     entry.product === "tiquet" &&
     entry.expiresAt >= Date.now() &&
-    activeMembership(store, entry.userId, entry.tenantId)?.role === "owner" &&
+    (tiquetTicketMembership?.role === "owner" || tiquetTeamRole(tiquetTicketMembership?.role)) &&
     organizationCanAccessApp(store, entry.tenantId, "app-tiquet") &&
     tiquetTenantLaunchReady(store, entry.tenantId, posIdentity.organizationId)
   );
@@ -1120,11 +1200,16 @@ app.post("/api/platform/session/consume", (req, res) => {
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(503).json({ error: "Hub owner email is not configured." });
   if (!organization) return res.status(409).json({ error: "Hub organization is unavailable." });
 
+  const consumedMembership = activeMembership(store, entry.userId, entry.tenantId);
+  const consumedTiquetTeamRole = product === "tiquet" ? tiquetTeamRole(consumedMembership?.role) : null;
+  const consumedRole = consumedMembership?.role === "owner" ? "owner" : consumedTiquetTeamRole;
+  if (!consumedRole) return res.status(401).json({ error: "Ticket role is no longer eligible" });
+
   res.json({
     user: { id: posUserId(entry.userId, entry.tenantId), email, name: user?.fullName || email },
     organization: { id: organization.id, name: organization.name, slug: organization.slug },
-    role: "owner", plan: "beta", accessMode: "beta",
-    entitlement: { product, enabled: true, access: "owner" },
+    role: consumedRole, plan: "beta", accessMode: "beta",
+    entitlement: { product, enabled: true, access: consumedRole === "owner" ? "owner" : "team" },
     assignedProducts: enabledAppIds(store, entry.tenantId)
       .map((appId: string) => ({ "app-ffpro": "ffpro", "app-tiquet": "tiquet", "app-marketing": "marketing" } as Record<string,string>)[appId])
       .filter(Boolean),
@@ -1451,7 +1536,7 @@ function completeTeamInvitationAcceptance(
       managedProductAccess: {
         pos: "role_mapped",
         ffpro: "owner_only",
-        tiquet: "owner_only",
+        tiquet: "role_mapped",
         marketing: "owner_only",
       },
     },
@@ -2718,7 +2803,7 @@ app.get("/api/apps/pos/launch", async (req, res) => {
   res.redirect(302, url.toString());
 });
 
-app.get("/api/apps/:product/launch", requireRole("admin"), (req, res) => {
+app.get("/api/apps/:product/launch", async (req, res) => {
   const product = req.params.product as keyof typeof managedLaunch;
   if (!(product in managedLaunch)) return res.status(404).json({ error: "Unknown managed app" });
   const session = (req as any).user;
@@ -2726,7 +2811,14 @@ app.get("/api/apps/:product/launch", requireRole("admin"), (req, res) => {
   if (!organizationCanAccessApp(store, session.organizationId, appIdByProduct[product])) return res.status(403).json({ error: "This app is not enabled for this Hub organization" });
 
   const membership = activeMembership(store, session.userId, session.organizationId);
-  if (membership?.role !== "owner") return res.status(403).json({ error: "Only the workspace owner can launch this app" });
+  const teamTiquetRole = product === "tiquet" ? tiquetTeamRole(membership?.role) : null;
+  if (product === "tiquet") {
+    if (membership?.role !== "owner" && !teamTiquetRole) {
+      return res.status(403).json({ error: "Your workspace role is not eligible for Tiquet access" });
+    }
+  } else if (membership?.role !== "owner") {
+    return res.status(403).json({ error: "Only the workspace owner can launch this app" });
+  }
   if (session.organizationId === posIdentity.organizationId && session.userId !== posIdentity.ownerUserId) {
     return res.status(403).json({ error: "Only the V79 workspace owner can launch this app" });
   }
@@ -2747,11 +2839,28 @@ app.get("/api/apps/:product/launch", requireRole("admin"), (req, res) => {
   }
 
   const user = store.users.find(item => item.id === session.userId);
+  if (!user) return res.status(409).json({ error: "Hub user is unavailable." });
   const ownerEmail = session.organizationId === posIdentity.organizationId
     ? String(process.env.V79_HUB_ADMIN_EMAIL || "").trim().toLowerCase()
-    : String(user?.email || user?.username || "").trim().toLowerCase();
+    : String(user.email || user.username || "").trim().toLowerCase();
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(ownerEmail)) {
-    return res.status(503).json({ error: "Set the workspace owner's verified email before launch." });
+    return res.status(503).json({ error: "Set the workspace user's verified email before launch." });
+  }
+
+  if (product === "tiquet" && teamTiquetRole) {
+    const organization = store.organizations.find(org => org.id === session.organizationId && org.status === "active");
+    if (!organization) return res.status(409).json({ error: "Hub organization is not active" });
+    const provisioned = await provisionTiquetTeamMember(organization, user, teamTiquetRole);
+    if (!provisioned.ok) {
+      return res.status(provisioned.status).json({
+        error: provisioned.error,
+        ...("upstreamStatus" in provisioned ? { upstreamStatus: provisioned.upstreamStatus } : {}),
+      });
+    }
+    const mapping = tiquetTenantMapping(store, session.organizationId);
+    if (!mapping || mapping.status !== "active" || mapping.externalTenantId !== provisioned.accountId) {
+      return res.status(409).json({ error: "Tiquet team identity does not match the active workspace mapping" });
+    }
   }
 
   const config = managedLaunch[product];
