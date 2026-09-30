@@ -11,6 +11,7 @@ import { migrateLegacyOrganization } from "./server/organization-store.mjs";
 import { activeMembership, activeMembershipsForUser, enabledAppIds, organizationCanAccessApp, organizationCanMutateApp, sessionRole, validLegacyLaunch, visibleEcosystemApps } from "./server/organization-access.mjs";
 import { acceptInvitationState, invitationStatus } from "./server/onboarding-store.mjs";
 import { hasOwnerAssistantAccess, normalizeEmail } from "./server/agent-access.mjs";
+import { activatePosTenantMapping, posProvisioningTarget, posTenantLaunchReady, posTenantMapping } from "./server/pos-provisioning.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -741,9 +742,11 @@ function launchTicket(userId: string, tenantId: string, product: LaunchProduct) 
   launchTickets.set(crypto.createHash("sha256").update(ticket).digest("hex"), { userId, tenantId, product, expiresAt: Date.now() + 120000 });
   return ticket;
 }
-function posUserId(userId: string) {
-  if (process.env.V79_POS_OWNER_USER_ID && userId === posIdentity.ownerUserId) return process.env.V79_POS_OWNER_USER_ID;
-  const hex = crypto.createHash("sha256").update(`${posIdentity.organizationId}:${userId}`).digest("hex");
+function posUserId(userId: string, organizationId: string) {
+  if (process.env.V79_POS_OWNER_USER_ID && userId === posIdentity.ownerUserId && organizationId === posIdentity.organizationId) {
+    return process.env.V79_POS_OWNER_USER_ID;
+  }
+  const hex = crypto.createHash("sha256").update(`${organizationId}:${userId}`).digest("hex");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
 function posJwt(userId: string, tenantId: string) {
@@ -752,6 +755,47 @@ function posJwt(userId: string, tenantId: string) {
   const claims = Buffer.from(JSON.stringify({ iss: new URL(process.env.APP_URL || "https://hub.v79sl.com").origin, aud: "v79-commerce", sub: userId, tenant_id: tenantId, iat: now, nbf: now, exp: now + 300 })).toString("base64url");
   const input = `${header}.${claims}`;
   return `${input}.${crypto.sign(null, Buffer.from(input), posPrivateKey).toString("base64url")}`;
+}
+
+async function provisionPosWorkspace(organization: Organization, hubUserId: string, requireReturnedIdentity = true) {
+  if (posSecret.length < 32) {
+    return { ok: false as const, status: 503, error: "POS shared secret is not configured" };
+  }
+  const ownerUserId = posUserId(hubUserId, organization.id);
+  const pathname = "/api/platform/provision";
+  const body = JSON.stringify({
+    organization: { id: organization.id, name: organization.name, slug: organization.slug },
+    user: { id: ownerUserId },
+    role: "owner",
+  });
+  const timestamp = String(Date.now());
+  try {
+    const response = await fetch(new URL(pathname, posServiceUrl), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-v79-service-id": "v79-hub",
+        "x-v79-timestamp": timestamp,
+        "x-v79-signature": signPlatformRequest({ method: "POST", pathname, timestamp, body, secret: posSecret }),
+      },
+      body,
+      signal: AbortSignal.timeout(5000),
+    });
+    const payload = await response.json().catch(() => ({})) as any;
+    if (!response.ok) {
+      return { ok: false as const, status: 502, error: "POS workspace provisioning failed", upstreamStatus: response.status };
+    }
+    const returnedIdentityMismatch =
+      (payload.organizationId !== undefined && payload.organizationId !== organization.id) ||
+      (payload.ownerUserId !== undefined && payload.ownerUserId !== ownerUserId);
+    const returnedIdentityMissing = payload.organizationId === undefined || payload.ownerUserId === undefined;
+    if (payload.provisioned !== true || returnedIdentityMismatch || (requireReturnedIdentity && returnedIdentityMissing)) {
+      return { ok: false as const, status: 502, error: "POS returned a mismatched tenant identity" };
+    }
+    return { ok: true as const, organizationId: organization.id, ownerUserId };
+  } catch {
+    return { ok: false as const, status: 503, error: "POS service is unavailable" };
+  }
 }
 
 app.get("/.well-known/jwks.json", (_req, res) => {
@@ -770,14 +814,25 @@ app.post("/api/platform/session/consume", (req, res) => {
   if (product !== expectedProduct || typeof ticket !== "string" || !/^[A-Za-z0-9_-]{32,180}$/.test(ticket)) return res.status(400).json({ error: "Invalid ticket" });
   const ticketHash = crypto.createHash("sha256").update(ticket).digest("hex");
   const entry = launchTickets.get(ticketHash);
-  if (!entry || !validLegacyLaunch(store, entry, product, posIdentity.organizationId, posIdentity.ownerUserId)) return res.status(401).json({ error: "Ticket expired or revoked" });
+  const validPosTicket = product === "pos" && Boolean(
+    entry &&
+    entry.product === "pos" &&
+    entry.expiresAt >= Date.now() &&
+    activeMembership(store, entry.userId, entry.tenantId)?.role === "owner" &&
+    organizationCanAccessApp(store, entry.tenantId, "app-v79pos") &&
+    posTenantLaunchReady(store, entry.tenantId, posIdentity.organizationId)
+  );
+  const validTicket = product === "pos"
+    ? validPosTicket
+    : Boolean(entry && validLegacyLaunch(store, entry, product, posIdentity.organizationId, posIdentity.ownerUserId));
+  if (!entry || !validTicket) return res.status(401).json({ error: "Ticket expired or revoked" });
   launchTickets.delete(ticketHash);
   res.setHeader("Cache-Control", "no-store");
-  if (product === "pos") return res.json({ token: posJwt(posUserId(entry.userId), entry.tenantId), tenantId: entry.tenantId });
+  if (product === "pos") return res.json({ token: posJwt(posUserId(entry.userId, entry.tenantId), entry.tenantId), tenantId: entry.tenantId });
   const email = (process.env.V79_HUB_ADMIN_EMAIL || "").trim().toLowerCase();
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(503).json({ error: "Hub owner email is not configured." });
   res.json({
-    user: { id: posUserId(entry.userId), email, name: store.users.find(u => u.id === entry.userId)?.fullName || email },
+    user: { id: posUserId(entry.userId, entry.tenantId), email, name: store.users.find(u => u.id === entry.userId)?.fullName || email },
     organization: { id: entry.tenantId, name: store.workspace.companyName || "V79 Digital", slug: `v79-${entry.tenantId.slice(0, 12)}` },
     role: "owner", plan: "beta", accessMode: "beta",
     entitlement: { product, enabled: true, access: "owner" },
@@ -1197,6 +1252,14 @@ app.get("/api/admin/onboarding/invitations", requirePlatformOperator, (_req, res
       createdAt: invitation.createdAt,
       acceptedAt: invitation.acceptedAt || null,
       revokedAt: invitation.revokedAt || null,
+      appMappings: store.appTenantMappings
+        .filter(mapping => mapping.organizationId === invitation.organizationId)
+        .map(mapping => ({
+          appId: mapping.appId,
+          status: mapping.status,
+          externalTenantId: mapping.externalTenantId || null,
+          updatedAt: mapping.updatedAt,
+        })),
     }));
   const assignableApps = customerAssignableAppIds
     .map(appId => store.ecosystemApps.find(app => app.id === appId))
@@ -1306,6 +1369,46 @@ app.post("/api/admin/onboarding/invitations/:id/revoke", requirePlatformOperator
   res.json({ success: true, status: "revoked" });
 });
 
+app.post("/api/admin/onboarding/organizations/:organizationId/apps/pos/provision", requirePlatformOperator, async (req, res) => {
+  if (!sameOriginMutation(req)) return res.status(403).json({ error: "Invalid request origin" });
+  const organizationId = String(req.params.organizationId || "");
+  let target;
+  try {
+    target = posProvisioningTarget(store, organizationId);
+  } catch (error) {
+    return res.status(409).json({ error: error instanceof Error ? error.message : "POS workspace is not ready for provisioning" });
+  }
+
+  const provisioned = await provisionPosWorkspace(target.organization, target.owner.id);
+  if (!provisioned.ok) {
+    return res.status(provisioned.status).json({
+      error: provisioned.error,
+      ...("upstreamStatus" in provisioned ? { upstreamStatus: provisioned.upstreamStatus } : {}),
+    });
+  }
+
+  let nextStore: AppStore;
+  try {
+    nextStore = activatePosTenantMapping(
+      store,
+      organizationId,
+      provisioned.organizationId,
+      (req as any).user.userId,
+      new Date().toISOString(),
+    ) as AppStore;
+  } catch (error) {
+    return res.status(409).json({ error: error instanceof Error ? error.message : "POS tenant mapping could not be activated" });
+  }
+  commitStore(nextStore);
+  res.setHeader("Cache-Control", "no-store");
+  res.json({
+    success: true,
+    organizationId,
+    ownerUserId: provisioned.ownerUserId,
+    mapping: posTenantMapping(store, organizationId),
+  });
+});
+
 type DashboardProduct = "pos" | "ffpro" | "tiquet" | "marketing" | "academy" | "lasertag" | "website" | "games";
 const dashboardSources: Record<DashboardProduct, string> = {
   pos: posServiceUrl,
@@ -1330,7 +1433,9 @@ function platformSigningSecret(product: string) {
 }
 
 async function readDashboardSummary(product: DashboardProduct, organizationId: string) {
-  if (organizationId !== posIdentity.organizationId) {
+  const customerPosReady = product === "pos" &&
+    posTenantLaunchReady(store, organizationId, posIdentity.organizationId);
+  if (organizationId !== posIdentity.organizationId && !customerPosReady) {
     return { status: "not_configured", metrics: {}, generatedAt: null };
   }
   const signingSecret = platformSigningSecret(product);
@@ -1339,7 +1444,7 @@ async function readDashboardSummary(product: DashboardProduct, organizationId: s
   }
 
   const ownerEmail = String(process.env.V79_HUB_ADMIN_EMAIL || "").trim().toLowerCase();
-  const subject = product === "academy" ? ownerEmail : posIdentity.organizationId;
+  const subject = product === "academy" ? ownerEmail : organizationId;
   if (!subject || (product === "academy" && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(subject))) {
     return { status: "misconfigured", error: "Dashboard subject is not configured." };
   }
@@ -1811,26 +1916,34 @@ app.use("/api/users", requireRole("admin"));
 app.use("/api/ecosystem/apps", (req, res, next) => req.method === "GET" ? next() : requireRole("admin")(req, res, next));
 
 app.get("/api/apps/pos/launch", requireRole("admin"), async (req, res) => {
-  if (posSecret.length < 32) return res.status(503).json({ error: "POS shared secret is not configured" });
   const session = (req as any).user;
-  if (!organizationCanAccessApp(store, session.organizationId, "app-v79pos")) return res.status(403).json({ error: "POS is not enabled for this Hub organization" });
-  if (session.organizationId !== posIdentity.organizationId || session.userId !== posIdentity.ownerUserId ||
-      activeMembership(store, session.userId, session.organizationId)?.role !== "owner") return res.status(403).json({ error: "Only the workspace owner can launch POS" });
-  const pathname = "/api/platform/provision";
-  const body = JSON.stringify({
-    organization: { id: posIdentity.organizationId, name: store.workspace.companyName || "V79 Digital", slug: `v79-${posIdentity.organizationId.slice(0, 12)}` },
-    user: { id: posUserId(session.userId) }, role: "owner"
-  });
-  const timestamp = String(Date.now());
-  try {
-    const response = await fetch(new URL(pathname, posServiceUrl), {
-      method: "POST", headers: { "content-type": "application/json", "x-v79-service-id": "v79-hub", "x-v79-timestamp": timestamp,
-        "x-v79-signature": signPlatformRequest({ method: "POST", pathname, timestamp, body, secret: posSecret }) },
-      body, signal: AbortSignal.timeout(5000)
+  if (!organizationCanAccessApp(store, session.organizationId, "app-v79pos")) {
+    return res.status(403).json({ error: "POS is not enabled for this Hub organization" });
+  }
+  const membership = activeMembership(store, session.userId, session.organizationId);
+  if (membership?.role !== "owner") return res.status(403).json({ error: "Only the workspace owner can launch POS" });
+  if (session.organizationId === posIdentity.organizationId && session.userId !== posIdentity.ownerUserId) {
+    return res.status(403).json({ error: "Only the V79 workspace owner can launch POS" });
+  }
+  if (!posTenantLaunchReady(store, session.organizationId, posIdentity.organizationId)) {
+    return res.status(409).json({ error: "POS workspace setup is pending. Contact V79 Digital." });
+  }
+  const organization = store.organizations.find(org => org.id === session.organizationId && org.status === "active");
+  if (!organization) return res.status(409).json({ error: "Hub organization is not active" });
+
+  const provisioned = await provisionPosWorkspace(
+    organization,
+    session.userId,
+    session.organizationId !== posIdentity.organizationId,
+  );
+  if (!provisioned.ok) {
+    return res.status(provisioned.status).json({
+      error: provisioned.error,
+      ...("upstreamStatus" in provisioned ? { upstreamStatus: provisioned.upstreamStatus } : {}),
     });
-    if (!response.ok) return res.status(502).json({ error: "POS workspace provisioning failed", upstreamStatus: response.status });
-  } catch { return res.status(503).json({ error: "POS service is unavailable" }); }
-  const ticket = launchTicket(session.userId, posIdentity.organizationId, "pos");
+  }
+
+  const ticket = launchTicket(session.userId, session.organizationId, "pos");
   const url = new URL("/", posPublicUrl);
   url.hash = new URLSearchParams({ ticket }).toString();
   res.setHeader("Cache-Control", "no-store");

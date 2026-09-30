@@ -19,6 +19,12 @@ interface OwnerInvitation {
   createdAt: string;
   acceptedAt?: string | null;
   revokedAt?: string | null;
+  appMappings?: Array<{
+    appId: string;
+    status: "pending" | "active" | "disabled";
+    externalTenantId?: string | null;
+    updatedAt: string;
+  }>;
 }
 
 interface OnboardingData {
@@ -27,7 +33,7 @@ interface OnboardingData {
 }
 
 async function onboardingApi<T>(path = "", options: RequestInit = {}): Promise<T> {
-  const response = await fetch(`/api/admin/onboarding/invitations${path}`, {
+  const response = await fetch(`/api/admin/onboarding${path}`, {
     cache: "no-store",
     headers: { "Content-Type": "application/json", ...(options.headers || {}) },
     ...options,
@@ -52,7 +58,7 @@ export function CustomerOnboardingAdmin() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      setData(await onboardingApi<OnboardingData>());
+      setData(await onboardingApi<OnboardingData>("/invitations"));
       setError("");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load onboarding.");
@@ -71,7 +77,7 @@ export function CustomerOnboardingAdmin() {
     setMessage("");
     setCreatedUrl("");
     try {
-      const result = await onboardingApi<{ inviteUrl: string }>("", {
+      const result = await onboardingApi<{ inviteUrl: string }>("/invitations", {
         method: "POST",
         body: JSON.stringify({ organizationName, email, expiresInHours, appIds }),
       });
@@ -93,11 +99,30 @@ export function CustomerOnboardingAdmin() {
     setBusy(true);
     setError("");
     try {
-      await onboardingApi(`/${encodeURIComponent(invitation.id)}/revoke`, { method: "POST", body: "{}" });
+      await onboardingApi(`/invitations/${encodeURIComponent(invitation.id)}/revoke`, { method: "POST", body: "{}" });
       setMessage("Invitation revoked.");
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not revoke invitation.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const provisionPos = async (invitation: OwnerInvitation) => {
+    if (!window.confirm(`Provision an isolated POS workspace for ${invitation.organizationName}?`)) return;
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      await onboardingApi(`/organizations/${encodeURIComponent(invitation.organizationId)}/apps/pos/provision`, {
+        method: "POST",
+        body: "{}",
+      });
+      setMessage(`POS workspace activated for ${invitation.organizationName}.`);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "POS workspace could not be provisioned.");
     } finally {
       setBusy(false);
     }
@@ -222,11 +247,18 @@ export function CustomerOnboardingAdmin() {
                 </span>
                 <div className="mt-1 text-[10px] text-slate-400">Expires {new Date(invitation.expiresAt).toLocaleString()}</div>
               </div>
-              <div className="flex justify-end">
+              <div className="flex justify-end gap-2">
                 {invitation.status === "pending" && (
                   <button onClick={() => void revokeInvitation(invitation)} disabled={busy} className="inline-flex items-center gap-1.5 rounded-lg border border-rose-200 px-3 py-2 text-[11px] font-semibold text-rose-700 hover:bg-rose-50">
                     <XCircle className="h-3.5 w-3.5" /> Revoke
                   </button>
+                )}
+                {invitation.status === "accepted" && invitation.appIds.includes("app-v79pos") && (
+                  invitation.appMappings?.find(mapping => mapping.appId === "app-v79pos")?.status === "active"
+                    ? <span className="inline-flex items-center rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-[10px] font-bold uppercase tracking-wide text-emerald-700">POS active</span>
+                    : <button onClick={() => void provisionPos(invitation)} disabled={busy} className="inline-flex items-center gap-1.5 rounded-lg bg-purple-700 px-3 py-2 text-[11px] font-semibold text-white disabled:opacity-50">
+                        Provision POS
+                      </button>
                 )}
               </div>
             </div>
