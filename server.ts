@@ -1079,6 +1079,44 @@ async function provisionTiquetTeamMember(
   }
 }
 
+async function deprovisionTiquetTeamMember(organizationId: string, hubUserId: string) {
+  if (posSecret.length < 32) {
+    return { ok: false as const, status: 503, error: "Platform shared secret is not configured" };
+  }
+  const scopedHubUserId = posUserId(hubUserId, organizationId);
+  const pathname = "/api/platform/members/deprovision";
+  const body = JSON.stringify({ organizationId, user: { id: scopedHubUserId } });
+  const timestamp = String(Date.now());
+  const tiquetServiceUrl = process.env.TIQUET_INTERNAL_URL || "http://v79-tiquet-manager:3000";
+  try {
+    const response = await fetch(new URL(pathname, tiquetServiceUrl), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-v79-service-id": "v79-hub",
+        "x-v79-timestamp": timestamp,
+        "x-v79-signature": signPlatformRequest({ method: "POST", pathname, timestamp, body, secret: posSecret }),
+      },
+      body,
+      signal: AbortSignal.timeout(5000),
+    });
+    const payload = await response.json().catch(() => ({})) as any;
+    if (!response.ok) {
+      return { ok: false as const, status: 502, error: "Tiquet team member deprovisioning failed", upstreamStatus: response.status };
+    }
+    if (
+      payload.deprovisioned !== true ||
+      payload.organizationId !== organizationId ||
+      payload.hubUserId !== scopedHubUserId
+    ) {
+      return { ok: false as const, status: 502, error: "Tiquet returned a mismatched team deprovisioning identity" };
+    }
+    return { ok: true as const, organizationId, hubUserId: scopedHubUserId };
+  } catch {
+    return { ok: false as const, status: 503, error: "Tiquet service is unavailable" };
+  }
+}
+
 async function provisionMarketingWorkspace(organization: Organization, owner: StoredUser) {
   if (posSecret.length < 32) {
     return { ok: false as const, status: 503, error: "Platform shared secret is not configured" };
@@ -3098,7 +3136,7 @@ app.post("/api/users", (req, res) => {
   res.status(201).json(sanitizeUserForOrganization(newUser, organizationId));
 });
 
-app.put("/api/users/:id", (req, res) => {
+app.put("/api/users/:id", async (req, res) => {
   const { id } = req.params;
   const { username, password, fullName, role, permissions, appIds } = req.body || {};
   const organizationId = (req as any).user.organizationId;
@@ -3138,6 +3176,37 @@ app.put("/api/users/:id", (req, res) => {
     return res.status(400).json({ error: "Cannot demote the sole administrator" });
   }
 
+  const previousAppIds = normalizeTeamAppIds(member.appIds, organizationId);
+  const nextAppIds = appIds !== undefined ? normalizeTeamAppIds(appIds, organizationId) : previousAppIds;
+  const nextMembershipRole = member.role !== "owner" && role !== undefined ? role : member.role;
+
+  if (organizationId !== posIdentity.organizationId && member.role !== "owner") {
+    const organization = store.organizations.find(org => org.id === organizationId && org.status === "active");
+    if (!organization) return res.status(409).json({ error: "Workspace is not active" });
+
+    const hadTiquet = previousAppIds.includes("app-tiquet");
+    const willHaveTiquet = nextAppIds.includes("app-tiquet");
+    if (hadTiquet && !willHaveTiquet) {
+      const deprovisioned = await deprovisionTiquetTeamMember(organizationId, id);
+      if (!deprovisioned.ok) {
+        return res.status(deprovisioned.status).json({
+          error: deprovisioned.error,
+          ...("upstreamStatus" in deprovisioned ? { upstreamStatus: deprovisioned.upstreamStatus } : {}),
+        });
+      }
+    } else if (willHaveTiquet && role !== undefined && nextMembershipRole !== member.role) {
+      const mappedRole = tiquetTeamRole(nextMembershipRole);
+      if (!mappedRole) return res.status(400).json({ error: "Tiquet team access requires manager, staff or viewer role" });
+      const synced = await provisionTiquetTeamMember(organization, current, mappedRole);
+      if (!synced.ok) {
+        return res.status(synced.status).json({
+          error: synced.error,
+          ...("upstreamStatus" in synced ? { upstreamStatus: synced.upstreamStatus } : {}),
+        });
+      }
+    }
+  }
+
   store.users[userIndex] = {
     ...current,
     username: username !== undefined ? username.trim() : current.username,
@@ -3159,7 +3228,7 @@ app.put("/api/users/:id", (req, res) => {
   res.json(sanitizeUserForOrganization(store.users[userIndex], organizationId));
 });
 
-app.delete("/api/users/:id", (req, res) => {
+app.delete("/api/users/:id", async (req, res) => {
   const { id } = req.params;
   const organizationId = (req as any).user.organizationId;
   const userToDelete = store.users.find((u) => u.id === id && activeMembership(store, u.id, organizationId));
@@ -3170,6 +3239,19 @@ app.delete("/api/users/:id", (req, res) => {
   const activeAdmins = store.memberships.filter(m => m.organizationId === organizationId && m.status === "active" && sessionRole(m) === "admin");
   if (sessionRole(member) === "admin" && activeAdmins.length <= 1) {
     return res.status(400).json({ error: "Cannot delete the sole administrator account" });
+  }
+
+  if (
+    organizationId !== posIdentity.organizationId &&
+    normalizeTeamAppIds(member.appIds, organizationId).includes("app-tiquet")
+  ) {
+    const deprovisioned = await deprovisionTiquetTeamMember(organizationId, id);
+    if (!deprovisioned.ok) {
+      return res.status(deprovisioned.status).json({
+        error: deprovisioned.error,
+        ...("upstreamStatus" in deprovisioned ? { upstreamStatus: deprovisioned.upstreamStatus } : {}),
+      });
+    }
   }
 
   store.memberships = store.memberships.filter(m => !(m.organizationId === organizationId && m.userId === id));
