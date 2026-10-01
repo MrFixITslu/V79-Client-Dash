@@ -16,7 +16,13 @@ Implemented and automated. The release gate provisions two independent SMB works
 
 The release gate is part of the Hub test suite so a future change that reintroduces a cross-tenant mapping, launch, or dashboard leak fails CI.
 
-## 4. Subscription lifecycle
+## 4. Transactional Hub persistence
+
+A PostgreSQL persistence foundation is available for the next cutover: the Hub state can be imported once from `data/v79_store.json` into a versioned JSONB record with transactional row locking and stale-revision rejection. The migration command is `npm run store:migrate:postgres` and requires `DATABASE_URL`. It is deliberately idempotent and refuses to overwrite an existing PostgreSQL Hub state. The JSON source is retained as a migration backup.
+
+Production still uses the existing atomic JSON file until a dedicated Hub PostgreSQL database and secret are configured on the server. Do not point `DATABASE_URL` at another application's database. The runtime cutover must be a separate release with backup, import verification, rollback rehearsal, and a full onboarding/team release-gate run against PostgreSQL before the JSON driver is retired.
+
+## 5. Subscription lifecycle
 
 Keep paid checkout off until an approved provider and merchant account are configured. Store plan, entitlement, billing customer, subscription state, grace deadline, and provider event IDs per organization. Verify webhook signatures over the raw body, process event IDs idempotently in a transaction, and audit transitions. The state policy covers trial, active, past due, grace, canceled, and recovery. Billing permissions must not grant product or operator access. Academy learner accounts remain independent.
 
