@@ -18,9 +18,9 @@ The release gate is part of the Hub test suite so a future change that reintrodu
 
 ## 4. Transactional Hub persistence
 
-A PostgreSQL persistence foundation is available for the next cutover: the Hub state can be imported once from `data/v79_store.json` into a versioned JSONB record with transactional row locking and stale-revision rejection. The migration command is `npm run store:migrate:postgres` and requires `DATABASE_URL`. It is deliberately idempotent and refuses to overwrite an existing PostgreSQL Hub state. The JSON source is retained as a migration backup.
+A PostgreSQL persistence runtime is available for the next cutover: the Hub state can be imported once from `data/v79_store.json` into a versioned JSONB record with transactional row locking and stale-revision rejection. The migration command is `npm run store:migrate:postgres` and requires `DATABASE_URL`. It is deliberately idempotent and refuses to overwrite an existing PostgreSQL Hub state. The JSON source is retained as a migration backup.
 
-Production still uses the existing atomic JSON file until a dedicated Hub PostgreSQL database and secret are configured on the server. Do not point `DATABASE_URL` at another application's database. The runtime cutover must be a separate release with backup, import verification, rollback rehearsal, and a full onboarding/team release-gate run against PostgreSQL before the JSON driver is retired.
+The runtime switch is `V79_HUB_STORE_BACKEND=postgres`. Startup fails closed if `DATABASE_URL` is missing or the PostgreSQL state has not already been initialized by the migration command. JSON remains the default backend and rollback path. Production should stay on JSON until a dedicated Hub PostgreSQL database and secret are configured on the server; do not point `DATABASE_URL` at another application's database. Before enabling the switch, take a backup, verify the import, rehearse rollback, and run the full onboarding/team release gate against PostgreSQL.
 
 ## 5. Subscription lifecycle
 
