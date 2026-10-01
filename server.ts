@@ -40,6 +40,7 @@ app.use((req, res, next) => {
 // --- Persistent File Store ---
 const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(__dirname, "data"));
 const STORE_FILE = path.join(DATA_DIR, "v79_store.json");
+const SESSION_FILE = path.join(DATA_DIR, "hub-sessions.json");
 
 process.umask(0o077);
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
@@ -626,21 +627,114 @@ if (adminPassword) {
 }
 if (usersChanged) await saveStore(store);
 
-// In-Memory Active Auth Sessions: token -> userId
-const sessions = new Map<string, { userId: string; organizationId: string; username: string; role: string; expiresAt: number }>();
+// Restart-safe auth sessions. Only SHA-256 token hashes are persisted; usable
+// browser session tokens never touch disk.
+type HubSession = {
+  userId: string;
+  organizationId: string;
+  username: string;
+  role: string;
+  expiresAt: number;
+};
+
+function sessionKey(token: string) {
+  return crypto.createHash("sha256").update(token).digest("hex");
+}
+
+function loadPersistedSessions() {
+  const loaded = new Map<string, HubSession>();
+  if (!fs.existsSync(SESSION_FILE)) return loaded;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(SESSION_FILE, "utf8"));
+    const rows = Array.isArray(parsed?.sessions) ? parsed.sessions : [];
+    for (const row of rows) {
+      if (
+        !row ||
+        !/^[a-f0-9]{64}$/.test(String(row.tokenHash || "")) ||
+        typeof row.userId !== "string" ||
+        typeof row.organizationId !== "string" ||
+        typeof row.username !== "string" ||
+        typeof row.role !== "string" ||
+        !Number.isFinite(row.expiresAt) ||
+        row.expiresAt <= Date.now()
+      ) continue;
+      loaded.set(row.tokenHash, {
+        userId: row.userId,
+        organizationId: row.organizationId,
+        username: row.username,
+        role: row.role,
+        expiresAt: row.expiresAt,
+      });
+    }
+  } catch (error) {
+    console.warn("Hub session store could not be read; starting with no active sessions.");
+  }
+  return loaded;
+}
+
+const sessions = loadPersistedSessions();
 const loginAttempts = new Map<string, { count: number; until: number }>();
 const inviteAttempts = new Map<string, { count: number; until: number }>();
 
+function persistSessions() {
+  const temp = `${SESSION_FILE}.${process.pid}.${crypto.randomBytes(4).toString("hex")}.tmp`;
+  const payload = {
+    version: 1,
+    sessions: [...sessions.entries()].map(([tokenHash, session]) => ({ tokenHash, ...session })),
+  };
+  fs.writeFileSync(temp, JSON.stringify(payload), { mode: 0o600 });
+  fs.renameSync(temp, SESSION_FILE);
+  fs.chmodSync(SESSION_FILE, 0o600);
+}
+
+function deleteSessionKey(key: string) {
+  if (!sessions.delete(key)) return false;
+  persistSessions();
+  return true;
+}
+
+function deleteSessionToken(token: string) {
+  return token ? deleteSessionKey(sessionKey(token)) : false;
+}
+
+function deleteSessionsWhere(predicate: (session: HubSession) => boolean) {
+  let changed = false;
+  for (const [key, session] of sessions) {
+    if (!predicate(session)) continue;
+    sessions.delete(key);
+    changed = true;
+  }
+  if (changed) persistSessions();
+  return changed;
+}
+
+function storeSessionToken(token: string, session: HubSession) {
+  if (sessions.size >= 5_000) {
+    const oldest = sessions.keys().next().value;
+    if (oldest !== undefined) sessions.delete(oldest);
+  }
+  sessions.set(sessionKey(token), session);
+  persistSessions();
+}
+
 function sessionFromToken(token: string) {
-  const session = sessions.get(token);
+  if (!token) return null;
+  const key = sessionKey(token);
+  const session = sessions.get(key);
   if (!session || session.expiresAt < Date.now()) {
-    sessions.delete(token);
+    if (session) deleteSessionKey(key);
     return null;
   }
   const user = store.users.find(u => u.id === session.userId);
-  if (!user) return null;
+  if (!user) {
+    deleteSessionKey(key);
+    return null;
+  }
   const membership = activeMembership(store, user.id, session.organizationId);
-  if (!membership) return null;
+  if (!membership) {
+    deleteSessionKey(key);
+    return null;
+  }
   session.role = sessionRole(membership)!;
   return session;
 }
@@ -720,7 +814,13 @@ const posKeyId = crypto.createHash("sha256").update(posPublicKey.export({ format
 type LaunchProduct = "pos" | "ffpro" | "tiquet" | "marketing";
 const launchTickets = new Map<string, { userId: string; tenantId: string; product: LaunchProduct; expiresAt: number }>();
 function pruneAuthState(now = Date.now()) {
-  for (const [token, session] of sessions) if (session.expiresAt <= now) sessions.delete(token);
+  let sessionsChanged = false;
+  for (const [key, session] of sessions) {
+    if (session.expiresAt > now) continue;
+    sessions.delete(key);
+    sessionsChanged = true;
+  }
+  if (sessionsChanged) persistSessions();
   for (const [key, attempt] of loginAttempts) if (attempt.until <= now) loginAttempts.delete(key);
   for (const [key, attempt] of inviteAttempts) if (attempt.until <= now) inviteAttempts.delete(key);
   for (const [ticket, entry] of launchTickets) if (entry.expiresAt <= now) launchTickets.delete(ticket);
@@ -1590,11 +1690,7 @@ function createHubSession(userId: string, organizationId: string) {
   if (!user || !membership) throw new Error("Unable to create Hub session.");
   pruneAuthState();
   const token = "v79_tok_" + crypto.randomBytes(24).toString("hex");
-  if (sessions.size >= 5_000) {
-    const oldest = sessions.keys().next().value;
-    if (oldest !== undefined) sessions.delete(oldest);
-  }
-  sessions.set(token, {
+  storeSessionToken(token, {
     userId,
     organizationId,
     username: user.username,
@@ -1761,22 +1857,7 @@ app.post("/api/auth/login", async (req, res) => {
     return res.status(401).json({ error: "Invalid username, password, or workspace" });
   }
 
-  // Generate secure token
-  const token = "v79_tok_" + crypto.randomBytes(24).toString("hex");
-  const expiresAt = Date.now() + 12 * 60 * 60 * 1000;
-
-  pruneAuthState();
-  if (sessions.size >= 5_000) {
-    const oldest = sessions.keys().next().value;
-    if (oldest !== undefined) sessions.delete(oldest);
-  }
-  sessions.set(token, {
-    userId: foundUser.id,
-    organizationId: selectedMembership.organizationId,
-    username: foundUser.username,
-    role: sessionRole(selectedMembership)!,
-    expiresAt
-  });
+  const token = createHubSession(foundUser.id, selectedMembership.organizationId);
 
   // Update last login
   foundUser.lastLogin = new Date().toISOString();
@@ -1951,7 +2032,7 @@ app.get("/api/auth/me", requireAuth, (req, res) => {
 
 app.post("/api/auth/logout", requireAuth, (req, res) => {
   const authHeader = req.headers.authorization;
-  sessions.delete(authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : cookieToken(req.headers.cookie));
+  deleteSessionToken(authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : cookieToken(req.headers.cookie));
   res.setHeader("Set-Cookie", sessionCookie("", 0));
   res.json({ success: true });
 });
@@ -3281,9 +3362,7 @@ app.put("/api/users/:id", async (req, res) => {
   }
 
   await saveStore(store);
-  for (const [token, session] of sessions) {
-    if (session.userId === id && (password || session.organizationId === organizationId)) sessions.delete(token);
-  }
+  deleteSessionsWhere(session => session.userId === id && (Boolean(password) || session.organizationId === organizationId));
   broadcast(organizationId, { type: "USERS_UPDATED" });
   res.json(sanitizeUserForOrganization(store.users[userIndex], organizationId));
 });
@@ -3335,9 +3414,7 @@ app.delete("/api/users/:id", async (req, res) => {
   store.memberships = store.memberships.filter(m => !(m.organizationId === organizationId && m.userId === id));
   const hasOtherMembership = activeMembershipsForUser(store, id).length > 0;
   if (!hasOtherMembership) store.users = store.users.filter((u) => u.id !== id);
-  for (const [token, session] of sessions) {
-    if (session.userId === id && session.organizationId === organizationId) sessions.delete(token);
-  }
+  deleteSessionsWhere(session => session.userId === id && session.organizationId === organizationId);
   await saveStore(store);
   broadcast(organizationId, { type: "USERS_UPDATED" });
   res.json({ success: true });
