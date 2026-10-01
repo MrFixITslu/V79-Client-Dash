@@ -17,6 +17,7 @@ import { activateFfproTenantMapping, ffproProvisioningTarget, ffproTenantLaunchR
 import { activateTiquetTenantMapping, tiquetProvisioningTarget, tiquetTenantLaunchReady, tiquetTenantMapping } from "./server/tiquet-provisioning.mjs";
 import { activateMarketingTenantMapping, marketingProvisioningTarget, marketingTenantLaunchReady, marketingTenantMapping } from "./server/marketing-provisioning.mjs";
 import { createHubStorePersistence } from "./server/runtime-store.mjs";
+import { retryTransient } from "./server/transient-retry.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1119,6 +1120,24 @@ async function deprovisionTiquetTeamMember(organizationId: string, hubUserId: st
   }
 }
 
+async function fetchMarketingPlatform(pathname: string, body: string) {
+  const marketingServiceUrl = process.env.MARKETING_INTERNAL_URL || "http://v79marketing-app:80";
+  return retryTransient(async () => {
+    const timestamp = String(Date.now());
+    return fetch(new URL(pathname, marketingServiceUrl), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-v79-service-id": "v79-hub",
+        "x-v79-timestamp": timestamp,
+        "x-v79-signature": signPlatformRequest({ method: "POST", pathname, timestamp, body, secret: posSecret }),
+      },
+      body,
+      signal: AbortSignal.timeout(3000),
+    });
+  }, { attempts: 2, delayMs: 150 });
+}
+
 async function provisionMarketingWorkspace(organization: Organization, owner: StoredUser) {
   if (posSecret.length < 32) {
     return { ok: false as const, status: 503, error: "Platform shared secret is not configured" };
@@ -1135,20 +1154,8 @@ async function provisionMarketingWorkspace(organization: Organization, owner: St
     role: "owner",
     plan: "hub",
   });
-  const timestamp = String(Date.now());
-  const marketingServiceUrl = process.env.MARKETING_INTERNAL_URL || "http://v79marketing-app:80";
   try {
-    const response = await fetch(new URL(pathname, marketingServiceUrl), {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-v79-service-id": "v79-hub",
-        "x-v79-timestamp": timestamp,
-        "x-v79-signature": signPlatformRequest({ method: "POST", pathname, timestamp, body, secret: posSecret }),
-      },
-      body,
-      signal: AbortSignal.timeout(5000),
-    });
+    const response = await fetchMarketingPlatform(pathname, body);
     const payload = await response.json().catch(() => ({})) as any;
     if (!response.ok) {
       return { ok: false as const, status: 502, error: "Marketing workspace provisioning failed", upstreamStatus: response.status };
@@ -1196,20 +1203,8 @@ async function provisionMarketingTeamMember(
     role,
     plan: "hub",
   });
-  const timestamp = String(Date.now());
-  const marketingServiceUrl = process.env.MARKETING_INTERNAL_URL || "http://v79marketing-app:80";
   try {
-    const response = await fetch(new URL(pathname, marketingServiceUrl), {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-v79-service-id": "v79-hub",
-        "x-v79-timestamp": timestamp,
-        "x-v79-signature": signPlatformRequest({ method: "POST", pathname, timestamp, body, secret: posSecret }),
-      },
-      body,
-      signal: AbortSignal.timeout(5000),
-    });
+    const response = await fetchMarketingPlatform(pathname, body);
     const payload = await response.json().catch(() => ({})) as any;
     if (!response.ok) {
       return { ok: false as const, status: 502, error: "Marketing team member provisioning failed", upstreamStatus: response.status };
@@ -1251,20 +1246,8 @@ async function deprovisionMarketingTeamMember(organizationId: string, hubUserId:
   }
   const pathname = "/api/platform/members/deprovision";
   const body = JSON.stringify({ organizationId, user: { id: scopedHubUserId } });
-  const timestamp = String(Date.now());
-  const marketingServiceUrl = process.env.MARKETING_INTERNAL_URL || "http://v79marketing-app:80";
   try {
-    const response = await fetch(new URL(pathname, marketingServiceUrl), {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-v79-service-id": "v79-hub",
-        "x-v79-timestamp": timestamp,
-        "x-v79-signature": signPlatformRequest({ method: "POST", pathname, timestamp, body, secret: posSecret }),
-      },
-      body,
-      signal: AbortSignal.timeout(5000),
-    });
+    const response = await fetchMarketingPlatform(pathname, body);
     const payload = await response.json().catch(() => ({})) as any;
     if (!response.ok) {
       return { ok: false as const, status: 502, error: "Marketing team member deprovisioning failed", upstreamStatus: response.status };
@@ -2490,24 +2473,29 @@ async function readDashboardSummary(product: DashboardProduct, organizationId: s
   }
 
   const pathname = `/api/platform/summary/${encodeURIComponent(subject)}`;
-  const timestamp = String(Date.now());
-  const signature = signPlatformRequest({
-    method: "GET",
-    pathname,
-    timestamp,
-    body: "",
-    secret: signingSecret,
-  });
-
-  try {
-    const response = await fetch(new URL(pathname, dashboardSources[product]), {
+  const fetchSummary = async () => {
+    const timestamp = String(Date.now());
+    const signature = signPlatformRequest({
+      method: "GET",
+      pathname,
+      timestamp,
+      body: "",
+      secret: signingSecret,
+    });
+    return fetch(new URL(pathname, dashboardSources[product]), {
       headers: {
         "x-v79-service-id": "v79-hub",
         "x-v79-timestamp": timestamp,
         "x-v79-signature": signature,
       },
-      signal: AbortSignal.timeout(5000),
+      signal: AbortSignal.timeout(product === "marketing" ? 2500 : 5000),
     });
+  };
+
+  try {
+    const response = product === "marketing"
+      ? await retryTransient(fetchSummary, { attempts: 2, delayMs: 150 })
+      : await fetchSummary();
     const payload = await response.json().catch(() => ({})) as any;
 
     if (response.status === 404) {
