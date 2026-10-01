@@ -431,17 +431,24 @@ export function HubOverview({
                         </div>
                         <span className="hidden md:inline text-[9px] text-slate-500">{meta.score}%</span>
                       </div>
-                      <div className="md:h-[110px] flex md:items-end">
-                        <div className="w-full h-2 md:h-full rounded-full bg-[#07111f] border border-[#162d45] overflow-hidden">
+                      <div className="md:hidden flex-1">
+                        <div className="w-full h-2 rounded-full bg-[#07111f] border border-[#162d45] overflow-hidden">
                           <div
-                            className="md:w-full rounded-full transition-all duration-500"
+                            className="h-full rounded-full transition-all duration-500"
                             style={{
-                              background: `linear-gradient(180deg, ${card.accent}, ${card.accent}66)`,
-                              height: "100%",
                               width: `${meta.score}%`,
-                              ...(typeof window !== "undefined" && window.innerWidth >= 768
-                                ? { width: "100%", height: `${meta.score}%` }
-                                : {}),
+                              background: `linear-gradient(90deg, ${card.accent}88, ${card.accent})`,
+                            }}
+                          />
+                        </div>
+                      </div>
+                      <div className="hidden md:flex h-[110px] items-end">
+                        <div className="w-full h-full rounded-full bg-[#07111f] border border-[#162d45] overflow-hidden flex items-end">
+                          <div
+                            className="w-full rounded-full transition-all duration-500"
+                            style={{
+                              height: `${meta.score}%`,
+                              background: `linear-gradient(180deg, ${card.accent}, ${card.accent}66)`,
                             }}
                           />
                         </div>
