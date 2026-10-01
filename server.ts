@@ -2575,7 +2575,9 @@ app.get("/api/dashboard/summary", async (req, res) => {
           status: "restricted",
           metrics: {},
           generatedAt: null,
-          accessMessage: "Managed product metrics are owner-only until team product access is provisioned.",
+          accessMessage: product === "ffpro"
+            ? "FFPRO finance metrics and full-account finance access are workspace-owner only. Share specific FFPRO projects with editors or viewers inside FFPRO."
+            : "Workspace business KPIs remain owner-only even when a team member has role-mapped product access.",
         }
       : await readDashboardSummary(product, session.organizationId)
   ] as const));
@@ -3434,7 +3436,9 @@ app.get("/api/ecosystem/apps", (req, res) => {
         description: setupPending
           ? "Your Hub access is active. V79 Digital is completing this product workspace before launch is enabled."
           : teamLaunchBlocked
-            ? "This product is enabled for the workspace. Team-member product access will be provisioned separately; owner launch remains available."
+            ? a.id === "app-ffpro"
+              ? "FFPRO full-account finance access is restricted to the workspace owner. The owner can share selected FFPRO projects with editors or viewers inside FFPRO."
+              : "This product is enabled for the workspace, but this team role is not eligible for launch."
             : managedDescriptions[a.id] || a.description,
         features: managedDescriptions[a.id] ? [] : a.features,
         ssoSupported: ["app-ffpro","app-tiquet","app-marketing","app-v79pos"].includes(a.id) && !launchBlocked,
@@ -3443,7 +3447,9 @@ app.get("/api/ecosystem/apps", (req, res) => {
         accessMessage: setupPending
           ? "Product workspace setup pending"
           : teamLaunchBlocked
-            ? "Managed product launch is owner-only until team product access is provisioned"
+            ? a.id === "app-ffpro"
+              ? "FFPRO full-account finance access is workspace-owner only"
+              : "Your workspace role is not eligible to launch this product"
             : undefined,
       };
     }));
