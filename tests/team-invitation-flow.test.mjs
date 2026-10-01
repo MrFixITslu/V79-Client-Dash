@@ -287,6 +287,8 @@ test("workspace team invitations stay owner-controlled and isolated across SMBs"
     assert.equal(managerDashboardBody.apps[product].status, "restricted");
     assert.deepEqual(managerDashboardBody.apps[product].metrics, {});
   }
+  assert.match(managerDashboardBody.apps.ffpro.accessMessage, /full-account finance access.*workspace-owner only/i);
+  assert.match(managerDashboardBody.apps.ffpro.accessMessage, /specific FFPRO projects/i);
 
   assert.equal((await createTeamInvite(managerCookie, "nope@example.test", "staff")).response.status, 403);
   assert.equal((await request("/api/users/" + firstOwner.body.user.id, {

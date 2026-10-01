@@ -158,6 +158,30 @@ test("FFPRO provisioning activates exact SMB tenants and keeps finance launches 
     return { organization: body.organization, cookie: accepted.headers.get("set-cookie").split(";")[0], email };
   }
 
+  async function addTeamMember(owner, email, role, password) {
+    const invited = await request("/api/team/invitations", {
+      method: "POST",
+      headers: { Cookie: owner.cookie, Origin: origin, "content-type": "application/json" },
+      body: JSON.stringify({ email, role, expiresInHours: 24 }),
+    });
+    assert.equal(invited.status, 201, await invited.clone().text());
+    const invitation = await invited.json();
+    const token = new URLSearchParams(new URL(invitation.inviteUrl).hash.slice(1)).get("teamInvite");
+    assert.ok(token);
+    const accepted = await request("/api/team-invitation/accept", {
+      method: "POST",
+      headers: { Origin: origin, "content-type": "application/json", "x-v79-team-invite-token": token },
+      body: JSON.stringify({ fullName: "Finance Collaborator", password }),
+    });
+    assert.equal(accepted.status, 201, await accepted.clone().text());
+    return {
+      cookie: accepted.headers.get("set-cookie").split(";")[0],
+      body: await accepted.json(),
+      email,
+      role,
+    };
+  }
+
   const a = await onboard("Finance A", "a@example.test", "finance-a-password-123");
   const b = await onboard("Finance B", "b@example.test", "finance-b-password-123");
   assert.notEqual(a.organization.id, b.organization.id);
@@ -183,6 +207,34 @@ test("FFPRO provisioning activates exact SMB tenants and keeps finance launches 
 
   assert.equal(provisioned.size, 2);
   assert.notEqual(provisioned.get(a.organization.id).user.id, provisioned.get(b.organization.id).user.id);
+
+  const manager = await addTeamMember(
+    a,
+    "finance.manager@example.test",
+    "manager",
+    "finance-manager-password-12345",
+  );
+  assert.equal(manager.body.user.workspaceOwner, false);
+  assert.equal(manager.body.user.platformOperator, false);
+  assert.equal(manager.body.teamOnboarding.managedProductAccess.ffpro, "owner_only");
+
+  const managerAppsResponse = await request("/api/ecosystem/apps", { headers: { Cookie: manager.cookie } });
+  assert.equal(managerAppsResponse.status, 200);
+  const managerApps = await managerAppsResponse.json();
+  const managerFfproApp = managerApps.find(app => app.id === "app-ffpro");
+  assert.equal(managerFfproApp.launchReady, false);
+  assert.equal(managerFfproApp.ssoSupported, false);
+  assert.match(managerFfproApp.accessMessage, /workspace-owner only/i);
+  assert.match(managerFfproApp.description, /selected FFPRO projects/i);
+  assert.equal((await request("/api/apps/ffpro/launch", { headers: { Cookie: manager.cookie } })).status, 403);
+
+  const managerDashboard = await (await request("/api/dashboard/summary", {
+    headers: { Cookie: manager.cookie },
+  })).json();
+  assert.equal(managerDashboard.apps.ffpro.status, "restricted");
+  assert.deepEqual(managerDashboard.apps.ffpro.metrics, {});
+  assert.match(managerDashboard.apps.ffpro.accessMessage, /full-account finance access.*workspace-owner only/i);
+  assert.match(managerDashboard.apps.ffpro.accessMessage, /specific FFPRO projects/i);
 
   async function launchAndConsume(customer) {
     const launch = await request("/api/apps/ffpro/launch", { headers: { Cookie: customer.cookie } });
