@@ -20,6 +20,7 @@ test("Tiquet provisioning activates exact SMB tenants and keeps ticketing launch
   const launchSecret = "tiquet-launch-secret-12345678901234567890";
   const provisioned = new Map();
   const teamProvisioned = [];
+  const teamDeprovisioned = [];
 
   const tiquetServer = createServer(async (req, res) => {
     const chunks = [];
@@ -90,6 +91,29 @@ test("Tiquet provisioning activates exact SMB tenants and keeps ticketing launch
         userId,
         localRole: "Member",
         permissions,
+      }));
+    }
+
+    if (req.method === "POST" && pathname === "/api/platform/members/deprovision") {
+      const valid = verifyPlatformRequest({
+        method: req.method,
+        pathname,
+        timestamp: String(req.headers["x-v79-timestamp"] || ""),
+        signature: String(req.headers["x-v79-signature"] || ""),
+        body,
+        secret: platformSecret,
+      });
+      if (req.headers["x-v79-service-id"] !== "v79-hub" || !valid) {
+        res.writeHead(401, { "content-type": "application/json" });
+        return res.end(JSON.stringify({ error: "bad signature" }));
+      }
+      const payload = JSON.parse(body);
+      teamDeprovisioned.push(payload);
+      res.writeHead(200, { "content-type": "application/json" });
+      return res.end(JSON.stringify({
+        deprovisioned: true,
+        organizationId: payload.organizationId,
+        hubUserId: payload.user.id,
       }));
     }
 
@@ -294,6 +318,7 @@ test("Tiquet provisioning activates exact SMB tenants and keeps ticketing launch
     staff: ["dashboard", "jobs", "clients", "files", "new-request"],
     viewer: ["dashboard"],
   };
+  const teamMembers = new Map();
   for (const role of ["manager", "staff", "viewer"]) {
     const email = `${role}.tiquet@example.test`;
     const member = await addTeamMember(a, email, role, `${role}-tiquet-password-12345`);
@@ -316,8 +341,39 @@ test("Tiquet provisioning activates exact SMB tenants and keeps ticketing launch
     assert.equal((await request("/api/apps/ffpro/launch", { headers: { Cookie: member.cookie } })).status, 403);
     assert.equal((await request("/api/apps/marketing/launch", { headers: { Cookie: member.cookie } })).status, 403);
     assert.equal((await request("/api/admin/platform/overview", { headers: { Cookie: member.cookie } })).status, 403);
+    teamMembers.set(role, member);
   }
   assert.equal(teamProvisioned.length, 3);
+
+  const managerMember = teamMembers.get("manager");
+  const managerRoleSync = await request(`/api/users/${managerMember.body.user.id}`, {
+    method: "PUT",
+    headers: { Cookie: a.cookie, Origin: origin, "content-type": "application/json" },
+    body: JSON.stringify({ role: "viewer" }),
+  });
+  assert.equal(managerRoleSync.status, 200, await managerRoleSync.clone().text());
+  assert.equal(teamProvisioned.length, 4);
+  assert.equal(teamProvisioned.at(-1).payload.role, "viewer");
+  assert.deepEqual(teamProvisioned.at(-1).permissions, expectedPermissions.viewer);
+
+  const managerRemoveTiquet = await request(`/api/users/${managerMember.body.user.id}`, {
+    method: "PUT",
+    headers: { Cookie: a.cookie, Origin: origin, "content-type": "application/json" },
+    body: JSON.stringify({ appIds: [] }),
+  });
+  assert.equal(managerRemoveTiquet.status, 200, await managerRemoveTiquet.clone().text());
+  assert.equal(teamDeprovisioned.length, 1);
+  assert.equal(teamDeprovisioned[0].organizationId, a.organization.id);
+  assert.equal((await request("/api/apps/tiquet/launch", { headers: { Cookie: managerMember.cookie } })).status, 403);
+
+  const staffMember = teamMembers.get("staff");
+  const deleteStaff = await request(`/api/users/${staffMember.body.user.id}`, {
+    method: "DELETE",
+    headers: { Cookie: a.cookie, Origin: origin },
+  });
+  assert.equal(deleteStaff.status, 200, await deleteStaff.clone().text());
+  assert.equal(teamDeprovisioned.length, 2);
+  assert.equal(teamDeprovisioned[1].organizationId, a.organization.id);
 
   const dashA = await (await request("/api/dashboard/summary", { headers: { Cookie: a.cookie } })).json();
   const dashB = await (await request("/api/dashboard/summary", { headers: { Cookie: b.cookie } })).json();
