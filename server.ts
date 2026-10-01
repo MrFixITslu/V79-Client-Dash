@@ -3243,7 +3243,6 @@ app.delete("/api/users/:id", async (req, res) => {
 
   if (
     organizationId !== posIdentity.organizationId &&
-    member.role !== "owner" &&
     normalizeTeamAppIds(member.appIds, organizationId).includes("app-tiquet")
   ) {
     const deprovisioned = await deprovisionTiquetTeamMember(organizationId, id);
