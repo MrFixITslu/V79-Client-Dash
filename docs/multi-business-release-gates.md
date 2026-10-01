@@ -4,7 +4,7 @@ Status: invite-only Hub onboarding is production-ready for closed beta. The V79 
 
 ## 1. Organization data boundary
 
-Implemented for the current single-instance Hub: organizations, memberships, entitlements, customer custom apps and product tenant mappings are keyed by organization ID; the existing V79 workspace was migrated with backup protection. Authenticated Hub reads, writes and realtime updates resolve their organization from the session, and platform administration is restricted to the V79 operator identity rather than customer admin role. Store writes use a temporary file plus atomic rename; a transactional database remains the required upgrade before running multiple Hub replicas.
+Implemented for the current single-instance Hub: organizations, memberships, entitlements, customer custom apps and product tenant mappings are keyed by organization ID; the existing V79 workspace was migrated with backup protection. Authenticated Hub reads, writes and realtime updates resolve their organization from the session, and platform administration is restricted to the V79 operator identity rather than customer admin role. Production persistence now uses PostgreSQL with revisioned transactional writes and stale-writer rejection. Organization context remains session-derived, and customer routes do not trust client-supplied organization IDs as authority.
 
 ## 2. Controlled onboarding
 
@@ -18,9 +18,9 @@ The release gate is part of the Hub test suite so a future change that reintrodu
 
 ## 4. Transactional Hub persistence
 
-A PostgreSQL persistence runtime is available for the next cutover: the Hub state can be imported once from `data/v79_store.json` into a versioned JSONB record with transactional row locking and stale-revision rejection. The migration command is `npm run store:migrate:postgres` and requires `DATABASE_URL`. It is deliberately idempotent and refuses to overwrite an existing PostgreSQL Hub state. The JSON source is retained as a migration backup.
+Production now runs with `V79_HUB_STORE_BACKEND=postgres` and a dedicated `v79-hub-postgres` service on an internal-only network. The original JSON state was backed up, imported with `npm run store:migrate:postgres`, and compared with the PostgreSQL state before cutover. Startup fails closed if `DATABASE_URL` is missing or the PostgreSQL state has not already been initialized. Do not point the Hub at another application's database.
 
-The runtime switch is `V79_HUB_STORE_BACKEND=postgres`. Startup fails closed if `DATABASE_URL` is missing or the PostgreSQL state has not already been initialized by the migration command. JSON remains the default backend and rollback path. The Compose stack now includes a dedicated `v79-hub-postgres` service on an internal-only network with its own persistent volume. Production must stay on `V79_HUB_STORE_BACKEND=json` until that database is healthy, the JSON store is backed up and imported, equivalence is verified, rollback is rehearsed, and the full onboarding/team release gate passes against PostgreSQL. Do not point the Hub at another application's database.
+Backup and recovery validation is also complete for the closed-beta gate: the scheduled backup now includes the Hub PostgreSQL dump, POS PostgreSQL dump, protected Hub runtime data and the existing application volumes. A Hub dump was restored into an isolated PostgreSQL 17 container and matched production by revision, organization/member counts and JSON-state hash. The retained pre-cutover JSON copy remains a rollback asset, but production is no longer expected to run on the JSON backend during normal operation.
 
 ## 5. Subscription lifecycle
 
