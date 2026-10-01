@@ -89,5 +89,3 @@ test("PostgreSQL runtime fails closed until the migration has initialized state"
     /Run npm run store:migrate:postgres/i,
   );
 });
-
-[executed on device: firelion-Aspire-A315-51 (729abacc-4888-407d-b7ef-15ffed4122f0)]
