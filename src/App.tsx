@@ -283,8 +283,11 @@ export default function App() {
               <RotateCw className="w-4 h-4" />
             </button>
             <button
-              title="Notifications"
-              className="hidden sm:flex w-9 h-9 rounded-xl border border-[#1a3854] bg-[#091728] text-slate-500 hover:text-white items-center justify-center transition-colors relative"
+              type="button"
+              disabled
+              title="No new notifications"
+              aria-label="No new notifications"
+              className="hidden sm:flex w-9 h-9 rounded-xl border border-[#1a3854] bg-[#091728] text-slate-600 items-center justify-center cursor-default"
             >
               <Bell className="w-4 h-4" />
             </button>
