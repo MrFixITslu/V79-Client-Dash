@@ -312,8 +312,8 @@ export function HubOverview({ ecosystemApps, onNavigate }: HubOverviewProps) {
                 key={card.key}
                 href={launchUrl || undefined}
                 aria-disabled={!launchUrl}
-                target={launchUrl && !managed ? "_blank" : undefined}
-                rel={launchUrl && !managed ? "noopener noreferrer" : undefined}
+                target={launchUrl ? "_blank" : undefined}
+                rel={launchUrl ? "noopener noreferrer" : undefined}
                 className={`bg-white border border-slate-200 rounded-2xl p-5 transition-all no-underline text-inherit group ${launchUrl ? "hover:border-cyan-300 hover:shadow-md" : "cursor-not-allowed opacity-75"}`}
               >
                 <div className="flex items-start justify-between gap-3">
@@ -377,8 +377,8 @@ export function HubOverview({ ecosystemApps, onNavigate }: HubOverviewProps) {
               {launchUrl ? (
                 <a
                   href={launchUrl}
-                  target={managed ? undefined : "_blank"}
-                  rel={managed ? undefined : "noopener noreferrer"}
+                  target="_blank"
+                  rel="noopener noreferrer"
                   className="text-xs font-semibold text-cyan-700 whitespace-nowrap"
                 >
                   Open <ArrowUpRight className="inline w-3.5 h-3.5" />
