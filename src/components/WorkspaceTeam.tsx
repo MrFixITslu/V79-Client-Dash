@@ -15,10 +15,11 @@ import {
   AlertTriangle,
   UserCheck,
 } from "lucide-react";
-import { User, UserRole, ViewState } from "../types";
+import { EcosystemApp, User, UserRole, ViewState } from "../types";
 
 interface WorkspaceTeamProps {
   users: User[];
+  apps: EcosystemApp[];
   currentUser: User | null;
   onNavigate: (view: ViewState) => void;
   onAddUser?: (userData: any) => Promise<void>;
@@ -31,13 +32,21 @@ interface TeamInvitationRow {
   email: string;
   role: "manager" | "staff" | "viewer";
   permissions: string[];
+  appIds: string[];
   status: "pending" | "accepted" | "revoked" | "expired";
   expiresAt: string;
   createdAt: string;
 }
 
+const teamAppOptions = [
+  { id: "app-v79pos", label: "V79 POS" },
+  { id: "app-tiquet", label: "V79 Tiquet" },
+  { id: "app-marketing", label: "V79 Marketing" },
+] as const;
+
 export function WorkspaceTeam({
   users,
+  apps,
   currentUser,
   onNavigate,
   onAddUser,
@@ -55,6 +64,7 @@ export function WorkspaceTeam({
   const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState<"manager" | "staff" | "viewer">("staff");
+  const [inviteAppIds, setInviteAppIds] = useState<string[]>([]);
   const [inviteBusy, setInviteBusy] = useState(false);
   const [inviteError, setInviteError] = useState("");
   const [inviteLink, setInviteLink] = useState("");
@@ -64,6 +74,7 @@ export function WorkspaceTeam({
     password: "",
     fullName: "",
     role: "staff" as UserRole,
+    appIds: [] as string[],
   });
 
   const loadTeamInvitations = async () => {
@@ -86,6 +97,7 @@ export function WorkspaceTeam({
   }, [currentUser?.workspaceOwner]);
 
   const teamList = users;
+  const availableTeamApps = teamAppOptions.filter(option => apps.some(app => app.id === option.id));
 
   const filteredTeam = teamList.filter(
     (m) =>
@@ -100,6 +112,7 @@ export function WorkspaceTeam({
       password: "",
       fullName: "",
       role: "staff",
+      appIds: [],
     });
     setErrorMessage("");
     setShowPassword(false);
@@ -113,6 +126,7 @@ export function WorkspaceTeam({
       password: "",
       fullName: userToEdit.fullName || userToEdit.username,
       role: userToEdit.role,
+      appIds: userToEdit.appIds || [],
     });
     setErrorMessage("");
     setShowPassword(false);
@@ -136,7 +150,7 @@ export function WorkspaceTeam({
                   role: formData.role,
                   ...(formData.password ? { password: formData.password } : {}),
                 }
-              : { role: formData.role },
+              : { role: formData.role, appIds: formData.appIds },
           );
         }
       } else {
@@ -175,6 +189,7 @@ export function WorkspaceTeam({
   const openInvite = () => {
     setInviteEmail("");
     setInviteRole("staff");
+    setInviteAppIds([]);
     setInviteError("");
     setInviteLink("");
     setIsInviteModalOpen(true);
@@ -189,7 +204,7 @@ export function WorkspaceTeam({
       const response = await fetch("/api/team/invitations", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: inviteEmail.trim(), role: inviteRole, expiresInHours: 72 }),
+        body: JSON.stringify({ email: inviteEmail.trim(), role: inviteRole, appIds: inviteAppIds, expiresInHours: 72 }),
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || "Unable to create team invitation");
@@ -360,6 +375,17 @@ export function WorkspaceTeam({
                       )}
                     </div>
                     <div className="text-xs text-slate-400 font-mono">@{member.username}</div>
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {member.workspaceOwner ? (
+                        <span className="text-[9px] font-semibold rounded-full bg-slate-100 px-2 py-0.5 text-slate-600">All workspace apps</span>
+                      ) : (member.appIds || []).length === 0 ? (
+                        <span className="text-[9px] font-semibold rounded-full bg-amber-50 px-2 py-0.5 text-amber-700">Hub only</span>
+                      ) : (member.appIds || []).map(appId => (
+                        <span key={appId} className="text-[9px] font-semibold rounded-full bg-cyan-50 px-2 py-0.5 text-cyan-700">
+                          {teamAppOptions.find(option => option.id === appId)?.label || appId}
+                        </span>
+                      ))}
+                    </div>
                   </div>
                 </div>
 
@@ -435,6 +461,11 @@ export function WorkspaceTeam({
                     <span className="capitalize">{invitation.role}</span>
                     <span className="mx-1.5">•</span>
                     Expires {new Date(invitation.expiresAt).toLocaleString()}
+                  </div>
+                  <div className="text-[10px] text-slate-400 mt-1">
+                    Apps: {invitation.appIds?.length
+                      ? invitation.appIds.map(appId => teamAppOptions.find(option => option.id === appId)?.label || appId).join(", ")
+                      : "Hub only"}
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
@@ -538,8 +569,29 @@ export function WorkspaceTeam({
                     <option value="viewer">Viewer — overview only</option>
                   </select>
                 </label>
+                <fieldset className="space-y-2">
+                  <legend className="text-xs font-bold text-slate-700 mb-1">Assigned apps</legend>
+                  {availableTeamApps.length === 0 ? (
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-[11px] text-slate-600">
+                      No team-enabled managed apps are active for this workspace yet.
+                    </div>
+                  ) : availableTeamApps.map(option => (
+                    <label key={option.id} className="flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-xs text-slate-700">
+                      <input
+                        type="checkbox"
+                        checked={inviteAppIds.includes(option.id)}
+                        onChange={(e) => setInviteAppIds(current =>
+                          e.target.checked
+                            ? [...new Set([...current, option.id])]
+                            : current.filter(appId => appId !== option.id)
+                        )}
+                      />
+                      <span>{option.label}</span>
+                    </label>
+                  ))}
+                </fieldset>
                 <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-[11px] leading-relaxed text-amber-800">
-                  This grants Hub workspace access only. POS, FFPRO, Tiquet and Marketing stay owner-only until team access is provisioned separately in each product.
+                  Only the apps selected above will appear for this member. FFPRO remains owner-only.
                 </div>
                 <div className="flex justify-end gap-2 pt-2">
                   <button
@@ -665,6 +717,32 @@ export function WorkspaceTeam({
                   <option value="viewer">Viewer (Read-only)</option>
                 </select>
               </div>
+
+              {!currentUser?.platformOperator && editingUser && (
+                <fieldset className="space-y-2">
+                  <legend className="text-xs font-bold text-slate-700 mb-1">Assigned apps</legend>
+                  {availableTeamApps.length === 0 ? (
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-[11px] text-slate-600">
+                      No team-enabled managed apps are active for this workspace.
+                    </div>
+                  ) : availableTeamApps.map(option => (
+                    <label key={option.id} className="flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-xs text-slate-700">
+                      <input
+                        type="checkbox"
+                        checked={formData.appIds.includes(option.id)}
+                        onChange={(e) => setFormData(current => ({
+                          ...current,
+                          appIds: e.target.checked
+                            ? [...new Set([...current.appIds, option.id])]
+                            : current.appIds.filter(appId => appId !== option.id),
+                        }))}
+                      />
+                      <span>{option.label}</span>
+                    </label>
+                  ))}
+                  <p className="text-[10px] text-slate-500">FFPRO remains owner-only.</p>
+                </fieldset>
+              )}
 
               <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2">
                 <button

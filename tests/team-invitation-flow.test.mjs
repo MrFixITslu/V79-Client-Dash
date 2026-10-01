@@ -135,7 +135,7 @@ test("workspace team invitations stay owner-controlled and isolated across SMBs"
     const created = await request("/api/admin/onboarding/invitations", {
       method: "POST",
       headers: operatorHeaders,
-      body: JSON.stringify({ organizationName, email, appIds: ["app-v79pos"], expiresInHours: 24 }),
+      body: JSON.stringify({ organizationName, email, appIds: ["app-v79pos", "app-tiquet", "app-marketing"], expiresInHours: 24 }),
     });
     assert.equal(created.status, 201, await created.clone().text());
     const payload = await created.json();
@@ -168,11 +168,11 @@ test("workspace team invitations stay owner-controlled and isolated across SMBs"
     assert.equal(body.mapping.externalTenantId, owner.body.organization.id);
   }
 
-  async function createTeamInvite(cookie, email, role) {
+  async function createTeamInvite(cookie, email, role, appIds = ["app-v79pos"]) {
     const response = await request("/api/team/invitations", {
       method: "POST",
       headers: { Cookie: cookie, Origin: origin, "content-type": "application/json" },
-      body: JSON.stringify({ email, role, expiresInHours: 24 }),
+      body: JSON.stringify({ email, role, appIds, expiresInHours: 24 }),
     });
     const body = await response.clone().json().catch(() => ({}));
     return { response, body, token: body.inviteUrl ? tokenFromUrl(body.inviteUrl, "teamInvite") : null };
@@ -231,6 +231,8 @@ test("workspace team invitations stay owner-controlled and isolated across SMBs"
 
   const badRole = await createTeamInvite(firstOwner.cookie, "bad-admin@example.test", "admin");
   assert.equal(badRole.response.status, 400, "customer owners cannot delegate admin");
+  const badFinanceAccess = await createTeamInvite(firstOwner.cookie, "bad-finance@example.test", "staff", ["app-ffpro"]);
+  assert.equal(badFinanceAccess.response.status, 400, "FFPRO must remain owner-only");
 
   const managerInvite = await createTeamInvite(firstOwner.cookie, "shared.member@example.test", "manager");
   assert.equal(managerInvite.response.status, 201);
@@ -247,6 +249,7 @@ test("workspace team invitations stay owner-controlled and isolated across SMBs"
   assert.equal(metadataBody.organizationName, "Alpha Services Ltd");
   assert.notEqual(metadataBody.email, "shared.member@example.test");
   assert.equal(metadataBody.role, "manager");
+  assert.deepEqual(metadataBody.appIds, ["app-v79pos"]);
 
   const managerAccepted = await acceptTeamInvite(
     managerInvite.token,
@@ -259,6 +262,8 @@ test("workspace team invitations stay owner-controlled and isolated across SMBs"
   assert.equal(managerBody.user.role, "manager");
   assert.equal(managerBody.user.workspaceOwner, false);
   assert.equal(managerBody.user.platformOperator, false);
+  assert.deepEqual(managerBody.user.appIds, ["app-v79pos"]);
+  assert.deepEqual(managerBody.teamOnboarding.appIds, ["app-v79pos"]);
   assert.deepEqual(managerBody.teamOnboarding.managedProductAccess, {
     pos: "role_mapped",
     ffpro: "owner_only",
@@ -277,9 +282,12 @@ test("workspace team invitations stay owner-controlled and isolated across SMBs"
   assert.equal(managerRoster.some(user => user.username === "alpha.owner@example.test"), true);
   assert.equal(managerRoster.some(user => user.username === "shared.member@example.test"), true);
   const managerApps = await (await request("/api/ecosystem/apps", { headers: { Cookie: managerCookie } })).json();
+  assert.deepEqual(managerApps.map(app => app.id), ["app-v79pos"]);
   const managerPosApp = managerApps.find(app => app.id === "app-v79pos");
   assert.equal(managerPosApp.launchReady, true);
   assert.equal(managerPosApp.ssoSupported, true);
+  assert.equal((await request("/api/apps/tiquet/launch", { headers: { Cookie: managerCookie } })).status, 403);
+  assert.equal((await request("/api/apps/marketing/launch", { headers: { Cookie: managerCookie } })).status, 403);
   const managerDashboard = await request("/api/dashboard/summary", { headers: { Cookie: managerCookie } });
   assert.equal(managerDashboard.status, 200);
   const managerDashboardBody = await managerDashboard.json();
@@ -316,7 +324,9 @@ test("workspace team invitations stay owner-controlled and isolated across SMBs"
   const staffPosProvision = posProvisioning.at(-1);
   assert.equal(staffPosProvision.payload.role, "staff");
   assert.equal(staffPosProvision.roleKey, "CASHIER");
-  assert.equal((await request("/api/connections/status", { headers: { Cookie: staffCookie } })).status, 200);
+  const staffConnections = await request("/api/connections/status", { headers: { Cookie: staffCookie } });
+  assert.equal(staffConnections.status, 200);
+  assert.deepEqual(Object.keys((await staffConnections.json()).apps), ["pos"]);
 
   const revokeInvite = await createTeamInvite(firstOwner.cookie, "revoke.me@example.test", "viewer");
   assert.equal(revokeInvite.response.status, 201);
@@ -378,7 +388,9 @@ test("workspace team invitations stay owner-controlled and isolated across SMBs"
   const sharedMemberships = store.memberships.filter(member => member.userId === sharedUserId);
   assert.equal(sharedMemberships.length, 2);
   assert.equal(sharedMemberships.find(member => member.organizationId === firstOrgId).role, "manager");
+  assert.deepEqual(sharedMemberships.find(member => member.organizationId === firstOrgId).appIds, ["app-v79pos"]);
   assert.equal(sharedMemberships.find(member => member.organizationId === secondOrgId).role, "viewer");
+  assert.deepEqual(sharedMemberships.find(member => member.organizationId === secondOrgId).appIds, ["app-v79pos"]);
 
   const roleOnlyUpdate = await request(`/api/users/${sharedUserId}`, {
     method: "PUT",
@@ -389,7 +401,9 @@ test("workspace team invitations stay owner-controlled and isolated across SMBs"
   const storeAfterRoleUpdate = JSON.parse(await readFile(join(dir, "v79_store.json"), "utf8"));
   const updatedMemberships = storeAfterRoleUpdate.memberships.filter(member => member.userId === sharedUserId);
   assert.equal(updatedMemberships.find(member => member.organizationId === firstOrgId).role, "staff");
+  assert.deepEqual(updatedMemberships.find(member => member.organizationId === firstOrgId).appIds, ["app-v79pos"]);
   assert.equal(updatedMemberships.find(member => member.organizationId === secondOrgId).role, "viewer");
+  assert.deepEqual(updatedMemberships.find(member => member.organizationId === secondOrgId).appIds, ["app-v79pos"]);
 
   const ambiguousLogin = await request("/api/auth/login", {
     method: "POST",
@@ -417,6 +431,36 @@ test("workspace team invitations stay owner-controlled and isolated across SMBs"
   assert.equal(resyncedPosProvision.payload.role, "staff");
   assert.equal(resyncedPosProvision.roleKey, "CASHIER");
 
+  const removeAlphaPos = await request(`/api/users/${sharedUserId}`, {
+    method: "PUT",
+    headers: { Cookie: firstOwner.cookie, Origin: origin, "content-type": "application/json" },
+    body: JSON.stringify({ appIds: [] }),
+  });
+  assert.equal(removeAlphaPos.status, 200, await removeAlphaPos.clone().text());
+  const storeAfterAccessUpdate = JSON.parse(await readFile(join(dir, "v79_store.json"), "utf8"));
+  const accessMemberships = storeAfterAccessUpdate.memberships.filter(member => member.userId === sharedUserId);
+  assert.deepEqual(accessMemberships.find(member => member.organizationId === firstOrgId).appIds, []);
+  assert.deepEqual(accessMemberships.find(member => member.organizationId === secondOrgId).appIds, ["app-v79pos"]);
+
+  const alphaAfterRemoval = await request("/api/auth/login", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      username: "shared.member@example.test",
+      password: "shared-team-password-12345",
+      organizationId: firstOrgId,
+    }),
+  });
+  assert.equal(alphaAfterRemoval.status, 200);
+  const alphaAfterRemovalBody = await alphaAfterRemoval.json();
+  assert.deepEqual(alphaAfterRemovalBody.user.appIds, []);
+  const alphaAfterRemovalCookie = alphaAfterRemoval.headers.get("set-cookie").split(";")[0];
+  assert.deepEqual(await (await request("/api/ecosystem/apps", { headers: { Cookie: alphaAfterRemovalCookie } })).json(), []);
+  const alphaConnectionsAfterRemoval = await request("/api/connections/status", { headers: { Cookie: alphaAfterRemovalCookie } });
+  assert.equal(alphaConnectionsAfterRemoval.status, 200);
+  assert.deepEqual(Object.keys((await alphaConnectionsAfterRemoval.json()).apps), []);
+  assert.equal((await request("/api/apps/pos/launch", { headers: { Cookie: alphaAfterRemovalCookie } })).status, 403);
+
   const betaLogin = await request("/api/auth/login", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -429,6 +473,9 @@ test("workspace team invitations stay owner-controlled and isolated across SMBs"
   assert.equal(betaLogin.status, 200);
   const betaBody = await betaLogin.json();
   assert.equal(betaBody.user.role, "viewer");
+  assert.deepEqual(betaBody.user.appIds, ["app-v79pos"]);
   assert.equal(betaBody.user.platformOperator, false);
   assert.equal(betaBody.user.workspaceOwner, false);
+  const betaCookie = betaLogin.headers.get("set-cookie").split(";")[0];
+  await launchAndConsumePos(betaCookie, secondOrgId);
 });

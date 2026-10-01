@@ -13,6 +13,7 @@ function baseStore(role = "staff") {
       email: "member@example.test",
       role,
       permissions: role === "manager" ? ["overview", "connections", "team"] : ["overview", "connections"],
+      appIds: ["app-v79pos"],
       tokenHash: "hash",
       status: "pending",
       createdAt: "2026-09-30T10:00:00Z",
@@ -57,6 +58,7 @@ test("team invitation acceptance atomically creates only the selected workspace 
     userId: "user-1",
     role: "staff",
     permissions: ["overview", "connections"],
+    appIds: ["app-v79pos"],
     status: "active",
     createdAt: "2026-09-30T12:00:00Z",
   });
@@ -95,6 +97,7 @@ test("existing Hub identity can join another workspace without duplicating the a
   const joined = result.nextStore.memberships.find(member => member.organizationId === "org-a");
   assert.equal(joined.role, "manager");
   assert.deepEqual(joined.permissions, ["overview", "connections", "team"]);
+  assert.deepEqual(joined.appIds, ["app-v79pos"]);
 });
 
 test("team invitation acceptance rejects expiry, privileged roles and identity mismatch", () => {

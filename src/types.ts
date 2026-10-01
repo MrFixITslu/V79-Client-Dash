@@ -21,6 +21,7 @@ export interface User {
   workspaceOwner?: boolean;
   email?: string;
   permissions?: ViewState[];
+  appIds?: string[];
   lastLogin?: string;
   createdAt?: string;
 }

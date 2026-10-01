@@ -203,7 +203,7 @@ test("Marketing provisioning activates exact SMB tenants and keeps marketing lau
     const invited = await request("/api/team/invitations", {
       method: "POST",
       headers: { Cookie: owner.cookie, Origin: origin, "content-type": "application/json" },
-      body: JSON.stringify({ email, role, expiresInHours: 24 }),
+      body: JSON.stringify({ email, role, appIds: ["app-marketing"], expiresInHours: 24 }),
     });
     assert.equal(invited.status, 201, await invited.clone().text());
     const invitation = await invited.json();

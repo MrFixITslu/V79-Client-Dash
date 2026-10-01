@@ -318,6 +318,7 @@ export default function App() {
         {currentView === "team" && canView("team") && (
           <WorkspaceTeam
             users={users}
+            apps={ecosystemApps}
             currentUser={user}
             onNavigate={setCurrentView}
             onAddUser={handleAddUser}

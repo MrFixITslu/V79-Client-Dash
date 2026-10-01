@@ -71,6 +71,7 @@ interface Membership {
   userId: string;
   role: StoredUser["role"] | "owner";
   permissions?: string[];
+  appIds?: string[];
   status: "active" | "revoked";
   createdAt: string;
 }
@@ -106,6 +107,7 @@ interface TeamInvitation {
   email: string;
   role: "manager" | "staff" | "viewer";
   permissions: string[];
+  appIds: string[];
   tokenHash: string;
   status: "pending" | "accepted" | "revoked";
   expiresAt: string;
@@ -1222,6 +1224,7 @@ app.post("/api/platform/session/consume", (req, res) => {
     entry.product === "pos" &&
     entry.expiresAt >= Date.now() &&
     (posTicketMembership?.role === "owner" || posTeamRole(posTicketMembership?.role)) &&
+    membershipCanAccessApp(posTicketMembership, "app-v79pos") &&
     organizationCanAccessApp(store, entry.tenantId, "app-v79pos") &&
     posTenantLaunchReady(store, entry.tenantId, posIdentity.organizationId)
   );
@@ -1241,6 +1244,7 @@ app.post("/api/platform/session/consume", (req, res) => {
     entry.product === "tiquet" &&
     entry.expiresAt >= Date.now() &&
     (tiquetTicketMembership?.role === "owner" || tiquetTeamRole(tiquetTicketMembership?.role)) &&
+    membershipCanAccessApp(tiquetTicketMembership, "app-tiquet") &&
     organizationCanAccessApp(store, entry.tenantId, "app-tiquet") &&
     tiquetTenantLaunchReady(store, entry.tenantId, posIdentity.organizationId)
   );
@@ -1252,6 +1256,7 @@ app.post("/api/platform/session/consume", (req, res) => {
     entry.product === "marketing" &&
     entry.expiresAt >= Date.now() &&
     (marketingTicketMembership?.role === "owner" || marketingTeamRole(marketingTicketMembership?.role)) &&
+    membershipCanAccessApp(marketingTicketMembership, "app-marketing") &&
     organizationCanAccessApp(store, entry.tenantId, "app-marketing") &&
     marketingTenantLaunchReady(store, entry.tenantId, posIdentity.organizationId)
   );
@@ -1418,11 +1423,31 @@ function sanitizeUserForOrganization(u: StoredUser, organizationId: string) {
     role,
     workspaceOwner: membership.role === "owner",
     permissions: normalizePermissions(membership.permissions ?? u.permissions, role),
+    appIds: membership.role === "owner"
+      ? enabledAppIds(store, organizationId)
+      : normalizeTeamAppIds(membership.appIds, organizationId),
   };
 }
 
 const customerAssignableAppIds = ["app-v79pos", "app-ffpro", "app-tiquet", "app-marketing", "app-academy"];
 const tenantMappedAppIds = new Set(["app-v79pos", "app-ffpro", "app-tiquet", "app-marketing"]);
+const teamAssignableAppIds = new Set(["app-v79pos", "app-tiquet", "app-marketing"]);
+
+function normalizeTeamAppIds(value: unknown, organizationId: string) {
+  if (!Array.isArray(value)) return [];
+  const enabled = new Set(enabledAppIds(store, organizationId));
+  return [...new Set(value.filter((appId): appId is string =>
+    typeof appId === "string" &&
+    teamAssignableAppIds.has(appId) &&
+    enabled.has(appId)
+  ))];
+}
+
+function membershipCanAccessApp(membership: Membership | null | undefined, appId: string) {
+  if (!membership) return false;
+  if (membership.role === "owner") return true;
+  return normalizeTeamAppIds(membership.appIds, membership.organizationId).includes(appId);
+}
 
 function validEmail(value: unknown) {
   const email = normalizeEmail(value);
@@ -1613,6 +1638,7 @@ function completeTeamInvitationAcceptance(
     teamOnboarding: {
       role: transition.role,
       permissions: transition.permissions,
+      appIds: transition.appIds,
       managedProductAccess: {
         pos: "role_mapped",
         ffpro: "owner_only",
@@ -1787,6 +1813,7 @@ app.get("/api/team-invitation", (req, res) => {
     email: maskEmail(invitation.email),
     role: invitation.role,
     permissions: invitation.permissions,
+    appIds: normalizeTeamAppIds(invitation.appIds, invitation.organizationId),
     expiresAt: invitation.expiresAt,
   });
 });
@@ -1878,6 +1905,7 @@ app.get("/api/team/invitations", requireWorkspaceOwner, (req, res) => {
         email: invitation.email,
         role: invitation.role,
         permissions: invitation.permissions,
+        appIds: normalizeTeamAppIds(invitation.appIds, invitation.organizationId),
         status: teamInvitationStatus(invitation),
         expiresAt: invitation.expiresAt,
         createdAt: invitation.createdAt,
@@ -1895,9 +1923,17 @@ app.post("/api/team/invitations", requireWorkspaceOwner, (req, res) => {
 
   const email = validEmail(req.body?.email);
   const role = req.body?.role;
+  const requestedAppIds = req.body?.appIds === undefined ? [] : req.body.appIds;
   const expiresInHours = req.body?.expiresInHours === undefined ? 72 : Number(req.body.expiresInHours);
   if (!email || !["manager", "staff", "viewer"].includes(role)) {
     return res.status(400).json({ error: "A valid email and team role are required" });
+  }
+  if (!Array.isArray(requestedAppIds) || requestedAppIds.some(appId =>
+    typeof appId !== "string" ||
+    !teamAssignableAppIds.has(appId) ||
+    !organizationCanAccessApp(store, organizationId, appId)
+  )) {
+    return res.status(400).json({ error: "Team app access must use enabled POS, Tiquet or Marketing apps only" });
   }
   if (!Number.isInteger(expiresInHours) || expiresInHours < 1 || expiresInHours > 168) {
     return res.status(400).json({ error: "Invitation expiry must be between 1 and 168 hours" });
@@ -1917,6 +1953,7 @@ app.post("/api/team/invitations", requireWorkspaceOwner, (req, res) => {
   if (duplicate) return res.status(409).json({ error: "A pending invitation already exists for this email" });
 
   const permissions = normalizePermissions(req.body?.permissions, role);
+  const appIds = normalizeTeamAppIds(requestedAppIds, organizationId);
   const token = crypto.randomBytes(32).toString("base64url");
   const now = new Date();
   const invitation: TeamInvitation = {
@@ -1925,6 +1962,7 @@ app.post("/api/team/invitations", requireWorkspaceOwner, (req, res) => {
     email,
     role,
     permissions,
+    appIds,
     tokenHash: inviteHash(token),
     status: "pending",
     expiresAt: new Date(now.getTime() + expiresInHours * 60 * 60 * 1000).toISOString(),
@@ -1939,6 +1977,7 @@ app.post("/api/team/invitations", requireWorkspaceOwner, (req, res) => {
     email,
     role,
     permissions,
+    appIds,
     expiresAt: invitation.expiresAt,
   }, session.userId, organizationId);
   commitStore(nextStore);
@@ -1953,6 +1992,7 @@ app.post("/api/team/invitations", requireWorkspaceOwner, (req, res) => {
       email: invitation.email,
       role: invitation.role,
       permissions: invitation.permissions,
+      appIds: invitation.appIds,
       status: invitation.status,
       expiresAt: invitation.expiresAt,
       createdAt: invitation.createdAt,
@@ -2439,8 +2479,31 @@ const serviceHealthPaths: Record<DashboardProduct, string> = {
   games: "/healthz",
 };
 
-app.get("/api/connections/status", requirePermission("connections"), async (_req, res) => {
-  const products = Object.keys(serviceHealthPaths) as DashboardProduct[];
+const dashboardProductAppIds: Partial<Record<DashboardProduct, string>> = {
+  pos: "app-v79pos",
+  ffpro: "app-ffpro",
+  tiquet: "app-tiquet",
+  marketing: "app-marketing",
+  academy: "app-academy",
+};
+
+function connectionProductsForSession(userId: string, organizationId: string) {
+  const membership = activeMembership(store, userId, organizationId);
+  return (Object.keys(serviceHealthPaths) as DashboardProduct[]).filter(product => {
+    const appId = dashboardProductAppIds[product];
+    if (organizationId === posIdentity.organizationId) {
+      if (!appId) return isPlatformOperatorIdentity(userId, organizationId);
+      return organizationCanAccessApp(store, organizationId, appId);
+    }
+    if (!appId || !organizationCanAccessApp(store, organizationId, appId)) return false;
+    if (membership?.role === "owner") return true;
+    return membershipCanAccessApp(membership, appId);
+  });
+}
+
+app.get("/api/connections/status", requirePermission("connections"), async (req, res) => {
+  const session = (req as any).user;
+  const products = connectionProductsForSession(session.userId, session.organizationId);
   const results = await Promise.all(products.map(async product => {
     const started = performance.now();
     try {
@@ -2850,6 +2913,9 @@ app.get("/api/apps/pos/launch", async (req, res) => {
   }
   const membership = activeMembership(store, session.userId, session.organizationId);
   const teamRole = posTeamRole(membership?.role);
+  if (membership?.role !== "owner" && !membershipCanAccessApp(membership, "app-v79pos")) {
+    return res.status(403).json({ error: "POS is not assigned to your workspace account" });
+  }
   if (membership?.role !== "owner" && !teamRole) {
     return res.status(403).json({ error: "Your workspace role is not eligible for POS access" });
   }
@@ -2891,6 +2957,10 @@ app.get("/api/apps/:product/launch", async (req, res) => {
   if (!organizationCanAccessApp(store, session.organizationId, appIdByProduct[product])) return res.status(403).json({ error: "This app is not enabled for this Hub organization" });
 
   const membership = activeMembership(store, session.userId, session.organizationId);
+  const assignedAppId = appIdByProduct[product];
+  if (membership?.role !== "owner" && !membershipCanAccessApp(membership, assignedAppId)) {
+    return res.status(403).json({ error: "This app is not assigned to your workspace account" });
+  }
   const teamTiquetRole = product === "tiquet" ? tiquetTeamRole(membership?.role) : null;
   const teamMarketingRole = product === "marketing" ? marketingTeamRole(membership?.role) : null;
   if (product === "tiquet") {
@@ -3030,7 +3100,7 @@ app.post("/api/users", (req, res) => {
 
 app.put("/api/users/:id", (req, res) => {
   const { id } = req.params;
-  const { username, password, fullName, role, permissions } = req.body || {};
+  const { username, password, fullName, role, permissions, appIds } = req.body || {};
   const organizationId = (req as any).user.organizationId;
   const userIndex = store.users.findIndex((u) => u.id === id && activeMembership(store, u.id, organizationId));
   if (userIndex === -1) return res.status(404).json({ error: "User not found" });
@@ -3047,6 +3117,16 @@ app.put("/api/users/:id", (req, res) => {
   if (role !== undefined && !["admin", "manager", "staff", "viewer"].includes(role)) return res.status(400).json({ error: "Invalid role" });
   if (organizationId !== posIdentity.organizationId && role === "admin") {
     return res.status(400).json({ error: "Delegated workspace admin is not enabled; use manager, staff or viewer" });
+  }
+  if (appIds !== undefined) {
+    if (member.role === "owner") return res.status(400).json({ error: "Workspace owner app access follows workspace entitlements" });
+    if (!Array.isArray(appIds) || appIds.some(appId =>
+      typeof appId !== "string" ||
+      !teamAssignableAppIds.has(appId) ||
+      !organizationCanAccessApp(store, organizationId, appId)
+    )) {
+      return res.status(400).json({ error: "Team app access must use enabled POS, Tiquet or Marketing apps only" });
+    }
   }
   if (sharedIdentity && (username !== undefined || password !== undefined || fullName !== undefined)) {
     return res.status(409).json({ error: "Shared account identity must be changed by the account owner, not a workspace administrator" });
@@ -3067,6 +3147,9 @@ app.put("/api/users/:id", (req, res) => {
   if (member.role !== "owner" && role !== undefined) member.role = role;
   const effectiveRole = sessionRole(member) as StoredUser["role"];
   if (permissions !== undefined) member.permissions = normalizePermissions(permissions, effectiveRole);
+  if (appIds !== undefined && member.role !== "owner") {
+    member.appIds = normalizeTeamAppIds(appIds, organizationId);
+  }
 
   saveStore(store);
   for (const [token, session] of sessions) {
@@ -3121,7 +3204,10 @@ app.get("/api/ecosystem/apps", (req, res) => {
   const organizationId = session.organizationId;
   const membership = activeMembership(store, session.userId, organizationId);
   const visibleApps = visibleEcosystemApps(store, organizationId) as EcosystemApp[];
-  res.json(visibleApps
+  const memberVisibleApps = membership?.role === "owner"
+    ? visibleApps
+    : visibleApps.filter((app: EcosystemApp) => membershipCanAccessApp(membership, app.id));
+  res.json(memberVisibleApps
     .filter((a: EcosystemApp) => !["app-analytics","app-lifehealth"].includes(a.id))
     .map((a: EcosystemApp) => {
       const tenantMapping = store.appTenantMappings.find(mapping =>
