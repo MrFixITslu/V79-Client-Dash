@@ -18,12 +18,14 @@ The release gate is part of the Hub test suite so a future change that reintrodu
 
 ## 4. Transactional Hub persistence
 
-A PostgreSQL persistence foundation is available for the next cutover: the Hub state can be imported once from `data/v79_store.json` into a versioned JSONB record with transactional row locking and stale-revision rejection. The migration command is `npm run store:migrate:postgres` and requires `DATABASE_URL`. It is deliberately idempotent and refuses to overwrite an existing PostgreSQL Hub state. The JSON source is retained as a migration backup.
+A PostgreSQL persistence runtime is available for the next cutover: the Hub state can be imported once from `data/v79_store.json` into a versioned JSONB record with transactional row locking and stale-revision rejection. The migration command is `npm run store:migrate:postgres` and requires `DATABASE_URL`. It is deliberately idempotent and refuses to overwrite an existing PostgreSQL Hub state. The JSON source is retained as a migration backup.
 
-Production still uses the existing atomic JSON file until a dedicated Hub PostgreSQL database and secret are configured on the server. Do not point `DATABASE_URL` at another application's database. The runtime cutover must be a separate release with backup, import verification, rollback rehearsal, and a full onboarding/team release-gate run against PostgreSQL before the JSON driver is retired.
+The runtime switch is `V79_HUB_STORE_BACKEND=postgres`. Startup fails closed if `DATABASE_URL` is missing or the PostgreSQL state has not already been initialized by the migration command. JSON remains the default backend and rollback path. Production should stay on JSON until a dedicated Hub PostgreSQL database and secret are configured on the server; do not point `DATABASE_URL` at another application's database. Before enabling the switch, take a backup, verify the import, rehearse rollback, and run the full onboarding/team release gate against PostgreSQL.
 
 ## 5. Subscription lifecycle
 
 Keep paid checkout off until an approved provider and merchant account are configured. Store plan, entitlement, billing customer, subscription state, grace deadline, and provider event IDs per organization. Verify webhook signatures over the raw body, process event IDs idempotently in a transaction, and audit transitions. The state policy covers trial, active, past due, grace, canceled, and recovery. Billing permissions must not grant product or operator access. Academy learner accounts remain independent.
 
 Before the first external closed-beta customer, use a controlled pilot workspace to smoke-test the live product redirects and normal customer UX without weakening the tenant gates. Before enabling paid checkout, run provider sandbox checkout, retry, cancellation, payment recovery, and duplicate/out-of-order webhook cases; confirm invoice separation for two demo businesses. Restore from backup and rerun owner launches.
+
+[executed on device: firelion-Aspire-A315-51 (729abacc-4888-407d-b7ef-15ffed4122f0)]
