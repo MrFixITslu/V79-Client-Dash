@@ -125,8 +125,8 @@ export function AppSwitcher({
                 <a
                   key={app.id}
                   href={url}
-                  target={managedLaunch ? undefined : "_blank"}
-                  rel={managedLaunch ? undefined : "noopener noreferrer"}
+                  target="_blank"
+                  rel="noopener noreferrer"
                   onClick={() => setIsOpen(false)}
                   className="group p-2.5 rounded-2xl hover:bg-slate-800/80 border border-transparent hover:border-slate-700 transition-all flex flex-col items-center text-center cursor-pointer no-underline"
                 >
@@ -150,7 +150,7 @@ export function AppSwitcher({
           <div className="pt-2.5 border-t border-slate-800 flex items-center justify-between text-[11px] px-1">
             <span className="text-slate-400 flex items-center gap-1">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-              <span>Open external apps</span>
+              <span>Open apps in a new tab</span>
             </span>
 
             <button
