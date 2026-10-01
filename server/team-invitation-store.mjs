@@ -55,6 +55,7 @@ export function acceptTeamInvitationState(store, invitationId, options) {
     existingMembership.status = "active";
     existingMembership.role = invitation.role;
     existingMembership.permissions = [...invitation.permissions];
+    existingMembership.appIds = [...(invitation.appIds || [])];
     existingMembership.createdAt = options.now;
   } else {
     next.memberships.push({
@@ -62,6 +63,7 @@ export function acceptTeamInvitationState(store, invitationId, options) {
       userId: user.id,
       role: invitation.role,
       permissions: [...invitation.permissions],
+      appIds: [...(invitation.appIds || [])],
       status: "active",
       createdAt: options.now,
     });
@@ -82,6 +84,7 @@ export function acceptTeamInvitationState(store, invitationId, options) {
       email: invitation.email,
       role: invitation.role,
       permissions: [...invitation.permissions],
+      appIds: [...(invitation.appIds || [])],
       existingAccount: Boolean(options.existingUserId),
     },
   });
@@ -94,5 +97,6 @@ export function acceptTeamInvitationState(store, invitationId, options) {
     organizationId: invitation.organizationId,
     role: invitation.role,
     permissions: [...invitation.permissions],
+    appIds: [...(invitation.appIds || [])],
   };
 }
