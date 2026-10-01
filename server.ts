@@ -792,12 +792,22 @@ const tiquetTeamPermissions = {
   viewer: ["dashboard"],
 } as const;
 
+const marketingTeamRoleMap = {
+  manager: "MARKETING_MANAGER",
+  staff: "MARKETING_STAFF",
+  viewer: "MARKETING_VIEWER",
+} as const;
+
 function posTeamRole(role: string | undefined) {
   return role && role in posTeamRoleMap ? role as keyof typeof posTeamRoleMap : null;
 }
 
 function tiquetTeamRole(role: string | undefined) {
   return role && role in tiquetTeamPermissions ? role as keyof typeof tiquetTeamPermissions : null;
+}
+
+function marketingTeamRole(role: string | undefined) {
+  return role && role in marketingTeamRoleMap ? role as keyof typeof marketingTeamRoleMap : null;
 }
 
 function posJwt(userId: string, tenantId: string) {
@@ -1124,6 +1134,70 @@ async function provisionMarketingWorkspace(organization: Organization, owner: St
   }
 }
 
+async function provisionMarketingTeamMember(
+  organization: Organization,
+  member: StoredUser,
+  role: keyof typeof marketingTeamRoleMap,
+) {
+  if (posSecret.length < 32) {
+    return { ok: false as const, status: 503, error: "Platform shared secret is not configured" };
+  }
+  const email = String(member.email || member.username || "").trim().toLowerCase();
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+    return { ok: false as const, status: 409, error: "Marketing team member email is not valid" };
+  }
+  const hubUserId = posUserId(member.id, organization.id);
+  const pathname = "/api/platform/members/provision";
+  const body = JSON.stringify({
+    organization: { id: organization.id, name: organization.name, slug: organization.slug },
+    user: { id: hubUserId, email, name: member.fullName || email },
+    role,
+    plan: "hub",
+  });
+  const timestamp = String(Date.now());
+  const marketingServiceUrl = process.env.MARKETING_INTERNAL_URL || "http://v79marketing-app:80";
+  try {
+    const response = await fetch(new URL(pathname, marketingServiceUrl), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-v79-service-id": "v79-hub",
+        "x-v79-timestamp": timestamp,
+        "x-v79-signature": signPlatformRequest({ method: "POST", pathname, timestamp, body, secret: posSecret }),
+      },
+      body,
+      signal: AbortSignal.timeout(5000),
+    });
+    const payload = await response.json().catch(() => ({})) as any;
+    if (!response.ok) {
+      return { ok: false as const, status: 502, error: "Marketing team member provisioning failed", upstreamStatus: response.status };
+    }
+    const expectedLocalRole = marketingTeamRoleMap[role];
+    if (
+      payload.provisioned !== true ||
+      payload.organizationId !== organization.id ||
+      payload.hubUserId !== hubUserId ||
+      typeof payload.businessId !== "string" ||
+      !payload.businessId ||
+      typeof payload.userId !== "string" ||
+      !payload.userId ||
+      payload.localRole !== expectedLocalRole
+    ) {
+      return { ok: false as const, status: 502, error: "Marketing returned a mismatched team identity" };
+    }
+    return {
+      ok: true as const,
+      organizationId: organization.id,
+      hubUserId,
+      businessId: payload.businessId as string,
+      userId: payload.userId as string,
+      localRole: expectedLocalRole,
+    };
+  } catch {
+    return { ok: false as const, status: 503, error: "Marketing service is unavailable" };
+  }
+}
+
 app.get("/.well-known/jwks.json", (_req, res) => {
   res.setHeader("Cache-Control", "public, max-age=300");
   res.json({ keys: [{ ...posPublicKey.export({ format: "jwk" }), kid: posKeyId, alg: "EdDSA", use: "sig" }] });
@@ -1170,11 +1244,14 @@ app.post("/api/platform/session/consume", (req, res) => {
     organizationCanAccessApp(store, entry.tenantId, "app-tiquet") &&
     tiquetTenantLaunchReady(store, entry.tenantId, posIdentity.organizationId)
   );
+  const marketingTicketMembership = entry
+    ? activeMembership(store, entry.userId, entry.tenantId)
+    : null;
   const validMarketingTicket = product === "marketing" && Boolean(
     entry &&
     entry.product === "marketing" &&
     entry.expiresAt >= Date.now() &&
-    activeMembership(store, entry.userId, entry.tenantId)?.role === "owner" &&
+    (marketingTicketMembership?.role === "owner" || marketingTeamRole(marketingTicketMembership?.role)) &&
     organizationCanAccessApp(store, entry.tenantId, "app-marketing") &&
     marketingTenantLaunchReady(store, entry.tenantId, posIdentity.organizationId)
   );
@@ -1202,7 +1279,10 @@ app.post("/api/platform/session/consume", (req, res) => {
 
   const consumedMembership = activeMembership(store, entry.userId, entry.tenantId);
   const consumedTiquetTeamRole = product === "tiquet" ? tiquetTeamRole(consumedMembership?.role) : null;
-  const consumedRole = consumedMembership?.role === "owner" ? "owner" : consumedTiquetTeamRole;
+  const consumedMarketingTeamRole = product === "marketing" ? marketingTeamRole(consumedMembership?.role) : null;
+  const consumedRole = consumedMembership?.role === "owner"
+    ? "owner"
+    : consumedTiquetTeamRole || consumedMarketingTeamRole;
   if (!consumedRole) return res.status(401).json({ error: "Ticket role is no longer eligible" });
 
   res.json({
@@ -1537,7 +1617,7 @@ function completeTeamInvitationAcceptance(
         pos: "role_mapped",
         ffpro: "owner_only",
         tiquet: "role_mapped",
-        marketing: "owner_only",
+        marketing: "role_mapped",
       },
     },
   });
@@ -2812,9 +2892,14 @@ app.get("/api/apps/:product/launch", async (req, res) => {
 
   const membership = activeMembership(store, session.userId, session.organizationId);
   const teamTiquetRole = product === "tiquet" ? tiquetTeamRole(membership?.role) : null;
+  const teamMarketingRole = product === "marketing" ? marketingTeamRole(membership?.role) : null;
   if (product === "tiquet") {
     if (membership?.role !== "owner" && !teamTiquetRole) {
       return res.status(403).json({ error: "Your workspace role is not eligible for Tiquet access" });
+    }
+  } else if (product === "marketing") {
+    if (membership?.role !== "owner" && !teamMarketingRole) {
+      return res.status(403).json({ error: "Your workspace role is not eligible for Marketing access" });
     }
   } else if (membership?.role !== "owner") {
     return res.status(403).json({ error: "Only the workspace owner can launch this app" });
@@ -2860,6 +2945,22 @@ app.get("/api/apps/:product/launch", async (req, res) => {
     const mapping = tiquetTenantMapping(store, session.organizationId);
     if (!mapping || mapping.status !== "active" || mapping.externalTenantId !== provisioned.accountId) {
       return res.status(409).json({ error: "Tiquet team identity does not match the active workspace mapping" });
+    }
+  }
+
+  if (product === "marketing" && teamMarketingRole) {
+    const organization = store.organizations.find(org => org.id === session.organizationId && org.status === "active");
+    if (!organization) return res.status(409).json({ error: "Hub organization is not active" });
+    const provisioned = await provisionMarketingTeamMember(organization, user, teamMarketingRole);
+    if (!provisioned.ok) {
+      return res.status(provisioned.status).json({
+        error: provisioned.error,
+        ...("upstreamStatus" in provisioned ? { upstreamStatus: provisioned.upstreamStatus } : {}),
+      });
+    }
+    const mapping = marketingTenantMapping(store, session.organizationId);
+    if (!mapping || mapping.status !== "active" || mapping.externalTenantId !== provisioned.businessId) {
+      return res.status(409).json({ error: "Marketing team identity does not match the active workspace mapping" });
     }
   }
 
@@ -3029,11 +3130,14 @@ app.get("/api/ecosystem/apps", (req, res) => {
       const isManagedProduct = tenantMappedAppIds.has(a.id);
       const setupPending = organizationId !== posIdentity.organizationId &&
         isManagedProduct && tenantMapping?.status !== "active";
-      const posTeamLaunchReady = a.id === "app-v79pos" &&
-        organizationId !== posIdentity.organizationId &&
+      const teamMappedLaunchReady = organizationId !== posIdentity.organizationId &&
         tenantMapping?.status === "active" &&
-        Boolean(posTeamRole(membership?.role));
-      const teamLaunchBlocked = isManagedProduct && membership?.role !== "owner" && !posTeamLaunchReady;
+        (
+          (a.id === "app-v79pos" && Boolean(posTeamRole(membership?.role))) ||
+          (a.id === "app-tiquet" && Boolean(tiquetTeamRole(membership?.role))) ||
+          (a.id === "app-marketing" && Boolean(marketingTeamRole(membership?.role)))
+        );
+      const teamLaunchBlocked = isManagedProduct && membership?.role !== "owner" && !teamMappedLaunchReady;
       const launchBlocked = setupPending || teamLaunchBlocked;
       return { ...a, status: setupPending ? "syncing" : "beta", metrics: undefined, lastSync: undefined,
         description: setupPending

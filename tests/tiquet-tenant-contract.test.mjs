@@ -300,6 +300,12 @@ test("Tiquet provisioning activates exact SMB tenants and keeps ticketing launch
     assert.equal(member.body.user.workspaceOwner, false);
     assert.equal(member.body.user.platformOperator, false);
     assert.equal(member.body.teamOnboarding.managedProductAccess.tiquet, "role_mapped");
+    const appsResponse = await request("/api/ecosystem/apps", { headers: { Cookie: member.cookie } });
+    assert.equal(appsResponse.status, 200);
+    const apps = await appsResponse.json();
+    const tiquetApp = apps.find(app => app.id === "app-tiquet");
+    assert.equal(tiquetApp.launchReady, true);
+    assert.equal(tiquetApp.ssoSupported, true);
     const identity = await launchAndConsume(member.cookie, a.organization.id, email, role);
     assert.equal(identity.entitlement.access, "team");
     const provisionCall = teamProvisioned.at(-1);
