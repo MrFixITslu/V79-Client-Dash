@@ -1275,6 +1275,49 @@ async function provisionMarketingTeamMember(
   }
 }
 
+async function deprovisionMarketingTeamMember(organizationId: string, hubUserId: string) {
+  if (posSecret.length < 32) {
+    return { ok: false as const, status: 503, error: "Platform shared secret is not configured" };
+  }
+  const scopedHubUserId = posUserId(hubUserId, organizationId);
+  const mapping = marketingTenantMapping(store, organizationId);
+  if (mapping?.status !== "active" || !mapping.externalTenantId) {
+    return { ok: false as const, status: 409, error: "Marketing workspace mapping is not active" };
+  }
+  const pathname = "/api/platform/members/deprovision";
+  const body = JSON.stringify({ organizationId, user: { id: scopedHubUserId } });
+  const timestamp = String(Date.now());
+  const marketingServiceUrl = process.env.MARKETING_INTERNAL_URL || "http://v79marketing-app:80";
+  try {
+    const response = await fetch(new URL(pathname, marketingServiceUrl), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-v79-service-id": "v79-hub",
+        "x-v79-timestamp": timestamp,
+        "x-v79-signature": signPlatformRequest({ method: "POST", pathname, timestamp, body, secret: posSecret }),
+      },
+      body,
+      signal: AbortSignal.timeout(5000),
+    });
+    const payload = await response.json().catch(() => ({})) as any;
+    if (!response.ok) {
+      return { ok: false as const, status: 502, error: "Marketing team member deprovisioning failed", upstreamStatus: response.status };
+    }
+    if (
+      payload.deprovisioned !== true ||
+      payload.organizationId !== organizationId ||
+      payload.hubUserId !== scopedHubUserId ||
+      payload.businessId !== mapping.externalTenantId
+    ) {
+      return { ok: false as const, status: 502, error: "Marketing returned a mismatched team deprovisioning identity" };
+    }
+    return { ok: true as const, organizationId, hubUserId: scopedHubUserId, businessId: payload.businessId as string };
+  } catch {
+    return { ok: false as const, status: 503, error: "Marketing service is unavailable" };
+  }
+}
+
 app.get("/.well-known/jwks.json", (_req, res) => {
   res.setHeader("Cache-Control", "public, max-age=300");
   res.json({ keys: [{ ...posPublicKey.export({ format: "jwk" }), kid: posKeyId, alg: "EdDSA", use: "sig" }] });
@@ -3234,6 +3277,18 @@ app.put("/api/users/:id", async (req, res) => {
       }
     }
 
+    const hadMarketing = previousAppIds.includes("app-marketing");
+    const willHaveMarketing = nextAppIds.includes("app-marketing");
+    if (hadMarketing && (!willHaveMarketing || roleChanged)) {
+      const deprovisioned = await deprovisionMarketingTeamMember(organizationId, id);
+      if (!deprovisioned.ok) {
+        return res.status(deprovisioned.status).json({
+          error: deprovisioned.error,
+          ...("upstreamStatus" in deprovisioned ? { upstreamStatus: deprovisioned.upstreamStatus } : {}),
+        });
+      }
+    }
+
     const hadTiquet = previousAppIds.includes("app-tiquet");
     const willHaveTiquet = nextAppIds.includes("app-tiquet");
     if (hadTiquet && !willHaveTiquet) {
@@ -3295,6 +3350,15 @@ app.delete("/api/users/:id", async (req, res) => {
     const assignedApps = normalizeTeamAppIds(member.appIds, organizationId);
     if (assignedApps.includes("app-v79pos")) {
       const deprovisioned = await deprovisionPosTeamMember(organizationId, id);
+      if (!deprovisioned.ok) {
+        return res.status(deprovisioned.status).json({
+          error: deprovisioned.error,
+          ...("upstreamStatus" in deprovisioned ? { upstreamStatus: deprovisioned.upstreamStatus } : {}),
+        });
+      }
+    }
+    if (assignedApps.includes("app-marketing")) {
+      const deprovisioned = await deprovisionMarketingTeamMember(organizationId, id);
       if (!deprovisioned.ok) {
         return res.status(deprovisioned.status).json({
           error: deprovisioned.error,

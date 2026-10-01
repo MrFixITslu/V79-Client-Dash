@@ -20,6 +20,7 @@ test("Marketing provisioning activates exact SMB tenants and keeps marketing lau
   const launchSecret = "marketing-launch-secret-12345678901234567890";
   const provisioned = new Map();
   const teamProvisioned = [];
+  const teamDeprovisioned = [];
 
   const marketingServer = createServer(async (req, res) => {
     const chunks = [];
@@ -89,6 +90,33 @@ test("Marketing provisioning activates exact SMB tenants and keeps marketing lau
         businessId,
         userId,
         localRole,
+      }));
+    }
+
+    if (req.method === "POST" && pathname === "/api/platform/members/deprovision") {
+      const valid = verifyPlatformRequest({
+        method: req.method,
+        pathname,
+        timestamp: String(req.headers["x-v79-timestamp"] || ""),
+        signature: String(req.headers["x-v79-signature"] || ""),
+        body,
+        secret: platformSecret,
+      });
+      if (req.headers["x-v79-service-id"] !== "v79-hub" || !valid) {
+        res.writeHead(401, { "content-type": "application/json" });
+        return res.end(JSON.stringify({ error: "bad signature" }));
+      }
+      const payload = JSON.parse(body);
+      const businessId = "business-" + payload.organizationId;
+      teamDeprovisioned.push({ payload, businessId });
+      res.writeHead(200, { "content-type": "application/json" });
+      return res.end(JSON.stringify({
+        deprovisioned: true,
+        organizationId: payload.organizationId,
+        hubUserId: payload.user.id,
+        businessId,
+        userId: "removed-" + payload.user.id,
+        alreadyAbsent: false,
       }));
     }
 
@@ -293,9 +321,11 @@ test("Marketing provisioning activates exact SMB tenants and keeps marketing lau
     staff: "MARKETING_STAFF",
     viewer: "MARKETING_VIEWER",
   };
+  const membersByRole = {};
   for (const role of ["manager", "staff", "viewer"]) {
     const email = role + ".marketing@example.test";
     const member = await addTeamMember(a, email, role, role + "-marketing-password-12345");
+    membersByRole[role] = member;
     assert.equal(member.body.user.workspaceOwner, false);
     assert.equal(member.body.user.platformOperator, false);
     assert.equal(member.body.teamOnboarding.managedProductAccess.marketing, "role_mapped");
@@ -318,6 +348,62 @@ test("Marketing provisioning activates exact SMB tenants and keeps marketing lau
     assert.equal((await request("/api/admin/platform/overview", { headers: { Cookie: member.cookie } })).status, 403);
   }
   assert.equal(teamProvisioned.length, 3);
+
+  const manager = membersByRole.manager;
+  const managerProvision = teamProvisioned.find(entry => entry.payload.user.email === manager.email);
+  const managerRoleUpdate = await request(`/api/users/${manager.body.user.id}`, {
+    method: "PUT",
+    headers: { Cookie: a.cookie, Origin: origin, "content-type": "application/json" },
+    body: JSON.stringify({ role: "viewer" }),
+  });
+  assert.equal(managerRoleUpdate.status, 200, await managerRoleUpdate.clone().text());
+  const managerDeprovision = teamDeprovisioned.at(-1);
+  assert.equal(managerDeprovision.payload.organizationId, a.organization.id);
+  assert.equal(managerDeprovision.payload.user.id, managerProvision.payload.user.id);
+  assert.equal(managerDeprovision.businessId, "business-" + a.organization.id);
+
+  const managerRelogin = await request("/api/auth/login", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      username: manager.email,
+      password: "manager-marketing-password-12345",
+      organizationId: a.organization.id,
+    }),
+  });
+  assert.equal(managerRelogin.status, 200, await managerRelogin.clone().text());
+  const managerViewerCookie = managerRelogin.headers.get("set-cookie").split(";")[0];
+  assert.equal((await managerRelogin.clone().json()).user.role, "viewer");
+  await launchAndConsume(managerViewerCookie, a.organization.id, manager.email, "viewer");
+  const managerReprovision = teamProvisioned.at(-1);
+  assert.equal(managerReprovision.payload.role, "viewer");
+  assert.equal(managerReprovision.localRole, "MARKETING_VIEWER");
+
+  const staff = membersByRole.staff;
+  const staffProvision = teamProvisioned.find(entry => entry.payload.user.email === staff.email);
+  const removeStaffMarketing = await request(`/api/users/${staff.body.user.id}`, {
+    method: "PUT",
+    headers: { Cookie: a.cookie, Origin: origin, "content-type": "application/json" },
+    body: JSON.stringify({ appIds: [] }),
+  });
+  assert.equal(removeStaffMarketing.status, 200, await removeStaffMarketing.clone().text());
+  const staffDeprovision = teamDeprovisioned.at(-1);
+  assert.equal(staffDeprovision.payload.organizationId, a.organization.id);
+  assert.equal(staffDeprovision.payload.user.id, staffProvision.payload.user.id);
+  assert.equal((await request("/api/apps/marketing/launch", { headers: { Cookie: staff.cookie } })).status, 401);
+
+  const viewer = membersByRole.viewer;
+  const viewerProvision = teamProvisioned.find(entry => entry.payload.user.email === viewer.email);
+  const deleteViewer = await request(`/api/users/${viewer.body.user.id}`, {
+    method: "DELETE",
+    headers: { Cookie: a.cookie, Origin: origin, "content-type": "application/json" },
+  });
+  assert.equal(deleteViewer.status, 200, await deleteViewer.clone().text());
+  const viewerDeprovision = teamDeprovisioned.at(-1);
+  assert.equal(viewerDeprovision.payload.organizationId, a.organization.id);
+  assert.equal(viewerDeprovision.payload.user.id, viewerProvision.payload.user.id);
+  assert.equal((await request("/api/apps/marketing/launch", { headers: { Cookie: viewer.cookie } })).status, 401);
+  assert.equal(teamDeprovisioned.length, 3);
 
   const dashA = await (await request("/api/dashboard/summary", { headers: { Cookie: a.cookie } })).json();
   const dashB = await (await request("/api/dashboard/summary", { headers: { Cookie: b.cookie } })).json();
