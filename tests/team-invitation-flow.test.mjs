@@ -21,6 +21,7 @@ test("workspace team invitations stay owner-controlled and isolated across SMBs"
   const dead = "http://127.0.0.1:9";
   const platformSecret = "platform-test-secret-12345678901234567890";
   const posProvisioning = [];
+  const posDeprovisioning = [];
 
   const posServer = createServer(async (req, res) => {
     let body = "";
@@ -62,6 +63,14 @@ test("workspace team invitations stay owner-controlled and isolated across SMBs"
         userId: payload.user.id,
         roleKey,
         locationIds: [`main-${payload.organizationId}`],
+      }));
+    }
+    if (req.method === "POST" && pathname === "/api/platform/members/deprovision") {
+      posDeprovisioning.push(payload);
+      return res.end(JSON.stringify({
+        deprovisioned: true,
+        organizationId: payload.organizationId,
+        userId: payload.user.id,
       }));
     }
     res.writeHead(404);
@@ -328,6 +337,16 @@ test("workspace team invitations stay owner-controlled and isolated across SMBs"
   assert.equal(staffConnections.status, 200);
   assert.deepEqual(Object.keys((await staffConnections.json()).apps), ["pos"]);
 
+  const deleteStaff = await request(`/api/users/${staffBody.user.id}`, {
+    method: "DELETE",
+    headers: { Cookie: firstOwner.cookie, Origin: origin, "content-type": "application/json" },
+  });
+  assert.equal(deleteStaff.status, 200, await deleteStaff.clone().text());
+  const staffDeleteDeprovision = posDeprovisioning.at(-1);
+  assert.equal(staffDeleteDeprovision.organizationId, firstOrgId);
+  assert.equal(staffDeleteDeprovision.user.id, staffPosProvision.payload.user.id);
+  assert.equal((await request("/api/apps/pos/launch", { headers: { Cookie: staffCookie } })).status, 401);
+
   const revokeInvite = await createTeamInvite(firstOwner.cookie, "revoke.me@example.test", "viewer");
   assert.equal(revokeInvite.response.status, 201);
   const revokeResponse = await request(`/api/team/invitations/${revokeInvite.body.invitation.id}/revoke`, {
@@ -398,6 +417,9 @@ test("workspace team invitations stay owner-controlled and isolated across SMBs"
     body: JSON.stringify({ role: "staff" }),
   });
   assert.equal(roleOnlyUpdate.status, 200, await roleOnlyUpdate.clone().text());
+  const roleChangeDeprovision = posDeprovisioning.at(-1);
+  assert.equal(roleChangeDeprovision.organizationId, firstOrgId);
+  assert.equal(roleChangeDeprovision.user.id, managerPosProvision.payload.user.id);
   const storeAfterRoleUpdate = JSON.parse(await readFile(join(dir, "v79_store.json"), "utf8"));
   const updatedMemberships = storeAfterRoleUpdate.memberships.filter(member => member.userId === sharedUserId);
   assert.equal(updatedMemberships.find(member => member.organizationId === firstOrgId).role, "staff");
@@ -437,6 +459,9 @@ test("workspace team invitations stay owner-controlled and isolated across SMBs"
     body: JSON.stringify({ appIds: [] }),
   });
   assert.equal(removeAlphaPos.status, 200, await removeAlphaPos.clone().text());
+  const appRemovalDeprovision = posDeprovisioning.at(-1);
+  assert.equal(appRemovalDeprovision.organizationId, firstOrgId);
+  assert.equal(appRemovalDeprovision.user.id, managerPosProvision.payload.user.id);
   const storeAfterAccessUpdate = JSON.parse(await readFile(join(dir, "v79_store.json"), "utf8"));
   const accessMemberships = storeAfterAccessUpdate.memberships.filter(member => member.userId === sharedUserId);
   assert.deepEqual(accessMemberships.find(member => member.organizationId === firstOrgId).appIds, []);

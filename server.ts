@@ -907,6 +907,43 @@ async function provisionPosTeamMember(organization: Organization, hubUserId: str
   }
 }
 
+async function deprovisionPosTeamMember(organizationId: string, hubUserId: string) {
+  if (posSecret.length < 32) {
+    return { ok: false as const, status: 503, error: "POS shared secret is not configured" };
+  }
+  const userId = posUserId(hubUserId, organizationId);
+  const pathname = "/api/platform/members/deprovision";
+  const body = JSON.stringify({ organizationId, user: { id: userId } });
+  const timestamp = String(Date.now());
+  try {
+    const response = await fetch(new URL(pathname, posServiceUrl), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-v79-service-id": "v79-hub",
+        "x-v79-timestamp": timestamp,
+        "x-v79-signature": signPlatformRequest({ method: "POST", pathname, timestamp, body, secret: posSecret }),
+      },
+      body,
+      signal: AbortSignal.timeout(5000),
+    });
+    const payload = await response.json().catch(() => ({})) as any;
+    if (!response.ok) {
+      return { ok: false as const, status: 502, error: "POS team member deprovisioning failed", upstreamStatus: response.status };
+    }
+    if (
+      payload.deprovisioned !== true ||
+      payload.organizationId !== organizationId ||
+      payload.userId !== userId
+    ) {
+      return { ok: false as const, status: 502, error: "POS returned a mismatched team deprovisioning identity" };
+    }
+    return { ok: true as const, organizationId, userId };
+  } catch {
+    return { ok: false as const, status: 503, error: "POS service is unavailable" };
+  }
+}
+
 async function provisionFfproWorkspace(organization: Organization, owner: StoredUser) {
   if (posSecret.length < 32) {
     return { ok: false as const, status: 503, error: "Platform shared secret is not configured" };
@@ -3184,6 +3221,19 @@ app.put("/api/users/:id", async (req, res) => {
     const organization = store.organizations.find(org => org.id === organizationId && org.status === "active");
     if (!organization) return res.status(409).json({ error: "Workspace is not active" });
 
+    const hadPos = previousAppIds.includes("app-v79pos");
+    const willHavePos = nextAppIds.includes("app-v79pos");
+    const roleChanged = role !== undefined && nextMembershipRole !== member.role;
+    if (hadPos && (!willHavePos || roleChanged)) {
+      const deprovisioned = await deprovisionPosTeamMember(organizationId, id);
+      if (!deprovisioned.ok) {
+        return res.status(deprovisioned.status).json({
+          error: deprovisioned.error,
+          ...("upstreamStatus" in deprovisioned ? { upstreamStatus: deprovisioned.upstreamStatus } : {}),
+        });
+      }
+    }
+
     const hadTiquet = previousAppIds.includes("app-tiquet");
     const willHaveTiquet = nextAppIds.includes("app-tiquet");
     if (hadTiquet && !willHaveTiquet) {
@@ -3194,7 +3244,7 @@ app.put("/api/users/:id", async (req, res) => {
           ...("upstreamStatus" in deprovisioned ? { upstreamStatus: deprovisioned.upstreamStatus } : {}),
         });
       }
-    } else if (willHaveTiquet && role !== undefined && nextMembershipRole !== member.role) {
+    } else if (willHaveTiquet && roleChanged) {
       const mappedRole = tiquetTeamRole(nextMembershipRole);
       if (!mappedRole) return res.status(400).json({ error: "Tiquet team access requires manager, staff or viewer role" });
       const synced = await provisionTiquetTeamMember(organization, current, mappedRole);
@@ -3241,16 +3291,25 @@ app.delete("/api/users/:id", async (req, res) => {
     return res.status(400).json({ error: "Cannot delete the sole administrator account" });
   }
 
-  if (
-    organizationId !== posIdentity.organizationId &&
-    normalizeTeamAppIds(member.appIds, organizationId).includes("app-tiquet")
-  ) {
-    const deprovisioned = await deprovisionTiquetTeamMember(organizationId, id);
-    if (!deprovisioned.ok) {
-      return res.status(deprovisioned.status).json({
-        error: deprovisioned.error,
-        ...("upstreamStatus" in deprovisioned ? { upstreamStatus: deprovisioned.upstreamStatus } : {}),
-      });
+  if (organizationId !== posIdentity.organizationId) {
+    const assignedApps = normalizeTeamAppIds(member.appIds, organizationId);
+    if (assignedApps.includes("app-v79pos")) {
+      const deprovisioned = await deprovisionPosTeamMember(organizationId, id);
+      if (!deprovisioned.ok) {
+        return res.status(deprovisioned.status).json({
+          error: deprovisioned.error,
+          ...("upstreamStatus" in deprovisioned ? { upstreamStatus: deprovisioned.upstreamStatus } : {}),
+        });
+      }
+    }
+    if (assignedApps.includes("app-tiquet")) {
+      const deprovisioned = await deprovisionTiquetTeamMember(organizationId, id);
+      if (!deprovisioned.ok) {
+        return res.status(deprovisioned.status).json({
+          error: deprovisioned.error,
+          ...("upstreamStatus" in deprovisioned ? { upstreamStatus: deprovisioned.upstreamStatus } : {}),
+        });
+      }
     }
   }
 
