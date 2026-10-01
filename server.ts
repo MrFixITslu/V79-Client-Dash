@@ -1121,7 +1121,7 @@ async function deprovisionTiquetTeamMember(organizationId: string, hubUserId: st
 }
 
 async function fetchMarketingPlatform(pathname: string, body: string) {
-  const marketingServiceUrl = process.env.MARKETING_INTERNAL_URL || "http://v79marketing-app:80";
+  const marketingServiceUrl = process.env.MARKETING_INTERNAL_URL || "http://v79marketing-app:3070";
   return retryTransient(async () => {
     const timestamp = String(Date.now());
     return fetch(new URL(pathname, marketingServiceUrl), {
