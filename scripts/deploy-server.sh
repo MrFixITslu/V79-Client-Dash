@@ -13,6 +13,7 @@ done
 test -f "$archive" || { echo 'Release bundle missing' >&2; exit 1; }
 test -f "$root/.env" || { echo "Create $root/.env before deploying" >&2; exit 1; }
 test -d "$root/data" || { echo "Create $root/data before deploying" >&2; exit 1; }
+grep -Eq '^V79_HUB_DB_PASSWORD=.{32,}$' "$root/.env" || { echo "Set a unique 32+ character V79_HUB_DB_PASSWORD in $root/.env before deploying" >&2; exit 1; }
 agent_token_file="$root/data/agent-runtime.token"
 if [ ! -s "$agent_token_file" ]; then
   umask 077
@@ -45,7 +46,7 @@ docker compose --project-name v79-hub build
 # Clean up only name collisions that belong to an older/different Compose project.
 # This handles legacy deployments created as "v79hub" while preserving containers
 # already owned by the canonical "v79-hub" project.
-for name in v79-hub v79-business-agent; do
+for name in v79-hub v79-hub-postgres v79-business-agent; do
   existing_id="$(docker ps -aq --filter "name=^/${name}$" | head -n 1)"
   [ -n "$existing_id" ] || continue
   existing_project="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project" }}' "$existing_id" 2>/dev/null || true)"
