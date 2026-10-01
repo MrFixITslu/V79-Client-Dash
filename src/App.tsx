@@ -18,7 +18,7 @@ import { WorkspaceSecurity } from "./components/WorkspaceSecurity";
 import { WorkspaceBilling } from "./components/WorkspaceBilling";
 import { AdminConsole } from "./components/AdminConsole";
 import { OwnerAssistant } from "./components/OwnerAssistant";
-import { CheckCircle2, AlertCircle, RotateCw } from "lucide-react";
+import { CheckCircle2, AlertCircle, RotateCw, Bell } from "lucide-react";
 
 export default function App() {
   const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
@@ -27,6 +27,7 @@ export default function App() {
   const teamInviteToken = hashParams.get("teamInvite") || searchParams.get("teamInvite") || "";
   const [authToken, setAuthToken] = useState<string | null>(null);
   const [user, setUser] = useState<User | null>(null);
+  const [organizationName, setOrganizationName] = useState("V79 Digital");
   const [isVerifyingSession, setIsVerifyingSession] = useState(true);
   const [users, setUsers] = useState<User[]>([]);
   const [ecosystemApps, setEcosystemApps] = useState<EcosystemApp[]>([]);
@@ -62,9 +63,11 @@ export default function App() {
         if (res.ok) {
           const data = await res.json();
           setUser(data.user);
+          setOrganizationName(data.organization?.name || "V79 Digital");
         } else {
           setAuthToken(null);
           setUser(null);
+          setOrganizationName("V79 Digital");
         }
       } catch (err) {
         console.error("Session verification failed:", err);
@@ -141,6 +144,7 @@ export default function App() {
     }
     setAuthToken(null);
     setUser(null);
+    setOrganizationName("V79 Digital");
     setUsers([]);
     setCurrentView("overview");
   };
@@ -244,43 +248,60 @@ export default function App() {
         onViewChange={setCurrentView}
         onLogout={handleLogout}
         user={user}
+        organizationName={organizationName}
       />
-      <main className="flex-1 overflow-y-auto relative flex flex-col bg-[#F8FAFC]">
-        <header className="h-16 px-6 border-b border-slate-200/80 bg-white flex items-center justify-between shrink-0 sticky top-0 z-30">
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-bold uppercase tracking-wider text-slate-400">V79 HUB</span>
-            <span className="text-slate-300">/</span>
-            <span className="text-xs font-semibold text-slate-800">
-              {viewLabel[currentView] || "Workspace"}
-            </span>
-          </div>
-
-          <div className="hidden md:flex items-center gap-2.5">
-            <div className="w-6 h-6 rounded-md bg-black text-white font-extrabold text-[11px] flex items-center justify-center tracking-tight">
-              v79
+      <main className="flex-1 min-w-0 overflow-y-auto relative flex flex-col bg-[#07111f]">
+        <header className="h-[72px] px-4 sm:px-5 xl:px-7 border-b border-[#17324d]/80 bg-[#07111f]/95 backdrop-blur-xl flex items-center justify-between shrink-0 sticky top-0 z-30 text-slate-200">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="hidden sm:flex items-center gap-2.5 px-3 py-2 rounded-xl border border-[#1a3854] bg-[#091728] min-w-0 max-w-[260px]">
+              <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-[#0A86FF] to-[#0057b7] flex items-center justify-center text-[11px] font-black text-white shrink-0">V</div>
+              <div className="min-w-0">
+                <div className="text-[8px] uppercase tracking-[0.15em] font-bold text-slate-600">Workspace</div>
+                <div className="text-[11px] font-bold text-white truncate">{organizationName}</div>
+              </div>
             </div>
-            <div className="flex items-baseline gap-1.5">
-              <span className="font-bold text-slate-900 text-sm">V79 Hub</span>
-              <span className="text-xs text-slate-400 font-normal">From Idea to Advantage.</span>
+            <div className="hidden xl:flex items-center gap-2 text-[10px]">
+              <span className="text-slate-600">/</span>
+              <span className="font-semibold text-slate-400">{viewLabel[currentView] || "Workspace"}</span>
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="hidden md:flex absolute left-1/2 -translate-x-1/2 items-center gap-2">
+            <span className="text-[13px] font-black tracking-[-0.03em] text-white"><span className="text-[#55c7ff]">V</span>79</span>
+            <span className="text-[9px] font-black tracking-[0.2em] text-slate-500">DIGITAL HUB</span>
+          </div>
+
+          <div className="flex items-center gap-2 sm:gap-3">
             <button
               onClick={() => {
                 fetchHubData();
                 showToast("Hub data refreshed");
               }}
-              title="Refresh Hub Data"
-              className="p-1.5 rounded-lg border border-slate-200 text-slate-500 hover:text-slate-800 hover:bg-slate-50 transition-colors"
+              title="Refresh Hub data"
+              className="w-9 h-9 rounded-xl border border-[#1a3854] bg-[#091728] text-slate-500 hover:text-[#55c7ff] hover:border-[#2b5275] flex items-center justify-center transition-colors"
             >
               <RotateCw className="w-4 h-4" />
+            </button>
+            <button
+              title="Notifications"
+              className="hidden sm:flex w-9 h-9 rounded-xl border border-[#1a3854] bg-[#091728] text-slate-500 hover:text-white items-center justify-center transition-colors relative"
+            >
+              <Bell className="w-4 h-4" />
             </button>
             <AppSwitcher
               apps={ecosystemApps}
               onNavigateToEcosystem={() => setCurrentView("overview")}
               authToken={authToken}
             />
+            <div className="hidden sm:flex items-center gap-2 pl-2 border-l border-[#17324d]">
+              <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#0A86FF] to-[#6d5dfc] flex items-center justify-center text-[10px] font-black text-white">
+                {(user.fullName || user.username || "U").trim().split(/\s+/).map(part => part[0]).join("").slice(0, 2).toUpperCase()}
+              </div>
+              <div className="hidden xl:block min-w-0 max-w-[130px]">
+                <div className="text-[10px] font-bold text-white truncate">{user.fullName || user.username}</div>
+                <div className="text-[8px] text-slate-600 capitalize">{user.workspaceOwner ? "Owner" : user.role}</div>
+              </div>
+            </div>
           </div>
         </header>
 
@@ -304,7 +325,7 @@ export default function App() {
         )}
 
         {(currentView === "overview" || currentView === "dashboard") && (
-          <HubOverview ecosystemApps={ecosystemApps} onNavigate={setCurrentView} />
+          <HubOverview ecosystemApps={ecosystemApps} onNavigate={setCurrentView} user={user} organizationName={organizationName} />
         )}
 
         {currentView === "connections" && canView("connections") && (
@@ -345,3 +366,5 @@ export default function App() {
     </div>
   );
 }
+
+[executed on device: firelion-Aspire-A315-51 (729abacc-4888-407d-b7ef-15ffed4122f0)]
