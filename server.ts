@@ -16,6 +16,7 @@ import { activatePosTenantMapping, posProvisioningTarget, posTenantLaunchReady, 
 import { activateFfproTenantMapping, ffproProvisioningTarget, ffproTenantLaunchReady, ffproTenantMapping } from "./server/ffpro-provisioning.mjs";
 import { activateTiquetTenantMapping, tiquetProvisioningTarget, tiquetTenantLaunchReady, tiquetTenantMapping } from "./server/tiquet-provisioning.mjs";
 import { activateMarketingTenantMapping, marketingProvisioningTarget, marketingTenantLaunchReady, marketingTenantMapping } from "./server/marketing-provisioning.mjs";
+import { createHubStorePersistence } from "./server/runtime-store.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -515,96 +516,60 @@ function normalizeEcosystemApps(value: unknown): EcosystemApp[] {
   return loadedApps;
 }
 
-function loadStore(): AppStore {
-  try {
-    if (fs.existsSync(STORE_FILE)) {
-      const parsed = JSON.parse(fs.readFileSync(STORE_FILE, "utf-8"));
-      const legacyCompanyName = typeof parsed?.settings?.companyName === "string"
-        ? parsed.settings.companyName.trim()
-        : "";
-      const workspaceCompanyName = typeof parsed?.workspace?.companyName === "string"
-        ? parsed.workspace.companyName.trim()
-        : "";
-      if ((parsed.organizations !== undefined && !Array.isArray(parsed.organizations)) ||
-          (parsed.memberships !== undefined && !Array.isArray(parsed.memberships)) ||
-          (parsed.appEntitlements !== undefined && !Array.isArray(parsed.appEntitlements)) ||
-          (parsed.ownerInvitations !== undefined && !Array.isArray(parsed.ownerInvitations)) ||
-          (parsed.teamInvitations !== undefined && !Array.isArray(parsed.teamInvitations)) ||
-          (parsed.appTenantMappings !== undefined && !Array.isArray(parsed.appTenantMappings)) ||
-          (parsed.auditEvents !== undefined && !Array.isArray(parsed.auditEvents))) {
-        throw new Error("Organization records are malformed.");
-      }
-
-      return {
-        users: Array.isArray(parsed.users) ? parsed.users : defaultUsers,
-        workspace: {
-          companyName: workspaceCompanyName || legacyCompanyName || defaultWorkspace.companyName,
-        },
-        ecosystemApps: normalizeEcosystemApps(parsed.ecosystemApps),
-        organizations: Array.isArray(parsed.organizations) ? parsed.organizations : [],
-        memberships: Array.isArray(parsed.memberships) ? parsed.memberships : [],
-        appEntitlements: Array.isArray(parsed.appEntitlements) ? parsed.appEntitlements : [],
-        ownerInvitations: Array.isArray(parsed.ownerInvitations) ? parsed.ownerInvitations : [],
-        teamInvitations: Array.isArray(parsed.teamInvitations) ? parsed.teamInvitations : [],
-        appTenantMappings: Array.isArray(parsed.appTenantMappings) ? parsed.appTenantMappings : [],
-        auditEvents: Array.isArray(parsed.auditEvents) ? parsed.auditEvents : [],
-      };
-    }
-  } catch (err) {
-    throw new Error(`Unable to read existing Hub data at ${STORE_FILE}; restore from backup instead of replacing it.`, { cause: err });
+function normalizeLoadedStore(parsed: any): AppStore {
+  const legacyCompanyName = typeof parsed?.settings?.companyName === "string"
+    ? parsed.settings.companyName.trim()
+    : "";
+  const workspaceCompanyName = typeof parsed?.workspace?.companyName === "string"
+    ? parsed.workspace.companyName.trim()
+    : "";
+  if ((parsed.organizations !== undefined && !Array.isArray(parsed.organizations)) ||
+      (parsed.memberships !== undefined && !Array.isArray(parsed.memberships)) ||
+      (parsed.appEntitlements !== undefined && !Array.isArray(parsed.appEntitlements)) ||
+      (parsed.ownerInvitations !== undefined && !Array.isArray(parsed.ownerInvitations)) ||
+      (parsed.teamInvitations !== undefined && !Array.isArray(parsed.teamInvitations)) ||
+      (parsed.appTenantMappings !== undefined && !Array.isArray(parsed.appTenantMappings)) ||
+      (parsed.auditEvents !== undefined && !Array.isArray(parsed.auditEvents))) {
+    throw new Error("Organization records are malformed.");
   }
+  return {
+    users: Array.isArray(parsed.users) ? parsed.users : defaultUsers,
+    workspace: { companyName: workspaceCompanyName || legacyCompanyName || defaultWorkspace.companyName },
+    ecosystemApps: normalizeEcosystemApps(parsed.ecosystemApps),
+    organizations: Array.isArray(parsed.organizations) ? parsed.organizations : [],
+    memberships: Array.isArray(parsed.memberships) ? parsed.memberships : [],
+    appEntitlements: Array.isArray(parsed.appEntitlements) ? parsed.appEntitlements : [],
+    ownerInvitations: Array.isArray(parsed.ownerInvitations) ? parsed.ownerInvitations : [],
+    teamInvitations: Array.isArray(parsed.teamInvitations) ? parsed.teamInvitations : [],
+    appTenantMappings: Array.isArray(parsed.appTenantMappings) ? parsed.appTenantMappings : [],
+    auditEvents: Array.isArray(parsed.auditEvents) ? parsed.auditEvents : [],
+  };
+}
 
-  const initialStore: AppStore = {
+function initialStore(): AppStore {
+  return {
     users: defaultUsers,
     workspace: { ...defaultWorkspace },
     ecosystemApps: defaultEcosystemApps.map(app => ({ ...app })),
-    organizations: [],
-    memberships: [],
-    appEntitlements: [],
-    ownerInvitations: [],
-    teamInvitations: [],
-    appTenantMappings: [],
-    auditEvents: [],
+    organizations: [], memberships: [], appEntitlements: [], ownerInvitations: [],
+    teamInvitations: [], appTenantMappings: [], auditEvents: [],
   };
-  saveStore(initialStore);
-  return initialStore;
 }
 
-function saveStore(store: AppStore): void {
-  let existing: Record<string, unknown> = {};
-  if (fs.existsSync(STORE_FILE)) {
-    try {
-      const parsed = JSON.parse(fs.readFileSync(STORE_FILE, "utf-8"));
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) existing = parsed;
-    } catch (err) {
-      throw new Error(`Unable to preserve existing Hub data at ${STORE_FILE}.`, { cause: err });
-    }
-  }
+const storePersistence = createHubStorePersistence({
+  backend: process.env.V79_HUB_STORE_BACKEND || "json",
+  storeFile: STORE_FILE,
+  databaseUrl: process.env.DATABASE_URL || "",
+} as any);
 
-  const persisted = {
-    ...existing,
-    users: store.users,
-    workspace: store.workspace,
-    ecosystemApps: store.ecosystemApps,
-    organizations: store.organizations,
-    memberships: store.memberships,
-    appEntitlements: store.appEntitlements,
-    ownerInvitations: store.ownerInvitations,
-    teamInvitations: store.teamInvitations,
-    appTenantMappings: store.appTenantMappings,
-    auditEvents: store.auditEvents,
-  };
-  const tempFile = STORE_FILE + ".tmp";
-  fs.writeFileSync(tempFile, JSON.stringify(persisted, null, 2), { encoding: "utf-8", mode: 0o600 });
-  fs.renameSync(tempFile, STORE_FILE);
-  fs.chmodSync(STORE_FILE, 0o600);
+let store = await storePersistence.load(normalizeLoadedStore, initialStore) as AppStore;
+
+async function saveStore(nextStore: AppStore): Promise<void> {
+  await storePersistence.save(nextStore);
 }
 
-// In-Memory store synchronized with disk
-let store = loadStore();
-
-function commitStore(nextStore: AppStore) {
-  saveStore(nextStore);
+async function commitStore(nextStore: AppStore) {
+  await saveStore(nextStore);
   store = nextStore;
 }
 
@@ -658,7 +623,7 @@ if (adminPassword) {
     usersChanged = true;
   }
 }
-if (usersChanged) saveStore(store);
+if (usersChanged) await saveStore(store);
 
 // In-Memory Active Auth Sessions: token -> userId
 const sessions = new Map<string, { userId: string; organizationId: string; username: string; role: string; expiresAt: number }>();
@@ -708,7 +673,7 @@ if (organizationMigration?.changed) {
   }
   store.organizations = organizationMigration.organizations;
   store.memberships = organizationMigration.memberships;
-  saveStore(store);
+  await saveStore(store);
 }
 
 if (!Array.isArray(store.appEntitlements)) store.appEntitlements = [];
@@ -721,12 +686,12 @@ if (ownerEntitlements.length === 0) {
     enabled: true,
     createdAt: now,
   })));
-  saveStore(store);
+  await saveStore(store);
 }
 for (const appId of ["app-lasertag"]) {
   if (!store.appEntitlements.some(entry => entry.organizationId === posIdentity.organizationId && entry.appId === appId)) {
     store.appEntitlements.push({ organizationId: posIdentity.organizationId, appId, enabled: true, createdAt: new Date().toISOString() });
-    saveStore(store);
+    await saveStore(store);
   }
 }
 
@@ -741,7 +706,7 @@ for (const app of store.ecosystemApps) {
     legacyCustomOwnershipChanged = true;
   }
 }
-if (legacyCustomOwnershipChanged) saveStore(store);
+if (legacyCustomOwnershipChanged) await saveStore(store);
 
 const posKeyPath = path.join(DATA_DIR, "pos-signing-ed25519.pem");
 if (!fs.existsSync(posKeyPath)) {
@@ -933,7 +898,8 @@ async function deprovisionPosTeamMember(organizationId: string, hubUserId: strin
     }
     if (
       payload.deprovisioned !== true ||
-      payload.organizationId !== organizationId ||
+
+[executed on device: firelion-Aspire-A315-51 (729abacc-4888-407d-b7ef-15ffed4122f0)]      payload.organizationId !== organizationId ||
       payload.userId !== userId
     ) {
       return { ok: false as const, status: 502, error: "POS returned a mismatched team deprovisioning identity" };
@@ -1656,7 +1622,7 @@ function createHubSession(userId: string, organizationId: string) {
   return token;
 }
 
-function completeInvitationAcceptance(
+async function completeInvitationAcceptance(
   invitation: OwnerInvitation,
   existingUser: StoredUser | undefined,
   fullName: string,
@@ -1694,7 +1660,7 @@ function completeInvitationAcceptance(
     return res.status(409).json({ error: "This invitation needs manual review before it can be completed" });
   }
 
-  commitStore(transition.nextStore);
+  await commitStore(transition.nextStore);
   inviteAttempts.delete(attemptKey);
   const user = store.users.find(item => item.id === transition.userId)!;
   const sessionToken = createHubSession(user.id, transition.organizationId);
@@ -1711,7 +1677,7 @@ function completeInvitationAcceptance(
   });
 }
 
-function completeTeamInvitationAcceptance(
+async function completeTeamInvitationAcceptance(
   invitation: TeamInvitation,
   existingUser: StoredUser | undefined,
   fullName: string,
@@ -1743,7 +1709,7 @@ function completeTeamInvitationAcceptance(
     return res.status(409).json({ error: "This team invitation needs manual review before it can be completed" });
   }
 
-  commitStore(transition.nextStore as AppStore);
+  await commitStore(transition.nextStore as AppStore);
   inviteAttempts.delete(attemptKey);
   const user = store.users.find(item => item.id === transition.userId)!;
   const sessionToken = createHubSession(user.id, transition.organizationId);
@@ -1771,7 +1737,7 @@ function completeTeamInvitationAcceptance(
 // AUTHENTICATION ROUTES
 // ==========================================
 
-app.post("/api/auth/login", (req, res) => {
+app.post("/api/auth/login", async (req, res) => {
   const { username, password, organizationId } = req.body || {};
   if (typeof username !== "string" || typeof password !== "string" || !username.trim() || username.length > 120 || !password || password.length > 1024 ||
       (organizationId !== undefined && (typeof organizationId !== "string" || organizationId.length > 160))) {
@@ -1832,8 +1798,9 @@ app.post("/api/auth/login", (req, res) => {
 
   // Update last login
   foundUser.lastLogin = new Date().toISOString();
-  saveStore(store);
+  await saveStore(store);
 
+[executed on device: firelion-Aspire-A315-51 (729abacc-4888-407d-b7ef-15ffed4122f0)]
   res.setHeader("Set-Cookie", sessionCookie(token, 12 * 60 * 60));
   res.setHeader("Cache-Control", "no-store");
   const membership = activeMembership(store, foundUser.id, selectedMembership.organizationId);
@@ -1865,7 +1832,7 @@ app.get("/api/onboarding/invitation", (req, res) => {
   });
 });
 
-app.post("/api/onboarding/invitation/accept", (req, res) => {
+app.post("/api/onboarding/invitation/accept", async (req, res) => {
   if (!sameOriginMutation(req)) return res.status(403).json({ error: "Invalid request origin" });
   const token = inviteTokenFromRequest(req);
   if (!token) return res.status(404).json({ error: "Invitation unavailable" });
@@ -1886,7 +1853,7 @@ app.post("/api/onboarding/invitation/accept", (req, res) => {
       expired.status = "revoked";
       expired.revokedAt = new Date().toISOString();
       onboardingAudit(nextStore, "owner_invitation_expired", { invitationId: expired.id, email: expired.email }, undefined, expired.organizationId);
-      commitStore(nextStore);
+      await commitStore(nextStore);
     }
     return res.status(410).json({ error: "Invitation is no longer available", status });
   }
@@ -1936,7 +1903,7 @@ app.get("/api/team-invitation", (req, res) => {
   });
 });
 
-app.post("/api/team-invitation/accept", (req, res) => {
+app.post("/api/team-invitation/accept", async (req, res) => {
   if (!sameOriginMutation(req)) return res.status(403).json({ error: "Invalid request origin" });
   const token = teamInviteTokenFromRequest(req);
   if (!token) return res.status(404).json({ error: "Team invitation unavailable" });
@@ -1957,7 +1924,7 @@ app.post("/api/team-invitation/accept", (req, res) => {
       expired.status = "revoked";
       expired.revokedAt = new Date().toISOString();
       onboardingAudit(nextStore, "team_invitation_expired", { invitationId: expired.id, email: expired.email }, undefined, expired.organizationId);
-      commitStore(nextStore);
+      await commitStore(nextStore);
     }
     return res.status(410).json({ error: "Team invitation is no longer available", status });
   }
@@ -2033,7 +2000,7 @@ app.get("/api/team/invitations", requireWorkspaceOwner, (req, res) => {
   });
 });
 
-app.post("/api/team/invitations", requireWorkspaceOwner, (req, res) => {
+app.post("/api/team/invitations", requireWorkspaceOwner, async (req, res) => {
   const session = (req as any).user;
   const organizationId = session.organizationId;
   const organization = store.organizations.find(org => org.id === organizationId && org.status === "active");
@@ -2098,7 +2065,7 @@ app.post("/api/team/invitations", requireWorkspaceOwner, (req, res) => {
     appIds,
     expiresAt: invitation.expiresAt,
   }, session.userId, organizationId);
-  commitStore(nextStore);
+  await commitStore(nextStore);
 
   const baseUrl = process.env.APP_URL
     ? new URL(process.env.APP_URL).origin
@@ -2119,7 +2086,7 @@ app.post("/api/team/invitations", requireWorkspaceOwner, (req, res) => {
   });
 });
 
-app.post("/api/team/invitations/:id/revoke", requireWorkspaceOwner, (req, res) => {
+app.post("/api/team/invitations/:id/revoke", requireWorkspaceOwner, async (req, res) => {
   const session = (req as any).user;
   const invitation = store.teamInvitations.find(item =>
     item.id === req.params.id && item.organizationId === session.organizationId
@@ -2138,7 +2105,7 @@ app.post("/api/team/invitations/:id/revoke", requireWorkspaceOwner, (req, res) =
     invitationId: target.id,
     email: target.email,
   }, session.userId, session.organizationId);
-  commitStore(nextStore);
+  await commitStore(nextStore);
   res.json({ success: true, status: "revoked" });
 });
 
@@ -2179,7 +2146,7 @@ app.get("/api/admin/onboarding/invitations", requirePlatformOperator, (_req, res
   res.json({ invitations, assignableApps, audit });
 });
 
-app.post("/api/admin/onboarding/invitations", requirePlatformOperator, (req, res) => {
+app.post("/api/admin/onboarding/invitations", requirePlatformOperator, async (req, res) => {
   const email = validEmail(req.body?.email);
   const organizationName = validBusinessName(req.body?.organizationName);
   const expiresInHours = Number(req.body?.expiresInHours ?? 72);
@@ -2233,7 +2200,7 @@ app.post("/api/admin/onboarding/invitations", requirePlatformOperator, (req, res
     appIds,
     expiresAt: invitation.expiresAt,
   }, session.userId, invitation.organizationId);
-  commitStore(nextStore);
+  await commitStore(nextStore);
 
   const inviteUrl = new URL("/", appUrl);
   inviteUrl.hash = `invite=${encodeURIComponent(token)}`;
@@ -2254,7 +2221,7 @@ app.post("/api/admin/onboarding/invitations", requirePlatformOperator, (req, res
   });
 });
 
-app.post("/api/admin/onboarding/invitations/:id/revoke", requirePlatformOperator, (req, res) => {
+app.post("/api/admin/onboarding/invitations/:id/revoke", requirePlatformOperator, async (req, res) => {
   const id = String(req.params.id || "");
   const invitation = store.ownerInvitations.find(item => item.id === id);
   if (!invitation) return res.status(404).json({ error: "Invitation not found" });
@@ -2271,7 +2238,7 @@ app.post("/api/admin/onboarding/invitations/:id/revoke", requirePlatformOperator
     email: target.email,
     organizationName: target.organizationName,
   }, session.userId, target.organizationId);
-  commitStore(nextStore);
+  await commitStore(nextStore);
   res.json({ success: true, status: "revoked" });
 });
 
@@ -2305,7 +2272,7 @@ app.post("/api/admin/onboarding/organizations/:organizationId/apps/pos/provision
   } catch (error) {
     return res.status(409).json({ error: error instanceof Error ? error.message : "POS tenant mapping could not be activated" });
   }
-  commitStore(nextStore);
+  await commitStore(nextStore);
   res.setHeader("Cache-Control", "no-store");
   res.json({
     success: true,
@@ -2346,7 +2313,7 @@ app.post("/api/admin/onboarding/organizations/:organizationId/apps/ffpro/provisi
   } catch (error) {
     return res.status(409).json({ error: error instanceof Error ? error.message : "FFPRO tenant mapping could not be activated" });
   }
-  commitStore(nextStore);
+  await commitStore(nextStore);
   res.setHeader("Cache-Control", "no-store");
   res.json({
     success: true,
@@ -2389,7 +2356,7 @@ app.post("/api/admin/onboarding/organizations/:organizationId/apps/tiquet/provis
   } catch (error) {
     return res.status(409).json({ error: error instanceof Error ? error.message : "Tiquet tenant mapping could not be activated" });
   }
-  commitStore(nextStore);
+  await commitStore(nextStore);
   res.setHeader("Cache-Control", "no-store");
   res.json({
     success: true,
@@ -2433,7 +2400,7 @@ app.post("/api/admin/onboarding/organizations/:organizationId/apps/marketing/pro
   } catch (error) {
     return res.status(409).json({ error: error instanceof Error ? error.message : "Marketing tenant mapping could not be activated" });
   }
-  commitStore(nextStore);
+  await commitStore(nextStore);
   res.setHeader("Cache-Control", "no-store");
   res.json({
     success: true,
@@ -2733,7 +2700,8 @@ const platformAdminSources: Record<PlatformAdminProduct, string> = {
   ffpro: process.env.FFPRO_INTERNAL_URL || "http://fire-finance-app:3010",
   academy: process.env.ACADEMY_INTERNAL_URL || "http://v79_course_builder:3030",
   lasertag: process.env.LASERTAG_INTERNAL_URL || "http://lasertag:5173",
-  website: process.env.WEBSITE_INTERNAL_URL || "http://V79website:3000",
+
+[executed on device: firelion-Aspire-A315-51 (729abacc-4888-407d-b7ef-15ffed4122f0)]  website: process.env.WEBSITE_INTERNAL_URL || "http://V79website:3000",
   games: process.env.GAMES_INTERNAL_URL || "http://gaming-studio-j:80",
 };
 
@@ -3177,7 +3145,7 @@ app.get("/api/users", (req, res) => {
   res.json(store.users.map(user => sanitizeUserForOrganization(user, organizationId)).filter(Boolean));
 });
 
-app.post("/api/users", (req, res) => {
+app.post("/api/users", async (req, res) => {
   const organizationId = (req as any).user.organizationId;
   if (organizationId !== posIdentity.organizationId) {
     return res.status(403).json({ error: "Customer workspace members must be added through a team invitation" });
@@ -3213,7 +3181,7 @@ app.post("/api/users", (req, res) => {
     status: "active",
     createdAt: newUser.createdAt
   });
-  saveStore(store);
+  await saveStore(store);
   broadcast(organizationId, { type: "USERS_UPDATED" });
   res.status(201).json(sanitizeUserForOrganization(newUser, organizationId));
 });
@@ -3327,7 +3295,7 @@ app.put("/api/users/:id", async (req, res) => {
     member.appIds = normalizeTeamAppIds(appIds, organizationId);
   }
 
-  saveStore(store);
+  await saveStore(store);
   for (const [token, session] of sessions) {
     if (session.userId === id && (password || session.organizationId === organizationId)) sessions.delete(token);
   }
@@ -3385,7 +3353,7 @@ app.delete("/api/users/:id", async (req, res) => {
   for (const [token, session] of sessions) {
     if (session.userId === id && session.organizationId === organizationId) sessions.delete(token);
   }
-  saveStore(store);
+  await saveStore(store);
   broadcast(organizationId, { type: "USERS_UPDATED" });
   res.json({ success: true });
 });
@@ -3395,10 +3363,10 @@ app.delete("/api/users/:id", async (req, res) => {
 // ==========================================
 
 // Get all ecosystem applications
-app.get("/api/ecosystem/apps", (req, res) => {
+app.get("/api/ecosystem/apps", async (req, res) => {
   if (!store.ecosystemApps || store.ecosystemApps.length === 0) {
     store.ecosystemApps = defaultEcosystemApps;
-    saveStore(store);
+    await saveStore(store);
   }
   const managedDescriptions: Record<string,string> = {
     "app-ffpro": "Finance planning and reporting. Sign in through the Hub after your FFPRO account is linked.",
@@ -3456,7 +3424,7 @@ app.get("/api/ecosystem/apps", (req, res) => {
 });
 
 // Update an ecosystem application configuration (e.g. custom URL, status)
-app.put("/api/ecosystem/apps/:id", (req, res) => {
+app.put("/api/ecosystem/apps/:id", async (req, res) => {
   const { id } = req.params;
   const organizationId = (req as any).user.organizationId;
   if (!organizationCanMutateApp(store, organizationId, id)) return res.status(403).json({ error: "Only custom apps owned by this workspace can be changed" });
@@ -3497,13 +3465,13 @@ app.put("/api/ecosystem/apps/:id", (req, res) => {
   }
   store.ecosystemApps[index] = { ...store.ecosystemApps[index], ...changes, lastSync: new Date().toISOString() };
 
-  saveStore(store);
+  await saveStore(store);
   broadcast(organizationId, { type: "ECOSYSTEM_APPS_UPDATED" });
   res.json(store.ecosystemApps[index]);
 });
 
 // Register a custom ecosystem app
-app.post("/api/ecosystem/apps", (req, res) => {
+app.post("/api/ecosystem/apps", async (req, res) => {
   const { name, shortName, tagline, description, category, appUrl, githubRepo } = req.body || {};
   const safeName = catalogText(name, 120);
   const safeUrl = catalogHttpsUrl(appUrl);
@@ -3548,7 +3516,7 @@ app.post("/api/ecosystem/apps", (req, res) => {
   if (!organizationCanAccessApp(store, organizationId, newApp.id)) {
     store.appEntitlements.push({ organizationId, appId: newApp.id, enabled: true, createdAt: new Date().toISOString() });
   }
-  saveStore(store);
+  await saveStore(store);
   broadcast(organizationId, { type: "ECOSYSTEM_APPS_UPDATED" });
   res.status(201).json(newApp);
 });
@@ -3592,3 +3560,5 @@ async function startServer() {
 }
 
 startServer();
+
+[executed on device: firelion-Aspire-A315-51 (729abacc-4888-407d-b7ef-15ffed4122f0)]
