@@ -898,8 +898,7 @@ async function deprovisionPosTeamMember(organizationId: string, hubUserId: strin
     }
     if (
       payload.deprovisioned !== true ||
-
-[executed on device: firelion-Aspire-A315-51 (729abacc-4888-407d-b7ef-15ffed4122f0)]      payload.organizationId !== organizationId ||
+      payload.organizationId !== organizationId ||
       payload.userId !== userId
     ) {
       return { ok: false as const, status: 502, error: "POS returned a mismatched team deprovisioning identity" };
@@ -1800,7 +1799,6 @@ app.post("/api/auth/login", async (req, res) => {
   foundUser.lastLogin = new Date().toISOString();
   await saveStore(store);
 
-[executed on device: firelion-Aspire-A315-51 (729abacc-4888-407d-b7ef-15ffed4122f0)]
   res.setHeader("Set-Cookie", sessionCookie(token, 12 * 60 * 60));
   res.setHeader("Cache-Control", "no-store");
   const membership = activeMembership(store, foundUser.id, selectedMembership.organizationId);
@@ -2700,8 +2698,7 @@ const platformAdminSources: Record<PlatformAdminProduct, string> = {
   ffpro: process.env.FFPRO_INTERNAL_URL || "http://fire-finance-app:3010",
   academy: process.env.ACADEMY_INTERNAL_URL || "http://v79_course_builder:3030",
   lasertag: process.env.LASERTAG_INTERNAL_URL || "http://lasertag:5173",
-
-[executed on device: firelion-Aspire-A315-51 (729abacc-4888-407d-b7ef-15ffed4122f0)]  website: process.env.WEBSITE_INTERNAL_URL || "http://V79website:3000",
+  website: process.env.WEBSITE_INTERNAL_URL || "http://V79website:3000",
   games: process.env.GAMES_INTERNAL_URL || "http://gaming-studio-j:80",
 };
 
@@ -3560,5 +3557,3 @@ async function startServer() {
 }
 
 startServer();
-
-[executed on device: firelion-Aspire-A315-51 (729abacc-4888-407d-b7ef-15ffed4122f0)]
