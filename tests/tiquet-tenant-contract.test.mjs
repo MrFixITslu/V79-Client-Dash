@@ -364,7 +364,19 @@ test("Tiquet provisioning activates exact SMB tenants and keeps ticketing launch
   assert.equal(managerRemoveTiquet.status, 200, await managerRemoveTiquet.clone().text());
   assert.equal(teamDeprovisioned.length, 1);
   assert.equal(teamDeprovisioned[0].organizationId, a.organization.id);
-  assert.equal((await request("/api/apps/tiquet/launch", { headers: { Cookie: managerMember.cookie } })).status, 403);
+
+  const managerRelogin = await request("/api/auth/login", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      username: "manager.tiquet@example.test",
+      password: "manager-tiquet-password-12345",
+      organizationId: a.organization.id,
+    }),
+  });
+  assert.equal(managerRelogin.status, 200, await managerRelogin.clone().text());
+  const managerFreshCookie = managerRelogin.headers.get("set-cookie").split(";")[0];
+  assert.equal((await request("/api/apps/tiquet/launch", { headers: { Cookie: managerFreshCookie } })).status, 403);
 
   const staffMember = teamMembers.get("staff");
   const deleteStaff = await request(`/api/users/${staffMember.body.user.id}`, {
