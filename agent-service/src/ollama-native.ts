@@ -17,7 +17,7 @@ export function resolveOllamaNativeRuntime(env: NodeJS.ProcessEnv = process.env)
     baseURL: String(env.OLLAMA_BASE_URL || "http://ollama:11434").trim().replace(/\/+$/, ""),
     model: String(env.OLLAMA_AGENT_MODEL || "qwen2.5:1.5b").trim(),
     timeoutMs: positiveInteger(env.OLLAMA_REQUEST_TIMEOUT_MS, 90_000),
-    keepAlive: String(env.OLLAMA_KEEP_ALIVE || "30m").trim() || "30m",
+    keepAlive: String(env.OLLAMA_KEEP_ALIVE || "-1").trim() || "-1",
     maxTokens: positiveInteger(env.OLLAMA_MAX_TOKENS, 80),
     contextSize: positiveInteger(env.OLLAMA_CONTEXT_SIZE, 2048),
   };
@@ -27,6 +27,35 @@ type OllamaChatResponse = {
   message?: { role?: string; content?: string };
   error?: string;
 };
+
+export async function prewarmOllamaOwnerAssistant(
+  options: {
+    env?: NodeJS.ProcessEnv;
+    fetchImpl?: typeof fetch;
+  } = {},
+) {
+  const env = options.env || process.env;
+  const runtime = resolveOllamaNativeRuntime(env);
+  const fetchImpl = options.fetchImpl || fetch;
+  const timeoutMs = positiveInteger(env.OLLAMA_PREWARM_TIMEOUT_MS, 120_000);
+  const response = await fetchImpl(`${runtime.baseURL}/api/generate`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      model: runtime.model,
+      prompt: "",
+      stream: false,
+      keep_alive: runtime.keepAlive,
+    }),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(`Ollama prewarm returned HTTP ${response.status}: ${JSON.stringify(payload).slice(0, 300)}`);
+  }
+  return { model: runtime.model, keepAlive: runtime.keepAlive };
+}
 
 export async function runOllamaOwnerAssistant(
   groundedMessage: string,

@@ -9,11 +9,12 @@ import { isValidOwnerContext, type AgentContext } from "./context.js";
 import { agentModelRuntime } from "./model-runtime.js";
 import { readBusinessSnapshot } from "./tools.js";
 import { compactOwnerSnapshot, deterministicFactAnswer, formatPriorityBrief, isPriorityBriefRequest } from "./grounding.js";
-import { runOllamaOwnerAssistant } from "./ollama-native.js";
+import { prewarmOllamaOwnerAssistant, runOllamaOwnerAssistant } from "./ollama-native.js";
 
 const app = express();
 const port = Number(process.env.PORT || 3055);
 const tokenFile = process.env.V79_AGENT_TOKEN_FILE || "/run/secrets/v79-agent-token";
+let modelWarmState: "pending" | "ready" | "failed" | "not_applicable" = agentModelRuntime.provider === "ollama" ? "pending" : "not_applicable";
 function readApiToken() {
   const direct = String(process.env.V79_AGENT_API_TOKEN || "").trim();
   if (direct) return direct;
@@ -31,6 +32,7 @@ app.get("/health", (_req, res) => {
     systemsKnown: BUSINESS_SYSTEMS.length,
     modelProvider: agentModelRuntime.provider,
     model: agentModelRuntime.model,
+    modelWarmState,
   });
 });
 app.use("/api", (req, res, next) => {
@@ -168,4 +170,15 @@ app.post("/api/agent/chat", async (req, res) => {
 
 app.listen(port, "0.0.0.0", () => {
   console.log(`Vision79 Owner Assistant listening on :${port} in read-only mode`);
+  if (agentModelRuntime.provider === "ollama") {
+    prewarmOllamaOwnerAssistant()
+      .then(({ model, keepAlive }) => {
+        modelWarmState = "ready";
+        console.log(`Ollama model prewarmed: ${model} (keep_alive=${keepAlive})`);
+      })
+      .catch((error) => {
+        modelWarmState = "failed";
+        console.error("Ollama model prewarm failed", error);
+      });
+  }
 });
