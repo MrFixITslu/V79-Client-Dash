@@ -141,8 +141,8 @@ export function WorkspaceConnections({ apps, onNavigate, authToken }: WorkspaceC
               {launchUrl ? (
                 <a
                   href={launchUrl}
-                  target={isManagedHubApp(app) ? undefined : "_blank"}
-                  rel={isManagedHubApp(app) ? undefined : "noopener noreferrer"}
+                  target="_blank"
+                  rel="noopener noreferrer"
                   className="inline-flex items-center gap-1 text-slate-700 hover:text-cyan-700 font-semibold"
                 >
                   <span>Launch</span>
