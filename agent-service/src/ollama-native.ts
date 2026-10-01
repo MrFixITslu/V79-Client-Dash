@@ -2,7 +2,7 @@ export type OllamaNativeRuntime = {
   baseURL: string;
   model: string;
   timeoutMs: number;
-  keepAlive: string;
+  keepAlive: string | number;
   maxTokens: number;
   contextSize: number;
 };
@@ -12,12 +12,18 @@ function positiveInteger(value: string | undefined, fallback: number) {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function parseKeepAlive(value: string | undefined): string | number {
+  const normalized = String(value || "-1").trim();
+  if (/^-?\d+$/.test(normalized)) return Number(normalized);
+  return normalized || -1;
+}
+
 export function resolveOllamaNativeRuntime(env: NodeJS.ProcessEnv = process.env): OllamaNativeRuntime {
   return {
     baseURL: String(env.OLLAMA_BASE_URL || "http://ollama:11434").trim().replace(/\/+$/, ""),
     model: String(env.OLLAMA_AGENT_MODEL || "qwen2.5:1.5b").trim(),
     timeoutMs: positiveInteger(env.OLLAMA_REQUEST_TIMEOUT_MS, 90_000),
-    keepAlive: String(env.OLLAMA_KEEP_ALIVE || "-1").trim() || "-1",
+    keepAlive: parseKeepAlive(env.OLLAMA_KEEP_ALIVE),
     maxTokens: positiveInteger(env.OLLAMA_MAX_TOKENS, 80),
     contextSize: positiveInteger(env.OLLAMA_CONTEXT_SIZE, 2048),
   };
