@@ -27,5 +27,3 @@ The runtime switch is `V79_HUB_STORE_BACKEND=postgres`. Startup fails closed if 
 Keep paid checkout off until an approved provider and merchant account are configured. Store plan, entitlement, billing customer, subscription state, grace deadline, and provider event IDs per organization. Verify webhook signatures over the raw body, process event IDs idempotently in a transaction, and audit transitions. The state policy covers trial, active, past due, grace, canceled, and recovery. Billing permissions must not grant product or operator access. Academy learner accounts remain independent.
 
 Before the first external closed-beta customer, use a controlled pilot workspace to smoke-test the live product redirects and normal customer UX without weakening the tenant gates. Before enabling paid checkout, run provider sandbox checkout, retry, cancellation, payment recovery, and duplicate/out-of-order webhook cases; confirm invoice separation for two demo businesses. Restore from backup and rerun owner launches.
-
-[executed on device: firelion-Aspire-A315-51 (729abacc-4888-407d-b7ef-15ffed4122f0)]
